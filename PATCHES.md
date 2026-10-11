@@ -427,6 +427,13 @@ This is the recommended branch. What it changes, by subsystem:
   existing `cexp` and `carg`; their edge cases (errno, `_matherr`, Inf and NaN) were
   measured on Windows 10 in both architectures, and `cpow` takes `pow()` for a real base
   and exponent as Windows does (`cpow(2, 3)` is exactly 8)
+- **advapi32 (credential attributes)**: `CredWriteW` dropped `CREDENTIAL.Attributes`, and
+  `CredReadW`/`CredEnumerateW` returned none. Steinberg's License Engine marks its stored
+  refresh token with an attribute (`isUtf-8`) and discards a token without it ("1.1 Format
+  refresh token detecting -- resetting"), so closing the Activation Manager signed the user
+  out and every Steinberg product opened its login page at start. The attributes are now
+  stored with the credential and returned by the read, enumerate and ANSI functions; a
+  conformance test in `dlls/advapi32/tests/cred.c` covers the round trip
 - **avrt (MMCSS)**: `AvSetMmThreadCharacteristics`, `AvSetMmThreadPriority` and
   `AvRevertMmThreadCharacteristics` were stubs. A thread that registers for the `Pro Audio`,
   `Audio`, `Capture` or `Playback` task is now scheduled `SCHED_FIFO` (priority 3 at
