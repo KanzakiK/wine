@@ -1,4 +1,5 @@
 MODULE    = websocket.dll
+IMPORTLIB = websocket
 IMPORTS   = bcrypt
 
 SOURCES = \
