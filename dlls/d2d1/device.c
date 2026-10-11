@@ -1834,6 +1834,27 @@ static size_t d2d_fill_aa_find_vertex(const struct d2d_geometry *geometry,
     return ~(size_t)0;
 }
 
+/* Where a curve runs relative to a mesh edge it shares a triangle with: off the
+ * edge by c1 * t + c2 * t^2 in geometry units, t running from the vertex start
+ * (0) to the other end of the edge (1). start is ~0u for a seam without it.
+ * chord is set when the edge is a chord, so that both of its ends lie on the
+ * curve; the far end of a control edge is the control point, which does not. */
+struct d2d_fill_aa_seam
+{
+    UINT32 start;
+    float c1, c2;
+    BOOL chord;
+};
+
+static float d2d_fill_aa_line_distance(const D2D1_POINT_2F *p, const D2D1_POINT_2F *a, const D2D1_POINT_2F *b)
+{
+    float dx = b->x - a->x, dy = b->y - a->y, l = sqrtf(dx * dx + dy * dy);
+
+    if (!(l > 0.0f))
+        return 0.0f;
+    return fabsf(dx * (p->y - a->y) - dy * (p->x - a->x)) / l;
+}
+
 /* Mark the mesh edges that run along a curve segment.
  *
  * The tessellation puts the corners of every curve triangle on figure vertices,
@@ -1847,11 +1868,18 @@ static size_t d2d_fill_aa_find_vertex(const struct d2d_geometry *geometry,
  * Only edges that are actually in the mesh are marked; a chord that ended up as
  * an interior diagonal is simply not found.
  *
+ * For each seam, seams also records where the curve runs off the edge, which the
+ * fill ramps towards. A quadratic Bézier runs half way between its chord and its control
+ * point, a quarter circle - which is what the arc triangles hold - sqrt(2) - 1 of
+ * the way, both following a parabola along the chord. Along a control edge the
+ * curve starts tangent at its end point and departs as (h / 4) * t^2, h being the
+ * distance of the other end point from that edge.
+ *
  * Returns FALSE if the marking could not be completed. Half-marked data is
  * worse than none — an unmarked seam would get a skirt and be drawn twice — so
  * the caller falls back to the plain fill in that case. */
 static BOOL d2d_fill_aa_mark_curve_edges(const struct d2d_geometry *geometry,
-        const UINT32 *edge_keys, BYTE *edge_curve, size_t map_size)
+        const UINT32 *edge_keys, BYTE *edge_curve, struct d2d_fill_aa_seam *seams, size_t map_size)
 {
     const struct d2d_curve_vertex *curves[2];
     size_t counts[2], vertex_map_size, i, c;
@@ -1891,6 +1919,7 @@ static BOOL d2d_fill_aa_mark_curve_edges(const struct d2d_geometry *geometry,
     {
         for (i = 0; i + 2 < counts[c]; i += 3)
         {
+            const D2D1_POINT_2F *p0, *p1, *p2;
             size_t idx[3], missing = 0;
             int a, b;
 
@@ -1940,14 +1969,85 @@ static BOOL d2d_fill_aa_mark_curve_edges(const struct d2d_geometry *geometry,
                         free(vertex_map);
                         return FALSE;
                     }
-                    if (edge_keys[slot] == key)
-                        edge_curve[slot] = 1;
+                    if (edge_keys[slot] != key)
+                        continue;
+                    edge_curve[slot] = 1;
+
+                    p0 = &curves[c][i].position;
+                    p1 = &curves[c][i + 1].position;
+                    p2 = &curves[c][i + 2].position;
+                    if (curves[c][i].texcoord.sign < 0.0f && a == 0 && b == 2)
+                    {
+                        float ratio = c ? 0.41421356f : 0.5f;
+                        float sag = ratio * d2d_fill_aa_line_distance(p1, p0, p2);
+
+                        seams[slot].start = idx[0];
+                        seams[slot].c1 = 4.0f * sag;
+                        seams[slot].c2 = -4.0f * sag;
+                        seams[slot].chord = TRUE;
+                    }
+                    else if (curves[c][i].texcoord.sign > 0.0f && !c && b == 1)
+                    {
+                        seams[slot].start = idx[0];
+                        seams[slot].c1 = 0.0f;
+                        seams[slot].c2 = 0.25f * d2d_fill_aa_line_distance(p2, p0, p1);
+                        seams[slot].chord = FALSE;
+                    }
+                    else if (curves[c][i].texcoord.sign > 0.0f && !c && a == 1)
+                    {
+                        seams[slot].start = idx[2];
+                        seams[slot].c1 = 0.0f;
+                        seams[slot].c2 = 0.25f * d2d_fill_aa_line_distance(p0, p1, p2);
+                        seams[slot].chord = FALSE;
+                    }
                 }
             }
         }
     }
 
     free(vertex_map);
+    return TRUE;
+}
+
+/* The ramp of face f towards its seam e: t of the three corners along the seam,
+ * and the curve's distance from it in units of the edge weight, which reaches 1
+ * at the opposite corner. */
+static BOOL d2d_fill_aa_seam_params(const struct d2d_geometry *geometry, const struct d2d_face *f, int e,
+        const struct d2d_fill_aa_seam *seam, float *t, float *c1, float *c2)
+{
+    UINT16 a = f->v[(e + 1) % 3], b = f->v[(e + 2) % 3], end;
+    const D2D1_POINT_2F *s, *n, *o;
+    float dx, dy, l2, h;
+    int j;
+
+    if (seam->start == a)
+        end = b;
+    else if (seam->start == b)
+        end = a;
+    else
+        return FALSE;
+
+    s = &geometry->fill.vertices[seam->start];
+    n = &geometry->fill.vertices[end];
+    o = &geometry->fill.vertices[f->v[e]];
+    dx = n->x - s->x;
+    dy = n->y - s->y;
+    if (!((l2 = dx * dx + dy * dy) > 0.0f))
+        return FALSE;
+    if (!((h = d2d_fill_aa_line_distance(o, s, n)) > 1e-6f))
+        return FALSE;
+
+    for (j = 0; j < 3; ++j)
+    {
+        if (f->v[j] == seam->start)
+            t[j] = 0.0f;
+        else if (f->v[j] == end)
+            t[j] = 1.0f;
+        else
+            t[j] = ((o->x - s->x) * dx + (o->y - s->y) * dy) / l2;
+    }
+    *c1 = seam->c1 / h;
+    *c2 = seam->c2 / h;
     return TRUE;
 }
 
@@ -1958,10 +2058,18 @@ static BOOL d2d_device_context_fill_triangles_aa(struct d2d_device_context *rend
     /* Fill-edge AA: per-face vertices with boundary edge weights + skirt expansion.
      * Inner triangles: bary coords identify boundary edges.
      * Skirt quads: extend boundary edges ~0.75px outward for full AA transition. */
-    struct d2d_fill_aa_vertex { D2D1_POINT_2F pos; float u, v, s; float ex, ey; };
-    struct d2d_fill_aa_vertex *expanded;
+    struct d2d_fill_aa_vertex
+    {
+        D2D1_POINT_2F pos;
+        float u, v, s;
+        float ex, ey;
+        float seam_t[3], seam_c1[3], seam_c2[3];
+        float corner[3][2], corner_on[3];
+    } *expanded;
+    BYTE *on_outline;
+    struct d2d_fill_aa_seam *seams;
     size_t fc = geometry->fill.face_count;
-    size_t boundary_count = 0;
+    size_t boundary_count = 0, seam_count = 0;
     size_t expanded_count, map_size, i, vi;
     UINT32 *edge_keys;
     BYTE *edge_cnt, *edge_processed, *edge_curve;
@@ -1975,11 +2083,14 @@ static BOOL d2d_device_context_fill_triangles_aa(struct d2d_device_context *rend
     edge_cnt       = calloc(map_size, sizeof(*edge_cnt));
     edge_processed = calloc(map_size, sizeof(*edge_processed));
     edge_curve     = calloc(map_size, sizeof(*edge_curve));
-    if (!edge_keys || !edge_cnt || !edge_processed || !edge_curve)
+    seams          = malloc(map_size * sizeof(*seams));
+    if (!edge_keys || !edge_cnt || !edge_processed || !edge_curve || !seams)
     {
-        free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve);
+        free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve); free(seams);
         return FALSE;
     }
+    for (i = 0; i < map_size; ++i)
+        seams[i].start = ~0u;
 
     /* Pass 1: count edge occurrences via open-addressing hash. */
     for (i = 0; i < fc; i++)
@@ -2000,7 +2111,7 @@ static BOOL d2d_device_context_fill_triangles_aa(struct d2d_device_context *rend
             }
             if (probe == map_size)
             {
-                free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve);
+                free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve); free(seams);
                 return FALSE;
             }
             edge_keys[slot] = key;
@@ -2008,67 +2119,124 @@ static BOOL d2d_device_context_fill_triangles_aa(struct d2d_device_context *rend
         }
     }
 
-    /* A geometry that mixes straight edges with curve segments keeps the
-     * antialiasing on its straight edges; the seams towards the curves are left
-     * to the curve triangles, which antialias themselves. */
+    /* The seams towards curve triangles get no skirt: the curve triangle continues
+     * the fill there, antialiases itself and has a skirt of its own on its open
+     * side. The fill ramps towards a seam by the distance to the curve instead,
+     * which is where the inner half of the ramp has to come from wherever the
+     * curve triangle is thinner than half a pixel. */
     if ((geometry->fill.bezier_vertex_count || geometry->fill.arc_vertex_count)
-            && !d2d_fill_aa_mark_curve_edges(geometry, edge_keys, edge_curve, map_size))
+            && !d2d_fill_aa_mark_curve_edges(geometry, edge_keys, edge_curve, seams, map_size))
     {
-        free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve);
+        free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve); free(seams);
         return FALSE;
     }
 
-    /* Count the boundary edges that get a skirt, i.e. everything but the seams. */
+    /* Count the boundary edges that get a skirt, i.e. everything but the seams,
+     * and the seams the fill ramps towards. */
     for (i = 0; i < map_size; i++)
-        if (edge_keys[i] && edge_cnt[i] == 1 && !edge_curve[i]) boundary_count++;
-
-    /* Nothing left to antialias — a shape bounded by curves only, such as an
-     * ellipse. The plain path draws exactly the same pixels more cheaply. */
-    if (!boundary_count)
     {
-        free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve);
+        if (!edge_keys[i] || edge_cnt[i] != 1) continue;
+        if (!edge_curve[i]) boundary_count++;
+        else if (seams[i].start != ~0u) seam_count++;
+    }
+
+    /* Nothing to antialias; the plain path draws exactly the same pixels more cheaply. */
+    if (!boundary_count && !seam_count)
+    {
+        free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve); free(seams);
         return FALSE;
     }
 
     /* Allocate: inner triangles (3 per face) + skirt quads (6 per boundary edge). */
     expanded_count = fc * 3 + boundary_count * 6;
-    expanded = malloc(expanded_count * sizeof(*expanded));
-    if (!expanded)
+    expanded = calloc(expanded_count, sizeof(*expanded));
+    on_outline = calloc(geometry->fill.vertex_count, sizeof(*on_outline));
+    if (!expanded || !on_outline)
     {
-        free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve);
+        free(on_outline);
+        free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve); free(seams);
         return FALSE;
+    }
+
+    /* The fill vertices that lie on the outline: both ends of a straight boundary
+     * edge and of a chord, the curve end of a control edge. */
+    for (i = 0; i < fc; i++)
+    {
+        const struct d2d_face *f = &geometry->fill.faces[i];
+        int e;
+
+        for (e = 0; e < 3; e++)
+        {
+            UINT16 a = f->v[(e + 1) % 3], b_v = f->v[(e + 2) % 3];
+            UINT32 lo = a < b_v ? a : b_v, hi = a < b_v ? b_v : a;
+            UINT32 key = lo * 65536u + hi + 1u;
+            UINT32 slot = key % map_size;
+
+            while (edge_keys[slot] != key)
+                slot = (slot + 1) % map_size;
+            if (edge_cnt[slot] != 1)
+                continue;
+            if (!edge_curve[slot] || (seams[slot].start != ~0u && seams[slot].chord))
+                on_outline[a] = on_outline[b_v] = 1;
+            else if (seams[slot].start == a || seams[slot].start == b_v)
+                on_outline[seams[slot].start] = 1;
+        }
     }
 
     /* Pass 2: build inner triangle vertices with edge weights. */
     for (i = 0; i < fc; i++)
     {
         const struct d2d_face *f = &geometry->fill.faces[i];
-        int j;
+        float w[3][3], t[3][3], c1[3], c2[3];
+        int j, e;
+
+        for (e = 0; e < 3; e++)
+        {
+            UINT16 a = f->v[(e + 1) % 3], b_v = f->v[(e + 2) % 3];
+            UINT32 lo = a < b_v ? a : b_v, hi = a < b_v ? b_v : a;
+            UINT32 key = lo * 65536u + hi + 1u;
+            UINT32 slot = key % map_size;
+            BOOL ramp;
+
+            while (edge_keys[slot] != key)
+                slot = (slot + 1) % map_size;
+            c1[e] = c2[e] = 0.0f;
+            t[e][0] = t[e][1] = t[e][2] = 0.0f;
+            /* The weight of a boundary edge runs from 0 on the edge to 1 at the
+             * opposite corner. An interior edge gets a large value (>> 1.0), so
+             * it never limits min_edge_px. A seam ramps like a boundary edge,
+             * shifted by the curve's distance from it; a seam whose curve is not
+             * known counts as interior, because fading the fill out along it
+             * would draw a line into the shape where the curve triangle
+             * continues it. */
+            if (edge_cnt[slot] != 1)
+                ramp = FALSE;
+            else if (!edge_curve[slot])
+                ramp = TRUE;
+            else
+                ramp = seams[slot].start != ~0u
+                        && d2d_fill_aa_seam_params(geometry, f, e, &seams[slot], t[e], &c1[e], &c2[e]);
+            for (j = 0; j < 3; j++)
+                w[e][j] = ramp ? (j == e ? 1.0f : 0.0f) : 10.0f;
+        }
+
         for (j = 0; j < 3; j++)
         {
-            int e;
             vi = i * 3 + j;
             expanded[vi].pos = geometry->fill.vertices[f->v[j]];
-            expanded[vi].ex = 0.0f;
-            expanded[vi].ey = 0.0f;
+            expanded[vi].u = w[0][j];
+            expanded[vi].v = w[1][j];
+            expanded[vi].s = w[2][j];
             for (e = 0; e < 3; e++)
             {
-                UINT16 a = f->v[(e + 1) % 3], b_v = f->v[(e + 2) % 3];
-                UINT32 lo = a < b_v ? a : b_v, hi = a < b_v ? b_v : a;
-                UINT32 key = lo * 65536u + hi + 1u;
-                UINT32 slot = key % map_size;
-                float w;
-                while (edge_keys[slot] != key)
-                    slot = (slot + 1) % map_size;
-                /* Interior edge weight: large value (>> 1.0) ensures it never limits
-                 * min_edge_px, so only true boundary edges drive the AA fade.
-                 * A seam towards a curve segment counts as interior here: fading
-                 * the fill out along it would draw a line into the shape where
-                 * the curve triangle continues it. */
-                w = (edge_cnt[slot] == 1 && !edge_curve[slot]) ? (j == e ? 1.0f : 0.0f) : 10.0f;
-                if (e == 0) expanded[vi].u = w;
-                else if (e == 1) expanded[vi].v = w;
-                else expanded[vi].s = w;
+                const D2D1_POINT_2F *corner = &geometry->fill.vertices[f->v[e]];
+
+                expanded[vi].seam_t[e] = t[e][j];
+                expanded[vi].seam_c1[e] = c1[e];
+                expanded[vi].seam_c2[e] = c2[e];
+                expanded[vi].corner[e][0] = expanded[vi].pos.x - corner->x;
+                expanded[vi].corner[e][1] = expanded[vi].pos.y - corner->y;
+                expanded[vi].corner_on[e] = on_outline[f->v[e]];
             }
         }
     }
@@ -2155,6 +2323,8 @@ static BOOL d2d_device_context_fill_triangles_aa(struct d2d_device_context *rend
     free(edge_cnt);
     free(edge_processed);
     free(edge_curve);
+    free(seams);
+    free(on_outline);
 
     if (FAILED(hr = d2d_device_context_get_scratch_buffer(render_target,
             D3D11_BIND_VERTEX_BUFFER,
@@ -2349,8 +2519,9 @@ static void d2d_device_context_fill_geometry(struct d2d_device_context *render_t
      * down the aliased path, straight edges included — a rounded rectangle or a
      * play triangle with rounded corners lost the antialiasing on every one of
      * its flat sides. The mixed case is handled inside fill_triangles_aa now: it
-     * antialiases the straight boundary edges and leaves the seams towards the
-     * curve segments alone, and it declines a shape bounded by curves only. */
+     * antialiases the straight boundary edges, ramps towards the seams with the
+     * curve segments by the distance to the curve, and declines a shape it can
+     * do nothing for. */
     if (geometry->fill.face_count
             && render_target->drawing_state.antialiasMode == D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
     {
@@ -7681,6 +7852,12 @@ static const D3D11_INPUT_ELEMENT_DESC shape_il_desc_fill_aa[] =
     {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,    0,  0, D3D11_INPUT_PER_VERTEX_DATA, 0},
     {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  8, D3D11_INPUT_PER_VERTEX_DATA, 0},
     {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT,    0, 20, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 2, DXGI_FORMAT_R32G32B32_FLOAT, 0, 28, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 3, DXGI_FORMAT_R32G32B32_FLOAT, 0, 40, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 4, DXGI_FORMAT_R32G32B32_FLOAT, 0, 52, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 5, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 64, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 6, DXGI_FORMAT_R32G32_FLOAT,    0, 80, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 7, DXGI_FORMAT_R32G32B32_FLOAT, 0, 88, D3D11_INPUT_PER_VERTEX_DATA, 0},
 };
 static const char shape_vs_code_outline[] =
     "float4 transform_geometry_r0;\n"
@@ -7693,6 +7870,12 @@ static const char shape_vs_code_outline[] =
     "    float2 p : WORLD_POSITION;\n"
     "    float4 b : BEZIER;\n"
     "    nointerpolation float2x2 stroke_transform : STROKE_TRANSFORM;\n"
+    "    float3 seam_t : SEAM_T;\n"
+    "    nointerpolation float3 seam_c1 : SEAM_C1;\n"
+    "    nointerpolation float3 seam_c2 : SEAM_C2;\n"
+    "    float4 corner01 : SEAM_V01;\n"
+    "    float2 corner2 : SEAM_V2;\n"
+    "    nointerpolation float3 corner_on : SEAM_VON;\n"
     "    float4 position : SV_POSITION;\n"
     "};\n"
     "\n"
@@ -7711,6 +7894,12 @@ static const char shape_vs_code_outline[] =
     "    float2x2 geom;\n"
     "\n"
     "    o.stroke_transform = float2x2(transform_rtx.xy, transform_rty.xy) * transform_geometry_r1.w * 0.5f;\n"
+    "    o.seam_t = 0.0f;\n"
+    "    o.seam_c1 = 0.0f;\n"
+    "    o.seam_c2 = 0.0f;\n"
+    "    o.corner01 = 0.0f;\n"
+    "    o.corner2 = 0.0f;\n"
+    "    o.corner_on = 0.0f;\n"
     "\n"
     "    geom = float2x2(transform_geometry_r0.xy, transform_geometry_r1.xy);\n"
     "    q_prev = normalize(mul(geom, prev));\n"
@@ -7768,6 +7957,12 @@ static const char shape_vs_code_bezier_outline[] =
     "    float2 p : WORLD_POSITION;\n"
     "    float4 b : BEZIER;\n"
     "    nointerpolation float2x2 stroke_transform : STROKE_TRANSFORM;\n"
+    "    float3 seam_t : SEAM_T;\n"
+    "    nointerpolation float3 seam_c1 : SEAM_C1;\n"
+    "    nointerpolation float3 seam_c2 : SEAM_C2;\n"
+    "    float4 corner01 : SEAM_V01;\n"
+    "    float2 corner2 : SEAM_V2;\n"
+    "    nointerpolation float3 corner_on : SEAM_VON;\n"
     "    float4 position : SV_POSITION;\n"
     "};\n"
     "\n"
@@ -7780,6 +7975,12 @@ static const char shape_vs_code_bezier_outline[] =
     "    geom = float2x2(transform_geometry_r0.xy, transform_geometry_r1.xy);\n"
     "    rt = float2x2(transform_rtx.xy, transform_rty.xy);\n"
     "    o.stroke_transform = rt * transform_geometry_r1.w * 0.5f;\n"
+    "    o.seam_t = 0.0f;\n"
+    "    o.seam_c1 = 0.0f;\n"
+    "    o.seam_c2 = 0.0f;\n"
+    "    o.corner01 = 0.0f;\n"
+    "    o.corner2 = 0.0f;\n"
+    "    o.corner_on = 0.0f;\n"
     "\n"
     "    p = mul(geom, position);\n"
     "    p0 = mul(geom, p0);\n"
@@ -7851,6 +8052,12 @@ static const char shape_vs_code_arc_outline[] =
     "    float2 p : WORLD_POSITION;\n"
     "    float4 b : BEZIER;\n"
     "    nointerpolation float2x2 stroke_transform : STROKE_TRANSFORM;\n"
+    "    float3 seam_t : SEAM_T;\n"
+    "    nointerpolation float3 seam_c1 : SEAM_C1;\n"
+    "    nointerpolation float3 seam_c2 : SEAM_C2;\n"
+    "    float4 corner01 : SEAM_V01;\n"
+    "    float2 corner2 : SEAM_V2;\n"
+    "    nointerpolation float3 corner_on : SEAM_VON;\n"
     "    float4 position : SV_POSITION;\n"
     "};\n"
     "\n"
@@ -7865,6 +8072,12 @@ static const char shape_vs_code_arc_outline[] =
     "    geom = float2x2(transform_geometry_r0.xy, transform_geometry_r1.xy);\n"
     "    rt = float2x2(transform_rtx.xy, transform_rty.xy);\n"
     "    o.stroke_transform = rt * transform_geometry_r1.w * 0.5f;\n"
+    "    o.seam_t = 0.0f;\n"
+    "    o.seam_c1 = 0.0f;\n"
+    "    o.seam_c2 = 0.0f;\n"
+    "    o.corner01 = 0.0f;\n"
+    "    o.corner2 = 0.0f;\n"
+    "    o.corner_on = 0.0f;\n"
     "\n"
     "    p = mul(geom, position);\n"
     "    p0 = mul(geom, p0);\n"
@@ -7908,6 +8121,12 @@ static const char shape_vs_code_triangle[] =
     "    float2 p : WORLD_POSITION;\n"
     "    float4 b : BEZIER;\n"
     "    nointerpolation float2x2 stroke_transform : STROKE_TRANSFORM;\n"
+    "    float3 seam_t : SEAM_T;\n"
+    "    nointerpolation float3 seam_c1 : SEAM_C1;\n"
+    "    nointerpolation float3 seam_c2 : SEAM_C2;\n"
+    "    float4 corner01 : SEAM_V01;\n"
+    "    float2 corner2 : SEAM_V2;\n"
+    "    nointerpolation float3 corner_on : SEAM_VON;\n"
     "    float4 position : SV_POSITION;\n"
     "};\n"
     "\n"
@@ -7916,6 +8135,12 @@ static const char shape_vs_code_triangle[] =
     "    o.p = float2(dot(float3(position, 1.0f), transform_geometry_r0.xyz), dot(float3(position, 1.0f), transform_geometry_r1.xyz));\n"
     "    o.b = float4(1.0, 0.0, 1.0, 1.0);\n"
     "    o.stroke_transform = float2x2(1.0, 0.0, 0.0, 1.0);\n"
+    "    o.seam_t = 0.0f;\n"
+    "    o.seam_c1 = 0.0f;\n"
+    "    o.seam_c2 = 0.0f;\n"
+    "    o.corner01 = 0.0f;\n"
+    "    o.corner2 = 0.0f;\n"
+    "    o.corner_on = 0.0f;\n"
     "    position = mul(float2x3(transform_rtx.xyz, transform_rty.xyz), float3(o.p, 1.0f))\n"
     "            * float2(transform_rtx.w, transform_rty.w);\n"
     "    o.position = float4(position + float2(-1.0f, 1.0f), 0.0f, 1.0f);\n"
@@ -7931,11 +8156,19 @@ static const char shape_vs_code_fill_aa[] =
     "    float2 p : WORLD_POSITION;\n"
     "    float4 b : BEZIER;\n"
     "    nointerpolation float2x2 stroke_transform : STROKE_TRANSFORM;\n"
+    "    float3 seam_t : SEAM_T;\n"
+    "    nointerpolation float3 seam_c1 : SEAM_C1;\n"
+    "    nointerpolation float3 seam_c2 : SEAM_C2;\n"
+    "    float4 corner01 : SEAM_V01;\n"
+    "    float2 corner2 : SEAM_V2;\n"
+    "    nointerpolation float3 corner_on : SEAM_VON;\n"
     "    float4 position : SV_POSITION;\n"
     "};\n"
     "\n"
     "void main(float2 position : POSITION, float3 texcoord : TEXCOORD0,\n"
-    "          float2 expand_dir : TEXCOORD1, out struct output o)\n"
+    "          float2 expand_dir : TEXCOORD1, float3 seam_t : TEXCOORD2,\n"
+    "          float3 seam_c1 : TEXCOORD3, float3 seam_c2 : TEXCOORD4, float4 corner01 : TEXCOORD5,\n"
+    "          float2 corner2 : TEXCOORD6, float3 corner_on : TEXCOORD7, out struct output o)\n"
     "{\n"
     "    o.p = float2(dot(float3(position, 1.0f), transform_geometry_r0.xyz),\n"
     "                 dot(float3(position, 1.0f), transform_geometry_r1.xyz));\n"
@@ -7955,6 +8188,12 @@ static const char shape_vs_code_fill_aa[] =
     /* Use b.w=2.0 as an explicit fill-AA marker (distinct from curve b.w=1.0 and arc b.w=1.0). */
     "    o.b = float4(texcoord, 2.0);\n"
     "    o.stroke_transform = float2x2(1.0, 0.0, 0.0, 1.0);\n"
+    "    o.seam_t = seam_t;\n"
+    "    o.seam_c1 = seam_c1;\n"
+    "    o.seam_c2 = seam_c2;\n"
+    "    o.corner01 = corner01;\n"
+    "    o.corner2 = corner2;\n"
+    "    o.corner_on = corner_on;\n"
     "    position = mul(float2x3(transform_rtx.xyz, transform_rty.xyz), float3(o.p, 1.0f))\n"
     "            * float2(transform_rtx.w, transform_rty.w);\n"
     "    o.position = float4(position + float2(-1.0f, 1.0f), 0.0f, 1.0f);\n"
@@ -7970,6 +8209,12 @@ static const char shape_vs_code_curve[] =
     "    float2 p : WORLD_POSITION;\n"
     "    float4 b : BEZIER;\n"
     "    nointerpolation float2x2 stroke_transform : STROKE_TRANSFORM;\n"
+    "    float3 seam_t : SEAM_T;\n"
+    "    nointerpolation float3 seam_c1 : SEAM_C1;\n"
+    "    nointerpolation float3 seam_c2 : SEAM_C2;\n"
+    "    float4 corner01 : SEAM_V01;\n"
+    "    float2 corner2 : SEAM_V2;\n"
+    "    nointerpolation float3 corner_on : SEAM_VON;\n"
     "    float4 position : SV_POSITION;\n"
     "};\n"
     "\n"
@@ -7978,6 +8223,12 @@ static const char shape_vs_code_curve[] =
     "    o.p = float2(dot(float3(position, 1.0f), transform_geometry_r0.xyz), dot(float3(position, 1.0f), transform_geometry_r1.xyz));\n"
     "    o.b = float4(texcoord, 1.0);\n"
     "    o.stroke_transform = float2x2(1.0, 0.0, 0.0, 1.0);\n"
+    "    o.seam_t = 0.0f;\n"
+    "    o.seam_c1 = 0.0f;\n"
+    "    o.seam_c2 = 0.0f;\n"
+    "    o.corner01 = 0.0f;\n"
+    "    o.corner2 = 0.0f;\n"
+    "    o.corner_on = 0.0f;\n"
     "    position = mul(float2x3(transform_rtx.xyz, transform_rty.xyz), float3(o.p, 1.0f))\n"
     "            * float2(transform_rtx.w, transform_rty.w);\n"
     "    o.position = float4(position + float2(-1.0f, 1.0f), 0.0f, 1.0f);\n"
@@ -8022,6 +8273,12 @@ static const char shape_ps_code[] =
     "    float2 p : WORLD_POSITION;\n"
     "    float4 b : BEZIER;\n"
     "    nointerpolation float2x2 stroke_transform : STROKE_TRANSFORM;\n"
+    "    float3 seam_t : SEAM_T;\n"
+    "    nointerpolation float3 seam_c1 : SEAM_C1;\n"
+    "    nointerpolation float3 seam_c2 : SEAM_C2;\n"
+    "    float4 corner01 : SEAM_V01;\n"
+    "    float2 corner2 : SEAM_V2;\n"
+    "    nointerpolation float3 corner_on : SEAM_VON;\n"
     "};\n"
     "\n"
     "float4 sample_gradient(Buffer<float4> gradient, uint stop_count, float position)\n"
@@ -8339,16 +8596,36 @@ static const char shape_ps_code[] =
     "    {\n"
     "        /* Fill-edge AA: b.w==2.0 is an explicit marker for fill triangles with edge weights.\n"
     "         * b.xyz encode barycentric proximity to each triangle edge.\n"
-    "         * min(b.xyz/gradient) = pixel distance to nearest boundary edge. */\n"
+    "         * min(b.xyz/gradient) = pixel distance to nearest boundary edge.\n"
+    "         * Along a seam towards a curve triangle the curve lies off the edge, by\n"
+    "         * seam_c1 * t + seam_c2 * t^2 in the same units, t running along the edge;\n"
+    "         * adding that turns the distance to the edge into the distance to the curve. */\n"
     "        if (i.b.w > 1.5f && aa_mode)\n"
     "        {\n"
     "            float3 edges = i.b.xyz;\n"
+    "            float3 t = saturate(i.seam_t);\n"
     "            float3 grad_e = float3(\n"
     "                length(float2(ddx(edges.x), ddy(edges.x))),\n"
     "                length(float2(ddx(edges.y), ddy(edges.y))),\n"
     "                length(float2(ddx(edges.z), ddy(edges.z))));\n"
-    "            float3 edge_px = edges / max(grad_e, float3(0.0001f, 0.0001f, 0.0001f));\n"
+    "            float3 edge_px = (edges + t * (i.seam_c1 + i.seam_c2 * t))\n"
+    "                    / max(grad_e, float3(0.0001f, 0.0001f, 0.0001f));\n"
     "            float min_edge_px = min(edge_px.x, min(edge_px.y, edge_px.z));\n"
+    "            /* A triangle that touches the outline only at a corner knows none of\n"
+    "             * the outline's edges. corner01/corner2 run from the corners to the\n"
+    "             * pixel in geometry space; mapped to pixels through their derivatives,\n"
+    "             * the distance to a corner on the outline bounds the distance to the\n"
+    "             * outline from above, so it can only ever lighten the ramp. */\n"
+    "            float2 jx = ddx(i.corner01.xy), jy = ddy(i.corner01.xy);\n"
+    "            float det = jx.x * jy.y - jy.x * jx.y;\n"
+    "            if (abs(det) > 1e-20f)\n"
+    "            {\n"
+    "                float2x2 to_px = float2x2(jy.y, -jy.x, -jx.y, jx.x) / det;\n"
+    "                float3 corner_px = float3(length(mul(to_px, i.corner01.xy)),\n"
+    "                        length(mul(to_px, i.corner01.zw)), length(mul(to_px, i.corner2)));\n"
+    "                corner_px += (1.0f - i.corner_on) * 1.0e4f;\n"
+    "                min_edge_px = min(min_edge_px, min(corner_px.x, min(corner_px.y, corner_px.z)));\n"
+    "            }\n"
     "            float fa = saturate(min_edge_px + 0.5f);\n"
     "            colour.a *= fa;\n"
     "            colour.rgb *= fa;\n"
