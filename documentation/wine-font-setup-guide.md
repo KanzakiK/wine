@@ -4,7 +4,7 @@ Fonts a Wine prefix needs for plugin GUIs: correct Unicode symbol rendering
 (Serum 2 rating stars, menu arrows) and no crashes from plugins that expect
 system font files to exist.
 
-**[wine-font-setup.sh](wine-font-setup.sh)** does the routine part — MS Core Fonts,
+**[wine-font-setup.sh](../scripts/wine-font-setup.sh)** does the routine part — MS Core Fonts,
 the symbol fallback fonts with their FontLink entries, this branch's text
 rendering switches, and the system UI font once Segoe UI is in the prefix — and
 `--check` reports without changing anything:
@@ -12,7 +12,10 @@ rendering switches, and the system UI font once Segoe UI is in the prefix — an
 ```bash
 scripts/wine-font-setup.sh --prefix ~/.wine
 scripts/wine-font-setup.sh --prefix ~/.wine --check
+scripts/wine-font-setup.sh --prefix ~/.wine --segoe-from /path/to/Windows/Fonts
 ```
+
+The last form also installs Segoe UI from a copy you provide (section 2b).
 
 This guide explains what the script sets and why, shows the manual commands, and
 covers the one thing it deliberately leaves out (the Serum 2 tooltip font).
@@ -117,7 +120,7 @@ several times, and a start whose code page does not match the record under
 with its own defaults.
 
 Neither route covers **Segoe UI** — there is no package and no winetricks verb
-for it. Section 2b describes what depends on it.
+for it. Section 2b describes what depends on it and how `--segoe-from` installs it.
 
 ### Debugging font-related plugin crashes
 
@@ -279,7 +282,18 @@ process had `tahoma.ttf` mapped). Windows 10 reports Segoe UI 9pt for all six.
 
 `wine-font-setup.sh` switches the six values once the Segoe UI family is in the
 prefix (the check reports it); without the family it leaves them alone, since GDI
-would fall back to the clone anyway. `--no-uifont` skips the step. By hand:
+would fall back to the clone anyway. `--no-uifont` skips the step.
+
+The family itself is proprietary, so the script does not fetch it.
+`--segoe-from DIR` copies `segoeui*.ttf` and `segui*.ttf` from a directory you
+provide — `C:\Windows\Fonts` of a Windows installation you are licensed to use —
+registers them under their full names and then switches the six values in the same
+run. Steinberg's Cubase 15 and Nuendo 15 need the family regardless of the UI font:
+their framework looks Segoe UI up in the DirectWrite system collection and crashes
+in `hubservice.dll` when it is missing
+([Steinberg setup guide](steinberg-setup-guide.md)).
+
+The six values by hand:
 
 ```bash
 # LOGFONTW, 92 bytes: height -12 (9pt at 96 dpi), weight 400, DEFAULT_CHARSET, face "Segoe UI"

@@ -1048,6 +1048,9 @@ fallback through `GetGlyphIndices`. That one has its own project:
 
 ## Steinberg installers: PowerShell hosting in Wine-Mono
 
+The complete setup in a new prefix, this step included, is in
+[documentation/steinberg-setup-guide.md](documentation/steinberg-setup-guide.md).
+
 Steinberg's `Setup.exe` (the bootstrapper behind every Download Assistant package) runs
 the `preinstall.ps1` scripts from `setup.xml` by hosting PowerShell in-process through
 `System.Management.Automation`, an assembly Wine-Mono does not ship. The load fails,

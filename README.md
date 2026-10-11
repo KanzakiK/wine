@@ -156,7 +156,9 @@ Two things are worth knowing before the first run, both explained in
   on the same machine, PATCHES.md has the per-application switch; the whole trio
   `d3d11,dxgi,d3d10core` has to move together.
 
-Details, tuning and font setup: **[PATCHES.md](PATCHES.md)**.
+Details, tuning and font setup: **[PATCHES.md](PATCHES.md)**. Steinberg Cubase 15,
+Nuendo 15 and Dorico 6, from the Download Assistant to a running project:
+**[documentation/steinberg-setup-guide.md](documentation/steinberg-setup-guide.md)**.
 
 ### Prebuilt package for Fedora
 
