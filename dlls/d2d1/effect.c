@@ -763,11 +763,16 @@ static HRESULT STDMETHODCALLTYPE d2d_transform_graph_SetSingleTransformNode(ID2D
     node = d2d_transform_graph_get_node(graph, object);
     graph->output = node;
 
+    /* A node with fewer inputs than the effect is accepted on Windows; the
+     * remaining effect inputs stay unconnected. */
     input_count = ID2D1TransformNode_GetInputCount(object);
-    if (graph->input_count != input_count)
+    if (input_count > graph->input_count)
+    {
+        WARN("Node %p has %u inputs, the effect has %u.\n", object, input_count, graph->input_count);
         return E_INVALIDARG;
+    }
 
-    for (i = 0; i < graph->input_count; ++i)
+    for (i = 0; i < input_count; ++i)
     {
         graph->inputs[i].node = node;
         graph->inputs[i].index = i;

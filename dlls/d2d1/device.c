@@ -5654,6 +5654,23 @@ static HRESULT d2d_device_context_update_dynamic_buffer(struct d2d_device_contex
     return S_OK;
 }
 
+/* Returns the effect input that feeds input "node_input" of "node": the one
+ * the graph connects to it, or the effect input with the same index for a
+ * node input without such a connection. */
+static unsigned int d2d_effect_node_input_source(const struct d2d_effect *effect,
+        const struct d2d_transform_node *node, unsigned int node_input)
+{
+    const struct d2d_transform_graph *graph = effect->graph;
+    unsigned int i;
+
+    for (i = 0; i < graph->input_count; ++i)
+    {
+        if (graph->inputs[i].node == node && graph->inputs[i].index == node_input)
+            return i;
+    }
+    return node_input;
+}
+
 /* Draw a custom effect whose transform graph is a single draw transform with
  * a pixel shader, the shape every effect written against
  * ID2D1EffectImpl/ID2D1DrawTransform with d2d1effecthelpers takes. The
@@ -5714,17 +5731,21 @@ static HRESULT d2d_device_context_draw_custom_effect(struct d2d_device_context *
     if (FAILED(hr))
         return hr;
 
-    input_count = min(effect->input_count, ARRAY_SIZE(bitmaps));
-    if (effect->input_count > ARRAY_SIZE(bitmaps))
-        FIXME("Effect %p has %u inputs, using the first %u.\n", effect, (unsigned int)effect->input_count, input_count);
+    /* The pixel shader samples the inputs of the output node, which may be
+     * fewer than the effect has (SetSingleTransformNode() with a one-input
+     * node on a two-input effect, Nuendo's ProRes video conversion). */
+    input_count = min(node->input_count, ARRAY_SIZE(bitmaps));
+    if (node->input_count > ARRAY_SIZE(bitmaps))
+        FIXME("Node %p has %u inputs, using the first %u.\n", node, node->input_count, input_count);
 
     for (i = 0; i < input_count; ++i)
     {
+        unsigned int src = d2d_effect_node_input_source(effect, node, i);
         ID2D1Bitmap *bitmap;
 
-        if (!effect->inputs[i])
+        if (src >= effect->input_count || !effect->inputs[src])
             continue;
-        if (FAILED(ID2D1Image_QueryInterface(effect->inputs[i], &IID_ID2D1Bitmap, (void **)&bitmap)))
+        if (FAILED(ID2D1Image_QueryInterface(effect->inputs[src], &IID_ID2D1Bitmap, (void **)&bitmap)))
         {
             FIXME("Effect input %u is not a bitmap.\n", i);
             hr = E_NOTIMPL;
