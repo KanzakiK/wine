@@ -343,6 +343,26 @@ L"<?xml version='1.0'?>                                                       \
     </Effect>                                                                 \
 ";
 
+static const WCHAR *effect_xml_two_inputs =
+L"<?xml version='1.0'?>                                                       \
+    <Effect>                                                                  \
+        <Property name='DisplayName' type='string' value='TwoInputs'/>        \
+        <Property name='Author'      type='string' value='The Wine Project'/> \
+        <Property name='Category'    type='string' value='Test'/>             \
+        <Property name='Description' type='string' value='Test effect.'/>     \
+        <Inputs>                                                              \
+            <Input name='Source1'/>                                           \
+            <Input name='Source2'/>                                           \
+        </Inputs>                                                             \
+        <Property name='Context' type='iunknown'>                             \
+            <Property name='DisplayName' type='string' value='Context'/>      \
+        </Property>                                                           \
+        <Property name='Graph' type='iunknown'>                               \
+            <Property name='DisplayName' type='string' value='Graph'/>        \
+        </Property>                                                           \
+    </Effect>                                                                 \
+";
+
 static const WCHAR *effect_variable_input_count =
 L"<?xml version='1.0'?>                                                       \
     <Effect>                                                                  \
@@ -14923,6 +14943,94 @@ static void test_registered_effects(BOOL d3d11)
     release_test_context(&ctx);
 }
 
+static void test_transform_graph_input_count(BOOL d3d11)
+{
+    D2D1_BLEND_DESCRIPTION blend_desc = {0};
+    ID2D1BlendTransform *blend2, *blend3;
+    ID2D1OffsetTransform *offset_transform;
+    ID2D1EffectContext *effect_context;
+    struct d2d1_test_context ctx;
+    ID2D1TransformGraph *graph;
+    ID2D1Factory1 *factory;
+    POINT point = {0, 0};
+    ID2D1Effect *effect;
+    UINT32 count;
+    HRESULT hr;
+
+    const D2D1_PROPERTY_BINDING binding[] =
+    {
+        {L"Context", NULL, effect_impl_get_context},
+        {L"Graph",   NULL, effect_impl_get_graph},
+    };
+
+    if (!init_test_context(&ctx, d3d11))
+        return;
+
+    factory = ctx.factory1;
+    if (!factory)
+    {
+        win_skip("ID2D1Factory1 is not supported.\n");
+        release_test_context(&ctx);
+        return;
+    }
+
+    hr = ID2D1Factory1_RegisterEffectFromString(factory, &CLSID_TestEffect,
+            effect_xml_two_inputs, binding, ARRAY_SIZE(binding), effect_impl_create);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    hr = ID2D1DeviceContext_CreateEffect(ctx.context, &CLSID_TestEffect, &effect);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    hr = ID2D1Effect_GetValueByName(effect, L"Graph", D2D1_PROPERTY_TYPE_IUNKNOWN, (BYTE *)&graph, sizeof(graph));
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    hr = ID2D1Effect_GetValueByName(effect, L"Context",
+            D2D1_PROPERTY_TYPE_IUNKNOWN, (BYTE *)&effect_context, sizeof(effect_context));
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    count = ID2D1TransformGraph_GetInputCount(graph);
+    ok(count == 2, "Unexpected input count %u.\n", count);
+
+    hr = ID2D1EffectContext_CreateOffsetTransform(effect_context, point, &offset_transform);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    hr = ID2D1EffectContext_CreateBlendTransform(effect_context, 2, &blend_desc, &blend2);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    hr = ID2D1EffectContext_CreateBlendTransform(effect_context, 3, &blend_desc, &blend3);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    /* Two-input effect, single-input node. */
+    hr = ID2D1TransformGraph_SetSingleTransformNode(graph, (ID2D1TransformNode *)offset_transform);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    hr = ID2D1TransformGraph_AddNode(graph, (ID2D1TransformNode *)offset_transform);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
+    count = ID2D1TransformGraph_GetInputCount(graph);
+    ok(count == 2, "Unexpected input count %u.\n", count);
+    /* The unconnected effect input can be connected afterwards. */
+    hr = ID2D1TransformGraph_ConnectToEffectInput(graph, 1, (ID2D1TransformNode *)offset_transform, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    hr = ID2D1TransformGraph_SetOutputNode(graph, (ID2D1TransformNode *)offset_transform);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    ID2D1TransformGraph_Clear(graph);
+
+    /* Two-input effect, two-input node. */
+    hr = ID2D1TransformGraph_SetSingleTransformNode(graph, (ID2D1TransformNode *)blend2);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    ID2D1TransformGraph_Clear(graph);
+
+    /* Two-input effect, three-input node. */
+    hr = ID2D1TransformGraph_SetSingleTransformNode(graph, (ID2D1TransformNode *)blend3);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
+    hr = ID2D1TransformGraph_AddNode(graph, (ID2D1TransformNode *)blend3);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
+    ID2D1TransformGraph_Clear(graph);
+
+    ID2D1BlendTransform_Release(blend3);
+    ID2D1BlendTransform_Release(blend2);
+    ID2D1OffsetTransform_Release(offset_transform);
+    ID2D1Effect_Release(effect);
+    hr = ID2D1Factory1_UnregisterEffect(factory, &CLSID_TestEffect);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    release_test_context(&ctx);
+}
+
 static void test_transform_graph(BOOL d3d11)
 {
     ID2D1OffsetTransform *offset_transform = NULL;
@@ -19334,6 +19442,7 @@ START_TEST(d2d1)
     queue_d3d10_test(test_effect_saturation);
     queue_d3d10_test(test_effect_scale);
     queue_test(test_transform_graph);
+    queue_test(test_transform_graph_input_count);
     queue_test(test_offset_transform);
     queue_test(test_blend_transform);
     queue_test(test_border_transform);
