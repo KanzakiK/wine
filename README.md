@@ -36,19 +36,6 @@
 > CodeWeavers, nor with Steinberg, Image-Line, Ableton or any other vendor named here; all
 > product names are used only to say what was tested.
 
-<table>
-<tr>
-<td width="50%" valign="top">
-  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/steinberg-tools-collage.png" alt="Steinberg Download Assistant, Activation Manager and Library Manager running on this fork">
-  <sub><i>Steinberg's own tools under Wine — the Download Assistant with Cubase Pro 15.0.30 and its content packages, the Activation Manager 1.9 with activated licences, and the Library Manager with 47 libraries (96.32 GB). Content updates in the Library Manager need the shell32 <code>IFileOperation::DeleteItem</code> implementation from this fork; with the stub a content update never completes.</i></sub>
-</td>
-<td width="50%" valign="top">
-  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/cubase15-pro-mixconsole.png" alt="Cubase Pro 15 running on this fork">
-  <sub><i>Cubase Pro 15.0.30 under Wine — the Cubase 14 demo project in playback: arrangement, MixConsole in the lower zone with live meters, MediaBay on the right, on this fork.</i></sub>
-</td>
-</tr>
-</table>
-
 ## Why this fork exists
 
 Windows audio software stopped drawing itself with GDI years ago. Plugin frameworks —
@@ -82,23 +69,51 @@ pwrshsip (new) · powershell.exe · winemenubuilder.exe · and more than twenty 
 
 <table>
 <tr>
-<td width="50%" valign="top">
-  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/serum2-fl-studio.png" alt="Serum 2 in FL Studio">
-  <sub><b>Serum 2</b> (VSTGUI + DirectComposition) in FL Studio 2026 — three wavetable oscillators with their wavetable views, the filter response, the envelope, the Rössler chaos LFO and the arpeggiator all render.</sub>
+<td width="240" align="center" valign="top">
+  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/cubase15-pro-mixconsole.png" width="200" alt="Cubase Pro 15 running on this fork">
 </td>
-<td width="50%" valign="top">
-  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/studio-pro-8-video-splice.png" alt="Fender Studio Pro 8 with the video player and the Splice panel">
-  <sub><b>Fender Studio Pro 8</b> (CCL: DXGI + DirectWrite + DComp) — the demo song in playback: arranger sections and the video track in the song view, the floating video player, the console with live meters and the Splice panel docked on the right. Without the <code>UIAnimationManager2</code> implementation from this fork it does not start at all.</sub>
+<td valign="top">
+  <b>Cubase Pro 15.0.30</b> (DComp + D2D1 + DirectWrite) — the Cubase 14 demo project in playback: the arrangement, the MixConsole in the lower zone with live meters and the MediaBay on the right.
 </td>
 </tr>
 <tr>
-<td width="50%" valign="top">
-  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/fl-cloud-plugins.png" alt="FL Cloud plugin store in FL Studio">
-  <sub><b>FL Cloud</b> in FL Studio — the plugin store browses with its artwork, products show as installed, and a download runs in place. Installing from it needs the AF_UNIX fixes from this fork.</sub>
+<td width="240" align="center" valign="top">
+  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/steinberg-tools-collage.png" width="200" alt="Steinberg Download Assistant, Activation Manager and Library Manager running on this fork">
 </td>
-<td width="50%" valign="top">
-  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/eprom-fl-studio.png" alt="EPROM Memory Rites in FL Studio">
-  <sub><b>EPROM — Memory Rites</b> (JUCE 8.0.13) in FL Studio 2026 — the preset header, the macro knobs, the artwork panel and the pad row render through JUCE; the splash and login screen before them go through WebView2.</sub>
+<td valign="top">
+  <b>Steinberg's own tools</b> — the Download Assistant with Cubase Pro 15.0.30 and its content packages, the Activation Manager 1.9 with activated licences, and the Library Manager with 47 libraries (96.32 GB). Content updates in the Library Manager need the shell32 <code>IFileOperation::DeleteItem</code> implementation from this fork; with the stub a content update never completes.
+</td>
+</tr>
+<tr>
+<td width="240" align="center" valign="top">
+  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/serum2-fl-studio.png" width="200" alt="Serum 2 in FL Studio">
+</td>
+<td valign="top">
+  <b>Serum 2</b> (VSTGUI + DirectComposition) in FL Studio 2026 — three wavetable oscillators with their wavetable views, the filter response, the envelope, the Rössler chaos LFO and the arpeggiator all render.
+</td>
+</tr>
+<tr>
+<td width="240" align="center" valign="top">
+  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/studio-pro-8-video-splice.png" width="200" alt="Fender Studio Pro 8 with the video player and the Splice panel">
+</td>
+<td valign="top">
+  <b>Fender Studio Pro 8</b> (CCL: DXGI + DirectWrite + DComp) — the demo song in playback: arranger sections and the video track in the song view, the floating video player, the console with live meters and the Splice panel docked on the right. Without the <code>UIAnimationManager2</code> implementation from this fork it does not start at all.
+</td>
+</tr>
+<tr>
+<td width="240" align="center" valign="top">
+  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/fl-cloud-plugins.png" width="200" alt="FL Cloud plugin store in FL Studio">
+</td>
+<td valign="top">
+  <b>FL Cloud</b> in FL Studio — the plugin store browses with its artwork, products show as installed, and a download runs in place. Installing from it needs the AF_UNIX fixes from this fork.
+</td>
+</tr>
+<tr>
+<td width="240" align="center" valign="top">
+  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/eprom-fl-studio.png" width="200" alt="EPROM Memory Rites in FL Studio">
+</td>
+<td valign="top">
+  <b>EPROM — Memory Rites</b> (JUCE 8.0.13) in FL Studio 2026 — the preset header, the macro knobs, the artwork panel and the pad row render through JUCE; the splash and login screen before them go through WebView2.
 </td>
 </tr>
 </table>
@@ -225,6 +240,7 @@ exactly each one needs, and what breaks without it — is in
 | Application | Framework | Status |
 |---|---|---|
 | **Steinberg Cubase Pro 15.0.30** | Custom (DComp + D2D1 + DirectWrite), WebView2 Hub | Installs through Steinberg's own bootstrapper and runs: project window, MixConsole with live meters, Hub. Installing needs the `msi` feature-cost fix (the setup crashed before its first dialog) and the Script SIP for signed PowerShell — without `pwrshsip`/`wintrust` the installer stops at "preinstall.ps1 … not trusted". Starting needs the `Windows.Globalization.Calendar` runtime class, without which `headtracking.dll` aborts behind the licence splash, and the `comdlg32` folder-dialog fix, without which the Hub reports the project folder as read-only. The window itself needs the dcomp virtual-surface resize and child-surface readback work — and the d2d1 WIC target fix, without which the MixConsole level meters stay empty |
+| **Steinberg Nuendo 15.0.30** | Custom (as Cubase) | The Ambisonics Mixing and Audio Post Production templates and the demo project "The Crone" open and play; the Ambisonics template brings up the MixConsole with the 3OA bus and the VST MultiPanner. Needs the `ucrtbase` complex-math functions from this fork — without them the template aborts while the MultiPanner loads |
 | **Steinberg Groove Agent 5 / Groove Agent SE 6**, **HALion 7**, **Dorico 5**, **The Grand 3** | Steinberg framework (DComp + D2D1 + DXGI); Dorico: Qt 6.5 | Run as standalone applications. Groove Agent 5 needs the DXGI tooltip-popup and `Present1` scroll-rectangle fixes — without them its tooltips turn black and scrolling the kit list leaves stale thumbnails. The Grand 3 needs the dcomp restore of a surface-root frame lost before `ShowWindow`, without which its toolbar stays black until hovered. The Anima 3D wavetable view needs offscreen rendering for hidden top-level windows (measured in HALion Sonic 7). Desktop and start-menu shortcuts of the MSI-installed applications need the shell32 long-path fix, without which The Grand 3 reports "Skin file skins/skin.srf not found" |
 | **Serum 2** (VST3 in Reaper) | VSTGUI + DComp | Fully functional — all waveform views, envelopes, presets, per-pixel-alpha drag bitmaps |
 | **Korg Trinity / Prophecy** (VST3) | JUCE 8.0.13 / 8.0.12 + DComp | Fully functional on the DComp path |
