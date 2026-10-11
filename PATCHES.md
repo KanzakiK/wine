@@ -511,6 +511,20 @@ This is the recommended branch. What it changes, by subsystem:
   first frame seventeen inputs late with the sixteen threads Wine allows it; a single-slice
   stream then decodes on one thread (11 ms per 4K frame on a 16-thread desktop, still real
   time at 30 fps). The video window shows the picture in stop and play
+- **ProRes video in Cubase and Nuendo (d2d1 bitmap formats)**: Steinberg decodes ProRes with
+  its own `VideoCodec-Apple-ProRes.dll` on the CPU, uploads the v210 output into an
+  `R10G10B10A2_UNORM` texture and converts it with a one-input Direct2D custom effect. At
+  start-up the video engine asks `ID2D1DeviceContext::IsDxgiFormatSupported()` for the whole
+  DXGI range and builds that path only when the 10-bit format gets a yes. Wine answered from
+  a table of seven bitmap formats; Windows 10 accepts fifteen (measured for every format and
+  alpha mode, with and without `D2D1_BITMAP_OPTIONS_TARGET`, in both architectures, test
+  `test_dxgi_format_support`): `R10G10B10A2_UNORM`, `R8_UNORM`, `R8G8_UNORM` and
+  `BC1`/`BC2`/`BC3_UNORM` are bitmap formats but not target formats, and `B8G8R8X8_UNORM` is
+  not a target format either. With the no, the engine decoded the first frame of the Nuendo 15
+  demo clip four times, dropped it and never asked for another: the player stayed black (the
+  clip itself opens with eight seconds of black, so the first frame is not the evidence —
+  the file position of the `.mov` handle during playback is). With the table from this
+  branch the clip plays in Nuendo 15 and in Cubase 15, which ships the same codec
 - **winegstreamer**: GStreamer plugins are loaded through its plugin scanner helper again
   instead of inside the application. Initialization has passed `--gst-disable-registry-fork`
   since 2010. The helper is a separate `gst-plugin-scanner` process started with fork and
@@ -770,7 +784,7 @@ these were developed against, but they are not specific to it.
 | Minimal Hub | Tauri v2 + SvelteKit + WebView2 | Starts, signs in and installs products (an 11.8 MB update completed). Needs the `secur32`/schannel `DecryptMessage` fix from this branch: without it the `oauth/token` request stops after a partial response and the app waits indefinitely, because reqwest has no response timeout. Its installer step also shells out to `powershell Start-Process`, but in a form the `powershell` patch does not recognise — it ran both with and without that patch |
 | Fender Studio Pro 8 | CCL (DXGI + DWrite + DComp) | Fully functional — the song view draws completely and stays stable, no stale tool bar or transport and no flicker; the transport playhead and the selection rectangle no longer flicker while the transport runs, and video on the timeline plays, seeks, loops and jumps without stalling or going black. Starting at all needs the `UIAnimationManager2` and `UIAnimationTransitionLibrary2` implementation from this branch; without it the CCL framework aborts with "requires Windows 10 or later" |
 | Steinberg Cubase Pro 15.0.30 | Custom (DComp + D2D1 + DirectWrite) + WebView2 | Installs through Steinberg's own bootstrapper and runs: project window, MixConsole with live meters, Hub. Installing needs the `msi` feature-cost fix (the setup crashed before its first dialog) and the Script SIP for signed PowerShell — without `pwrshsip`/`wintrust` the installer stops at "preinstall.ps1 … not trusted". Starting needs the `Windows.Globalization.Calendar` runtime class, without which `headtracking.dll` aborts behind the licence splash, and the `comdlg32` folder-dialog fix, without which the Hub reports the project folder as read-only. The window itself needs the dcomp virtual-surface resize and child-surface readback work — and the d2d1 WIC target fix, without which the MixConsole level meters stay empty. The video player needs the planar NV12 textures in the OpenGL renderer, the `CPU_LOCKABLE` format bit, custom Direct2D effects and the larger decoder sample pool (see the video-player entry above) |
-| Steinberg Nuendo 15.0.30 | Custom (as Cubase) | The Ambisonics Mixing and Audio Post Production templates and the demo project "The Crone" open and play; the Ambisonics template brings up the MixConsole with the 3OA bus and the VST MultiPanner. Needs the `ucrtbase` complex-math functions from this branch; without them the template aborts while the MultiPanner loads |
+| Steinberg Nuendo 15.0.30 | Custom (as Cubase) | The Ambisonics Mixing and Audio Post Production templates and the demo project "The Crone" open and play; the Ambisonics template brings up the MixConsole with the 3OA bus and the VST MultiPanner. The ProRes 422 demo clip (10-bit, decoded by Steinberg's own `VideoCodec-Apple-ProRes.dll`) plays in the video player, which needs the d2d1 bitmap-format table from this branch — without `R10G10B10A2_UNORM` in `IsDxgiFormatSupported` the engine never builds its 10-bit upload path and the player stays black. Needs the `ucrtbase` complex-math functions from this branch; without them the template aborts while the MultiPanner loads |
 
 ## Font Setup
 
