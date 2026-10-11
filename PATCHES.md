@@ -235,15 +235,15 @@ This is the recommended branch. What it changes, by subsystem:
   surface over what the child had presented. A plug-in editor embedded by yabridge is
   exactly as large as its top-level, so Mercurial Tones Dagon, which places a Direct3D 12
   child over its whole editor, stayed black there while it rendered in a Wine-hosted DAW
-- **winex11**: a window painted through `UpdateLayeredWindow()` shows its window surface
-  even when a Direct3D swap chain targets it. The client window the swap chain puts on
-  the top-level is rendered offscreen, so it no longer covers the surface, and the surface
-  is painted unclipped although its region (the window minus its pixel format client
-  area) is empty. WPF renders a popup through Direct3D 9, hands the frame to
-  `UpdateLayeredWindow()` and never presents again; the client window then showed a stale
-  frame or undefined pixmap content, and SynthEdit 1.5's menus came up as a copy of the
-  screen below them or black once the empty-region flush above was disabled. WineHQ bug
-  60173 reports the same for every WPF menu, tooltip and `AllowsTransparency` window.
+- **winex11, wineserver**: a window painted through `UpdateLayeredWindow()` shows its
+  window surface even when a Direct3D swap chain targets it. The client window the swap
+  chain puts on the top-level is rendered offscreen, so it no longer covers the surface,
+  and the surface region of a layered window without layered attributes keeps its client
+  area despite the pixel format. WPF renders a popup through Direct3D 9, hands the frame
+  to `UpdateLayeredWindow()` and never presents again; the client window then showed a
+  stale frame or undefined pixmap content, and SynthEdit 1.5's menus came up as a copy of
+  the screen below them or black once the empty-region flush above was disabled. WineHQ
+  bug 60173 reports the same for every WPF menu, tooltip and `AllowsTransparency` window.
 - **winex11**: a DC on a window whose top-level belongs to another process takes the
   visual that top-level was created with instead of the default one. The xrender picture
   format follows the DC's visual, and a format whose depth differs from the drawable's makes
