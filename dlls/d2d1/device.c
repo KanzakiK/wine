@@ -2172,10 +2172,165 @@ static BOOL d2d_device_context_fill_triangles_aa(struct d2d_device_context *rend
     return TRUE;
 }
 
+/* The linear part of the mapping from geometry space to render target pixels,
+ * as the vertex shader applies it: pixel = dpi * world * geometry * p. Stored
+ * row major for column vectors, px = m[0] * x + m[1] * y, py = m[2] * x + m[3] * y. */
+static void d2d_device_context_get_pixel_matrix(const struct d2d_device_context *context,
+        const D2D1_MATRIX_3X2_F *g, float *m)
+{
+    const D2D1_MATRIX_3X2_F *w = &context->drawing_state.transform;
+    float sx = context->desc.dpiX / 96.0f, sy = context->desc.dpiY / 96.0f;
+
+    m[0] = sx * (w->_11 * g->_11 + w->_21 * g->_12);
+    m[1] = sx * (w->_11 * g->_21 + w->_21 * g->_22);
+    m[2] = sy * (w->_12 * g->_11 + w->_22 * g->_12);
+    m[3] = sy * (w->_12 * g->_21 + w->_22 * g->_22);
+}
+
+/* Append a skirt across the edge i0-i1 of the curve triangle v, on the side away
+ * from its corner io: a quad reaching CURVE_SKIRT_PIXELS outward in screen space.
+ * The texture coordinates of the outer corners continue the affine mapping of the
+ * triangle, so the pixel shader evaluates the same implicit curve there and the
+ * antialiasing ramp simply carries on past the triangle edge. */
+#define D2D_CURVE_SKIRT_PIXELS 0.75f
+static unsigned int d2d_curve_add_skirt(struct d2d_curve_vertex *out, const struct d2d_curve_vertex *v,
+        unsigned int i0, unsigned int i1, unsigned int io, const float *m, const float *inv)
+{
+    const D2D1_POINT_2F *p0 = &v[0].position, *p1 = &v[1].position, *p2 = &v[2].position;
+    float ex, ey, len, nx, ny, dx, dy, det;
+    struct d2d_curve_vertex outer[2];
+    D2D1_POINT_2F a, b, o;
+    unsigned int k;
+
+    /* Edge and opposite corner in pixel space; translation does not matter for directions. */
+    a.x = m[0] * v[i0].position.x + m[1] * v[i0].position.y;
+    a.y = m[2] * v[i0].position.x + m[3] * v[i0].position.y;
+    b.x = m[0] * v[i1].position.x + m[1] * v[i1].position.y;
+    b.y = m[2] * v[i1].position.x + m[3] * v[i1].position.y;
+    o.x = m[0] * v[io].position.x + m[1] * v[io].position.y;
+    o.y = m[2] * v[io].position.x + m[3] * v[io].position.y;
+    ex = b.x - a.x;
+    ey = b.y - a.y;
+    if (!((len = sqrtf(ex * ex + ey * ey)) > 1e-4f))
+        return 0;
+    nx = -ey / len;
+    ny = ex / len;
+    if (nx * (a.x - o.x) + ny * (a.y - o.y) < 0.0f)
+    {
+        nx = -nx;
+        ny = -ny;
+    }
+    nx *= D2D_CURVE_SKIRT_PIXELS;
+    ny *= D2D_CURVE_SKIRT_PIXELS;
+    /* Back to geometry space. */
+    dx = inv[0] * nx + inv[1] * ny;
+    dy = inv[2] * nx + inv[3] * ny;
+
+    det = (p1->x - p0->x) * (p2->y - p0->y) - (p1->y - p0->y) * (p2->x - p0->x);
+    if (!(fabsf(det) > 1e-12f))
+        return 0;
+
+    for (k = 0; k < 2; ++k)
+    {
+        const struct d2d_curve_vertex *src = &v[k ? i1 : i0];
+        float qx = src->position.x + dx, qy = src->position.y + dy, l1, l2, l0;
+
+        l1 = ((qx - p0->x) * (p2->y - p0->y) - (qy - p0->y) * (p2->x - p0->x)) / det;
+        l2 = ((p1->x - p0->x) * (qy - p0->y) - (p1->y - p0->y) * (qx - p0->x)) / det;
+        l0 = 1.0f - l1 - l2;
+        outer[k].position.x = qx;
+        outer[k].position.y = qy;
+        outer[k].texcoord.u = l0 * v[0].texcoord.u + l1 * v[1].texcoord.u + l2 * v[2].texcoord.u;
+        outer[k].texcoord.v = l0 * v[0].texcoord.v + l1 * v[1].texcoord.v + l2 * v[2].texcoord.v;
+        outer[k].texcoord.sign = src->texcoord.sign;
+    }
+
+    out[0] = v[i0];
+    out[1] = v[i1];
+    out[2] = outer[0];
+    out[3] = v[i1];
+    out[4] = outer[1];
+    out[5] = outer[0];
+    return 6;
+}
+
+/* Curve triangles cover the space between the curve and its control polygon
+ * only. The antialiasing ramp reaches half a pixel past the curve, and next to a
+ * short curve piece the triangle is thinner than that, which would cut off the
+ * outer half of the ramp: small curves and scaled down artwork such as SVG logos
+ * would get hard edges. Give every curve triangle a skirt on the side that is not
+ * filled: across its two control edges when the control point lies outside the
+ * filled area (the triangle fills towards the chord), across the chord when it
+ * lies inside (the triangle fills towards the control point).
+ *
+ * Returns a newly allocated vertex array, or NULL to draw the triangles as they are. */
+static struct d2d_curve_vertex *d2d_device_context_curve_skirts(const struct d2d_device_context *context,
+        const struct d2d_geometry *geometry, const struct d2d_curve_vertex *v, size_t count, size_t *out_count)
+{
+    struct d2d_curve_vertex *out;
+    float m[4], inv[4], det;
+    size_t i, n = 0;
+
+    d2d_device_context_get_pixel_matrix(context, &geometry->transform, m);
+    det = m[0] * m[3] - m[1] * m[2];
+    if (!(fabsf(det) > 1e-12f))
+        return NULL;
+    inv[0] = m[3] / det;
+    inv[1] = -m[1] / det;
+    inv[2] = -m[2] / det;
+    inv[3] = m[0] / det;
+
+    if (!(out = malloc((count / 3) * 15 * sizeof(*out))))
+        return NULL;
+
+    for (i = 0; i + 2 < count; i += 3)
+    {
+        memcpy(&out[n], &v[i], 3 * sizeof(*out));
+        n += 3;
+        /* Corner 1 is the control point. */
+        if (v[i].texcoord.sign < 0.0f)
+        {
+            n += d2d_curve_add_skirt(&out[n], &v[i], 0, 1, 2, m, inv);
+            n += d2d_curve_add_skirt(&out[n], &v[i], 1, 2, 0, m, inv);
+        }
+        else
+        {
+            n += d2d_curve_add_skirt(&out[n], &v[i], 0, 2, 1, m, inv);
+        }
+    }
+
+    *out_count = n;
+    return out;
+}
+
+static void d2d_device_context_draw_curves(struct d2d_device_context *render_target,
+        const struct d2d_geometry *geometry, const struct d2d_curve_vertex *vertices, size_t count,
+        struct d2d_brush *brush, struct d2d_brush *opacity_brush)
+{
+    struct d2d_curve_vertex *expanded = NULL;
+    ID3D11Buffer *vb;
+    HRESULT hr;
+
+    if (render_target->drawing_state.antialiasMode == D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+            && (expanded = d2d_device_context_curve_skirts(render_target, geometry, vertices, count, &count)))
+        vertices = expanded;
+
+    if (FAILED(hr = d2d_device_context_get_scratch_buffer(render_target, D3D11_BIND_VERTEX_BUFFER,
+            count * sizeof(*vertices), &render_target->scratch_vb[D2D_SHAPE_TYPE_CURVE], vertices, &vb)))
+    {
+        ERR("Failed to create curves vertex buffer, hr %#lx.\n", hr);
+        free(expanded);
+        return;
+    }
+    free(expanded);
+
+    d2d_device_context_draw(render_target, D2D_SHAPE_TYPE_CURVE, NULL, count, vb,
+            sizeof(*vertices), brush, opacity_brush);
+}
+
 static void d2d_device_context_fill_geometry(struct d2d_device_context *render_target,
         const struct d2d_geometry *geometry, struct d2d_brush *brush, struct d2d_brush *opacity_brush)
 {
-    ID3D11Buffer *vb;
     HRESULT hr;
 
     if (FAILED(hr = d2d_device_context_update_vs_cb(render_target, &geometry->transform, 0.0f, 0.0f)))
@@ -2208,37 +2363,13 @@ static void d2d_device_context_fill_geometry(struct d2d_device_context *render_t
     }
 
     if (geometry->fill.bezier_vertex_count)
-    {
-        if (FAILED(hr = d2d_device_context_get_scratch_buffer(render_target,
-                D3D11_BIND_VERTEX_BUFFER,
-                geometry->fill.bezier_vertex_count * sizeof(*geometry->fill.bezier_vertices),
-                &render_target->scratch_vb[D2D_SHAPE_TYPE_CURVE],
-                geometry->fill.bezier_vertices, &vb)))
-        {
-            ERR("Failed to create curves vertex buffer, hr %#lx.\n", hr);
-            return;
-        }
+        d2d_device_context_draw_curves(render_target, geometry, geometry->fill.bezier_vertices,
+                geometry->fill.bezier_vertex_count, brush, opacity_brush);
 
-        d2d_device_context_draw(render_target, D2D_SHAPE_TYPE_CURVE, NULL, geometry->fill.bezier_vertex_count, vb,
-                sizeof(*geometry->fill.bezier_vertices), brush, opacity_brush);
-    }
-
-    if (geometry->fill.arc_vertex_count)
-    {
-        if (FAILED(hr = d2d_device_context_get_scratch_buffer(render_target,
-                D3D11_BIND_VERTEX_BUFFER,
-                geometry->fill.arc_vertex_count * sizeof(*geometry->fill.arc_vertices),
-                &render_target->scratch_vb[D2D_SHAPE_TYPE_CURVE],
-                geometry->fill.arc_vertices, &vb)))
-        {
-            ERR("Failed to create arc vertex buffer, hr %#lx.\n", hr);
-            return;
-        }
-
-        if (SUCCEEDED(d2d_device_context_update_ps_cb(render_target, brush, opacity_brush, FALSE, TRUE)))
-            d2d_device_context_draw(render_target, D2D_SHAPE_TYPE_CURVE, NULL, geometry->fill.arc_vertex_count, vb,
-                    sizeof(*geometry->fill.arc_vertices), brush, opacity_brush);
-    }
+    if (geometry->fill.arc_vertex_count
+            && SUCCEEDED(d2d_device_context_update_ps_cb(render_target, brush, opacity_brush, FALSE, TRUE)))
+        d2d_device_context_draw_curves(render_target, geometry, geometry->fill.arc_vertices,
+                geometry->fill.arc_vertex_count, brush, opacity_brush);
 }
 
 static void STDMETHODCALLTYPE d2d_device_context_FillGeometry(ID2D1DeviceContext6 *iface,
