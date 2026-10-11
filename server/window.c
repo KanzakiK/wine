@@ -1276,6 +1276,24 @@ static int composes_over_layered_ancestor( const struct window *win, const struc
 }
 
 
+/* set the region to the client rect of an ancestor that clips win, in the ancestor's
+ * parent-relative coordinates; the one-pixel surface rect of a layered ancestor does
+ * not clip a child that composes over it, see composes_over_layered_ancestor() */
+static void set_region_ancestor_client_rect( struct region *region, struct window *ancestor,
+                                             const struct window *win )
+{
+    struct rectangle rect;
+
+    if (!composes_over_layered_ancestor( win, ancestor ))
+    {
+        set_region_client_rect( region, ancestor );
+        return;
+    }
+    intersect_rect( &rect, &ancestor->window_rect, &ancestor->client_rect );
+    set_region_rect( region, &rect );
+}
+
+
 /* get the top-level window to clip against for a given window */
 static inline struct window *get_top_clipping_window( struct window *win )
 {
@@ -1308,7 +1326,7 @@ static struct region *get_visible_region( struct window *win, unsigned int flags
 
     if ((flags & DCX_PARENTCLIP) && !is_desktop_window( win->parent ))
     {
-        set_region_client_rect( region, win->parent );
+        set_region_ancestor_client_rect( region, win->parent, win );
         offset_region( region, -win->parent->client_rect.left, -win->parent->client_rect.top );
     }
     else if (flags & DCX_WINDOW)
@@ -1349,14 +1367,7 @@ static struct region *get_visible_region( struct window *win, unsigned int flags
             offset_x += win->client_rect.left;
             offset_y += win->client_rect.top;
             offset_region( region, win->client_rect.left, win->client_rect.top );
-            if (composes_over_layered_ancestor( self, win ))
-            {
-                struct rectangle rect;
-
-                intersect_rect( &rect, &win->window_rect, &win->client_rect );
-                set_region_rect( tmp, &rect );
-            }
-            else set_region_client_rect( tmp, win );
+            set_region_ancestor_client_rect( tmp, win, self );
             if (win->win_region && !intersect_window_region( tmp, win )) goto error;
             if (!intersect_region( region, region, tmp )) goto error;
             if (is_region_empty( region )) break;

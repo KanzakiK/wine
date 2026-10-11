@@ -264,9 +264,11 @@ This is the recommended branch. What it changes, by subsystem:
   `WS_EX_NOREDIRECTIONBITMAP` shows its DirectComposition content over a top-level painted
   through `UpdateLayeredWindow()`, as the DWM composes it on Windows. Such a top-level
   hands out a one-pixel surface rect that keeps GDI out of it and its children, and dcomp
-  delivers a tree through GDI; the DC of that child now keeps the top-level's client area.
-  The top-level's surface flush leaves the child alone like any foreign child, also when
-  the child carries `WS_EX_TRANSPARENT` (Chromium's "Intermediate D3D Window" does) or
+  delivers a tree through GDI; the DC of that child now keeps the top-level's client area,
+  also when the child's class has `CS_PARENTDC` and its DC is clipped like the parent's
+  (only the top-left pixel showed the tree before, WineHQ bug 58921 comment 16). The
+  top-level's surface flush leaves the child alone like any foreign child, also when the
+  child carries `WS_EX_TRANSPARENT` (Chromium's "Intermediate D3D Window" does) or
   covers the whole window: an empty surface region no longer means an unclipped flush for
   a layered window. NinjaTrader 8's chat window, a WPF layered window around a
   WebView2 page, showed only its grey background (WineHQ bug 58921). A child of the
