@@ -6172,19 +6172,6 @@ struct d3dkmt_share_objects_reply
 };
 
 
-struct impersonate_anonymous_token_request
-{
-    struct request_header __header;
-    obj_handle_t handle;
-    unsigned int include_everyone;
-    char __pad_20[4];
-};
-struct impersonate_anonymous_token_reply
-{
-    struct reply_header __header;
-};
-
-
 
 struct d3dkmt_object_open_name_request
 {
@@ -6255,6 +6242,19 @@ struct alpc_create_port_reply
     struct reply_header __header;
     obj_handle_t        handle;
     char __pad_12[4];
+};
+
+
+struct impersonate_anonymous_token_request
+{
+    struct request_header __header;
+    obj_handle_t handle;
+    unsigned int include_everyone;
+    char __pad_20[4];
+};
+struct impersonate_anonymous_token_reply
+{
+    struct reply_header __header;
 };
 
 
@@ -7201,6 +7201,6 @@ union generic_reply
     struct impersonate_anonymous_token_reply impersonate_anonymous_token_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 964
+#define SERVER_PROTOCOL_VERSION 965
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
