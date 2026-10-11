@@ -2110,6 +2110,337 @@ static void test_cargf(void)
     __setusermatherr(NULL);
 }
 
+static BOOL dpart_eq(double got, double expect, unsigned int ulps)
+{
+    if (_isnan(expect)) return _isnan(got);
+    return compare_double(got, expect, ulps) && signbit(got) == signbit(expect);
+}
+
+static BOOL fpart_eq(float got, float expect, unsigned int ulps)
+{
+    if (_isnan(expect)) return _isnan(got);
+    return compare_float(got, expect, ulps) && signbit(got) == signbit(expect);
+}
+
+static void test_cabs(void)
+{
+    static const struct {
+        double r, i, expect;
+    } tests[] = {
+        {  3.0,       4.0,       5.0      },
+        { -3.0,       4.0,       5.0      },
+        {  3.0,      -4.0,       5.0      },
+        { -3.0,      -4.0,       5.0      },
+        {  0.0,       0.0,       0.0      },
+        { -0.0,      -0.0,       0.0      },
+        {  0.0,      -2.5,       2.5      },
+        {  1e300,     1e300,     1.4142135623730952e300 },
+        {  INFINITY,  NAN,       INFINITY },
+        {  NAN,      -INFINITY,  INFINITY },
+        {  NAN,       1.0,       NAN      },
+    };
+    static const struct {
+        float r, i, expect;
+    } testsf[] = {
+        {  3.0f,      4.0f,      5.0f     },
+        { -3.0f,     -4.0f,      5.0f     },
+        {  0.0f,      0.0f,      0.0f     },
+        { -0.0f,     -0.0f,      0.0f     },
+        { -2.5f,      0.0f,      2.5f     },
+        {  2e38f,     2e38f,     2.82842705e38f },
+        {  INFINITY,  NAN,       INFINITY },
+        {  NAN,      -INFINITY,  INFINITY },
+        {  NAN,       1.0f,      NAN      },
+    };
+    double r;
+    float rf;
+    int i;
+
+    __setusermatherr(matherr_callback);
+
+    for(i=0; i<ARRAY_SIZE(tests); i++) {
+        winetest_push_context("%d", i);
+        errno = -1;
+        exception.type = -1;
+        r = cabs(_Cbuild(tests[i].r, tests[i].i));
+        ok(dpart_eq(r, tests[i].expect, 1), "expected %0.16e, got %0.16e\n", tests[i].expect, r);
+        ok(errno == -1, "errno = %d\n", errno);
+        ok(exception.type == -1, "exception.type = %d\n", exception.type);
+        winetest_pop_context();
+    }
+
+    for(i=0; i<ARRAY_SIZE(testsf); i++) {
+        winetest_push_context("%d", i);
+        errno = -1;
+        exception.type = -1;
+        rf = cabsf(_FCbuild(testsf[i].r, testsf[i].i));
+        ok(fpart_eq(rf, testsf[i].expect, 1), "expected %0.7e, got %0.7e\n", testsf[i].expect, rf);
+        ok(errno == -1, "errno = %d\n", errno);
+        ok(exception.type == -1, "exception.type = %d\n", exception.type);
+        winetest_pop_context();
+    }
+
+    __setusermatherr(NULL);
+}
+
+static void test_conj(void)
+{
+    static const struct {
+        double r, i, rexp, iexp;
+    } tests[] = {
+        {  1.0,       2.0,       1.0,      -2.0      },
+        { -1.5,      -0.0,      -1.5,       0.0      },
+        {  0.0,       INFINITY,  0.0,      -INFINITY },
+        {  NAN,       NAN,       NAN,       NAN      },
+    };
+    _Dcomplex r;
+    _Fcomplex rf;
+    int i;
+
+    for(i=0; i<ARRAY_SIZE(tests); i++) {
+        winetest_push_context("%d", i);
+        r = conj(_Cbuild(tests[i].r, tests[i].i));
+        ok(dpart_eq(r._Val[0], tests[i].rexp, 0) && dpart_eq(r._Val[1], tests[i].iexp, 0),
+            "got (%0.16e, %0.16e)\n", r._Val[0], r._Val[1]);
+        rf = conjf(_FCbuild(tests[i].r, tests[i].i));
+        ok(fpart_eq(rf._Val[0], tests[i].rexp, 0) && fpart_eq(rf._Val[1], tests[i].iexp, 0),
+            "got (%0.7e, %0.7e)\n", rf._Val[0], rf._Val[1]);
+        winetest_pop_context();
+    }
+}
+
+static void test_cmul(void)
+{
+    static const struct {
+        double xr, xi, yr, yi, rexp, iexp;
+    } tests[] = {
+        {  1.0,   2.0,   3.0,   4.0,  -5.0,   10.0 },
+        {  0.5,  -1.5,   2.0,   0.5,   1.75,  -2.75 },
+        { -2.0,   3.0,  -1.0,  -2.0,   8.0,    1.0 },
+    };
+    static const struct {
+        double xr, xi, y, rexp, iexp;
+    } testsr[] = {
+        {  1.0,  -2.0,   3.0,   3.0,  -6.0 },
+        {  0.25,  8.0,  -2.0,  -0.5, -16.0 },
+    };
+    _Dcomplex r;
+    _Fcomplex rf;
+    int i;
+
+    for(i=0; i<ARRAY_SIZE(tests); i++) {
+        winetest_push_context("%d", i);
+        r = _Cmulcc(_Cbuild(tests[i].xr, tests[i].xi), _Cbuild(tests[i].yr, tests[i].yi));
+        ok(dpart_eq(r._Val[0], tests[i].rexp, 0) && dpart_eq(r._Val[1], tests[i].iexp, 0),
+            "_Cmulcc returned (%0.16e, %0.16e)\n", r._Val[0], r._Val[1]);
+        rf = _FCmulcc(_FCbuild(tests[i].xr, tests[i].xi), _FCbuild(tests[i].yr, tests[i].yi));
+        ok(fpart_eq(rf._Val[0], tests[i].rexp, 0) && fpart_eq(rf._Val[1], tests[i].iexp, 0),
+            "_FCmulcc returned (%0.7e, %0.7e)\n", rf._Val[0], rf._Val[1]);
+        winetest_pop_context();
+    }
+
+    for(i=0; i<ARRAY_SIZE(testsr); i++) {
+        winetest_push_context("%d", i);
+        r = _Cmulcr(_Cbuild(testsr[i].xr, testsr[i].xi), testsr[i].y);
+        ok(dpart_eq(r._Val[0], testsr[i].rexp, 0) && dpart_eq(r._Val[1], testsr[i].iexp, 0),
+            "_Cmulcr returned (%0.16e, %0.16e)\n", r._Val[0], r._Val[1]);
+        rf = _FCmulcr(_FCbuild(testsr[i].xr, testsr[i].xi), testsr[i].y);
+        ok(fpart_eq(rf._Val[0], testsr[i].rexp, 0) && fpart_eq(rf._Val[1], testsr[i].iexp, 0),
+            "_FCmulcr returned (%0.7e, %0.7e)\n", rf._Val[0], rf._Val[1]);
+        winetest_pop_context();
+    }
+}
+
+static void test_cexpf(void)
+{
+    static const struct {
+        float r, i;
+        float rexp, iexp;
+        errno_t e;
+    } tests[] = {
+        {  INFINITY,  0.0f,      INFINITY,  0.0f            },
+        {  INFINITY, -0.0f,      INFINITY, -0.0f            },
+        { -INFINITY,  0.0f,      0.0f,      0.0f            },
+        { -INFINITY, -0.0f,      0.0f,     -0.0f            },
+        {  0.0f,      INFINITY,  NAN,       NAN,       EDOM },
+        { -0.0f,     -INFINITY,  NAN,       NAN,       EDOM },
+        {  100.0f,    INFINITY,  NAN,       NAN,       EDOM },
+        { -100.0f,   -INFINITY,  NAN,       NAN,       EDOM },
+        { -INFINITY,  2.0f,     -0.0f,      0.0f            },
+        { -INFINITY,  4.0f,     -0.0f,     -0.0f            },
+        {  INFINITY,  2.0f,     -INFINITY,  INFINITY        },
+        {  INFINITY,  4.0f,     -INFINITY, -INFINITY        },
+        {  INFINITY,  INFINITY,  INFINITY,  NAN,       EDOM },
+        { -INFINITY,  INFINITY,  0.0f,      0.0f            },
+        { -INFINITY, -INFINITY,  0.0f,     -0.0f            },
+        { -INFINITY,  NAN,       0.0f,      0.0f            },
+        {  INFINITY,  NAN,       INFINITY,  NAN             },
+        {  NAN,       0.0f,      NAN,       0.0f            },
+        {  NAN,      -0.0f,      NAN,      -0.0f            },
+        {  NAN,       1.0f,      NAN,       NAN             },
+        {  0.0f,      NAN,       NAN,       NAN             },
+        {  NAN,       NAN,       NAN,       NAN             },
+        {  0.0f,      M_PI,     -1.0f,     -8.742278e-08f   },
+        {  1.0f,      0.0f,      2.7182817f, 0.0f           },
+        {  88.7f,     0.0f,      3.32597686e38f, 0.0f       },
+        {  88.8f,     0.0f,      INFINITY,  0.0f,    ERANGE },
+        {  100.0f,    M_PI,     -INFINITY, -2.35002662e36f, ERANGE },
+        {  100.0f,    M_PI_2,   -1.17501331e36f, INFINITY, ERANGE },
+        { -120.0f,    1.0f,      0.0f,      0.0f,    ERANGE },
+    };
+    _Fcomplex r;
+    int i;
+
+    __setusermatherr(matherr_callback);
+
+    for(i=0; i<ARRAY_SIZE(tests); i++) {
+        winetest_push_context("%d", i);
+        errno = -1;
+        exception.type = -1;
+        r = cexpf(_FCbuild(tests[i].r, tests[i].i));
+        ok(fpart_eq(r._Val[0], tests[i].rexp, 2) && fpart_eq(r._Val[1], tests[i].iexp, 2),
+            "expected (%0.7e, %0.7e), got (%0.7e, %0.7e)\n",
+            tests[i].rexp, tests[i].iexp, r._Val[0], r._Val[1]);
+        ok(errno == (tests[i].e ? tests[i].e : -1), "errno = %d\n", errno);
+        ok(exception.type == -1, "exception.type = %d\n", exception.type);
+        winetest_pop_context();
+    }
+
+    __setusermatherr(NULL);
+}
+
+static void test_csqrtf(void)
+{
+    static const struct {
+        float r, i;
+        float rexp, iexp;
+    } tests[] = {
+        {  4.0f,      0.0f,      2.0f,      0.0f      },
+        { -4.0f,      0.0f,      0.0f,      2.0f      },
+        { -4.0f,     -0.0f,      0.0f,     -2.0f      },
+        {  0.0f,      2.0f,      1.0f,      1.0f      },
+        {  3.0f,      4.0f,      2.0f,      1.0f      },
+        {  3.0f,     -4.0f,      2.0f,     -1.0f      },
+        { -3.0f,      4.0f,      1.0f,      2.0f      },
+        {  0.0f,      0.0f,      0.0f,      0.0f      },
+        { -0.0f,      0.0f,      0.0f,      0.0f      },
+        {  0.0f,     -0.0f,      0.0f,     -0.0f      },
+        {  1.0f,      INFINITY,  INFINITY,  INFINITY  },
+        {  NAN,      -INFINITY,  INFINITY, -INFINITY  },
+        { -INFINITY,  1.0f,      0.0f,      INFINITY  },
+        {  INFINITY,  1.0f,      INFINITY,  0.0f      },
+        {  INFINITY,  NAN,       INFINITY,  NAN       },
+        { -INFINITY,  NAN,       NAN,      -INFINITY  },
+        {  NAN,       1.0f,      NAN,       NAN       },
+        {  1.0f,      NAN,       NAN,       NAN       },
+    };
+    _Fcomplex r;
+    int i;
+
+    __setusermatherr(matherr_callback);
+
+    for(i=0; i<ARRAY_SIZE(tests); i++) {
+        winetest_push_context("%d", i);
+        errno = -1;
+        exception.type = -1;
+        r = csqrtf(_FCbuild(tests[i].r, tests[i].i));
+        ok(fpart_eq(r._Val[0], tests[i].rexp, 0) && fpart_eq(r._Val[1], tests[i].iexp, 0),
+            "expected (%0.7e, %0.7e), got (%0.7e, %0.7e)\n",
+            tests[i].rexp, tests[i].iexp, r._Val[0], r._Val[1]);
+        ok(errno == -1, "errno = %d\n", errno);
+        ok(exception.type == -1, "exception.type = %d\n", exception.type);
+        winetest_pop_context();
+    }
+
+    __setusermatherr(NULL);
+}
+
+static void test_cpow(void)
+{
+    static const struct {
+        double zr, zi, cr, ci;
+        double rexp, iexp;
+    } tests[] = {
+        {  0.0,  1.0,  2.0,  0.0, -1.0,  0.0 },
+        {  1.0,  1.0,  1.0,  0.0,  1.0,  1.0 },
+        { -1.0,  0.0,  0.5,  0.0,  0.0,  1.0 },
+        { -8.0,  0.0,  1.0 / 3.0, 0.0, 1.0, 1.7320508075688772 },
+    };
+    /* a real, non-negative base with a real exponent goes through pow() */
+    static const struct {
+        double zr, cr;
+        double rexp;
+        errno_t e;
+        int type;
+    } tests_real[] = {
+        {  2.0,       3.0,       8.0      },
+        {  4.0,       0.5,       2.0      },
+        {  0.0,       1.0,       0.0      },
+        {  0.0,       0.0,       1.0      },
+        {  1.0,       NAN,       1.0      },
+        {  INFINITY,  1.0,       INFINITY },
+        {  0.0,      -1.0,       INFINITY, ERANGE, _SING     },
+        {  2.0,       1024.0,    INFINITY, ERANGE, _OVERFLOW },
+    };
+    /* a zero base with a complex exponent: log(0) is reported through errno only */
+    static const struct {
+        double cr, ci;
+        double rexp, iexp;
+    } tests_zero[] = {
+        {  1.0,  1.0,  0.0, -0.0 },
+        {  0.0,  1.0,  NAN,  NAN },
+    };
+    _Dcomplex r;
+    int i;
+
+    __setusermatherr(matherr_callback);
+
+    for(i=0; i<ARRAY_SIZE(tests_zero); i++) {
+        winetest_push_context("zero %d", i);
+        errno = -1;
+        exception.type = -1;
+        r = cpow(_Cbuild(0.0, 0.0), _Cbuild(tests_zero[i].cr, tests_zero[i].ci));
+        ok(dpart_eq(r._Val[0], tests_zero[i].rexp, 0) && dpart_eq(r._Val[1], tests_zero[i].iexp, 0),
+            "expected (%0.16e, %0.16e), got (%0.16e, %0.16e)\n",
+            tests_zero[i].rexp, tests_zero[i].iexp, r._Val[0], r._Val[1]);
+        ok(errno == ERANGE, "errno = %d\n", errno);
+        ok(exception.type == -1, "exception.type = %d\n", exception.type);
+        winetest_pop_context();
+    }
+
+    for(i=0; i<ARRAY_SIZE(tests); i++) {
+        winetest_push_context("%d", i);
+        errno = -1;
+        exception.type = -1;
+        r = cpow(_Cbuild(tests[i].zr, tests[i].zi), _Cbuild(tests[i].cr, tests[i].ci));
+        ok(fabs(r._Val[0] - tests[i].rexp) <= 1e-14 * max(1.0, fabs(tests[i].rexp)) &&
+            fabs(r._Val[1] - tests[i].iexp) <= 1e-14 * max(1.0, fabs(tests[i].iexp)),
+            "expected (%0.16e, %0.16e), got (%0.16e, %0.16e)\n",
+            tests[i].rexp, tests[i].iexp, r._Val[0], r._Val[1]);
+        ok(errno == -1, "errno = %d\n", errno);
+        ok(exception.type == -1, "exception.type = %d\n", exception.type);
+        winetest_pop_context();
+    }
+
+    for(i=0; i<ARRAY_SIZE(tests_real); i++) {
+        winetest_push_context("real %d", i);
+        errno = -1;
+        exception.type = -1;
+        r = cpow(_Cbuild(tests_real[i].zr, 0.0), _Cbuild(tests_real[i].cr, 0.0));
+        ok(dpart_eq(r._Val[0], tests_real[i].rexp, 0) && dpart_eq(r._Val[1], 0.0, 0),
+            "expected (%0.16e, 0), got (%0.16e, %0.16e)\n", tests_real[i].rexp, r._Val[0], r._Val[1]);
+        ok(errno == (tests_real[i].e ? tests_real[i].e : -1), "errno = %d\n", errno);
+        if (tests_real[i].type)
+            ok(exception.type == tests_real[i].type && !strcmp(exception.name, "pow"),
+                "exception.type = %d, name %s\n", exception.type, exception.type == -1 ? "" : exception.name);
+        else
+            ok(exception.type == -1, "exception.type = %d\n", exception.type);
+        winetest_pop_context();
+    }
+
+    __setusermatherr(NULL);
+}
+
 START_TEST(misc)
 {
     int arg_c;
@@ -2162,4 +2493,10 @@ START_TEST(misc)
     test_cexp();
     test_carg();
     test_cargf();
+    test_cabs();
+    test_conj();
+    test_cmul();
+    test_cexpf();
+    test_csqrtf();
+    test_cpow();
 }
