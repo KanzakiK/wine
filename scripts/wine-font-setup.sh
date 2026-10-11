@@ -36,6 +36,11 @@
 #      application looks cramped.  Windows 10 reports Segoe UI 9pt there.  As
 #      soon as the Segoe UI family is in the prefix, the six LOGFONTs are
 #      switched to it; without the family the step is skipped.
+#   5. Segoe UI itself, only with --segoe-from.  The family is proprietary and
+#      ships with no distribution, so the script takes the files from a
+#      directory you point it at — C:\Windows\Fonts of a Windows installation
+#      you are licensed to use — and copies and registers them.  Steinberg's
+#      current applications (Cubase 15, Nuendo 15) crash without it.
 #
 # Fonts are located through fontconfig, so distribution paths do not matter.
 #
@@ -52,6 +57,7 @@
 # Usage:
 #   wine-font-setup.sh [--prefix DIR] [--wine BINARY] [--check] [--no-mscore]
 #                      [--winetricks] [--no-rendering] [--no-uifont] [--contrast N]
+#                      [--segoe-from DIR]
 #
 #   --prefix DIR    Wine prefix to operate on.  Default: $WINEPREFIX, else ~/.wine
 #   --wine BINARY   wine binary to use.  Default: wine
@@ -65,6 +71,10 @@
 #   --no-uifont     keep the WindowMetrics fonts, the system UI font (step 4)
 #   --contrast N    enhanced contrast, 0-100.  Default: 50, what Windows uses.
 #                   70 suits dark interfaces; 0 turns the correction off.
+#   --segoe-from DIR  copy the Segoe UI family (segoeui*.ttf, segui*.ttf, under
+#                   their Windows file names) from DIR into the prefix and
+#                   register it (step 5), e.g. the Windows/Fonts directory of a
+#                   mounted Windows partition
 #
 # Exit codes: 0 done / 1 usage or prefix error / 2 required fonts not installed
 #             3 setup incomplete (only with --check)
@@ -80,6 +90,7 @@ DO_RENDERING=1
 DO_UIFONT=1
 CONTRAST=50
 CONTRAST_EXPLICIT=0
+SEGOE_FROM=""
 
 # Files the FontLink entries reference. Without these two the symbol fallback
 # cannot work, so they are hard requirements.
@@ -147,6 +158,7 @@ while [ $# -gt 0 ]; do
         --no-rendering) DO_RENDERING=0 ;;
         --no-uifont) DO_UIFONT=0 ;;
         --contrast)  shift; CONTRAST="${1:?--contrast needs a number 0-100}"; CONTRAST_EXPLICIT=1 ;;
+        --segoe-from) shift; SEGOE_FROM="${1:?--segoe-from needs a directory}" ;;
         -h|--help)   awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
         *) echo "unknown argument: $1  (try --help)" >&2; exit 1 ;;
     esac
@@ -161,6 +173,24 @@ USERREG="$PREFIX/user.reg"
 [ -d "$FONTDIR" ] || { echo "ERROR: no Fonts directory in $PREFIX" >&2; exit 1; }
 command -v fc-list >/dev/null 2>&1 || {
     echo "ERROR: fc-list not found — install fontconfig." >&2; exit 1; }
+
+# The Segoe UI files in --segoe-from, matched without regard to case: a Windows
+# partition mounted through ntfs3 or ntfs-3g may report "SEGOEUI.TTF".  Only the
+# Windows file names are recognised, because the checks below look for
+# segoeui.ttf by name.
+segoe_sources=()
+if [ -n "$SEGOE_FROM" ]; then
+    [ -d "$SEGOE_FROM" ] || {
+        echo "ERROR: --segoe-from: not a directory: $SEGOE_FROM" >&2; exit 1; }
+    for f in "$SEGOE_FROM"/*; do
+        b=${f##*/}
+        [ -f "$f" ] && [[ "${b,,}" =~ ^(segoeui|segui)[a-z]*\.ttf$ ]] && segoe_sources+=("$f")
+    done
+    printf '%s\n' "${segoe_sources[@]##*/}" | grep -qix 'segoeui.ttf' || {
+        echo "ERROR: --segoe-from: no segoeui.ttf in $SEGOE_FROM" >&2
+        echo "       (expected the Windows file names: segoeui.ttf, segoeuib.ttf, seguisb.ttf, ...)" >&2
+        exit 1; }
+fi
 
 # Locate a font file by name, case-insensitively, wherever the distro keeps it.
 find_font() {
@@ -270,14 +300,15 @@ have_rendering=0
 [ "$DO_RENDERING" -eq 1 ] || have_rendering=1   # not asked for, do not report it missing
 
 # Segoe UI is proprietary and ships with no distribution, so this script cannot
-# install it.  It is reported anyway, because one application family depends on
-# it in a way that does not fail gracefully: Steinberg's framework looks the
-# family up by name in the DirectWrite system collection and dereferences the
-# result without a check.  Cubase 15 then shows its Hub without any Direct2D
-# text and crashes in hubservice.dll (NULL read) a second after the Hub content
-# has downloaded (issue 345, 2026-09-05).  A prefix cloned from one that never
-# had the family inherits the gap silently.  Copy segoeui*.ttf and segui*.ttf
-# from a prefix that has them and register them under the Fonts key.
+# fetch it; --segoe-from installs it from files the caller provides.  It is
+# reported either way, because one application family depends on it in a way
+# that does not fail gracefully: Steinberg's framework looks the family up by
+# name in the DirectWrite system collection and dereferences the result without
+# a check.  Cubase 15 then shows its Hub without any Direct2D text and crashes
+# in hubservice.dll (NULL read) a second after the Hub content has downloaded
+# (issue 345, 2026-09-05; the same offset again in a fresh prefix on
+# 2026-10-11).  A prefix cloned from one that never had the family inherits the
+# gap silently.
 have_segoe=0
 [ -f "$FONTDIR/segoeui.ttf" ] && grep -q '^"Segoe UI (TrueType)"=' "$SYSREG" 2>/dev/null \
     && have_segoe=1
@@ -367,7 +398,7 @@ printf '  %-34s %s\n' "SystemLink values well-formed" \
         || echo "no — $mangled_links value(s) encoded twice" )"
 printf '  %-34s %s\n' "Segoe UI (Steinberg applications)" \
     "$( [ "$have_segoe" -eq 1 ] && echo present \
-        || echo "absent — Cubase 15 Hub crashes without it; not installable by this script" )"
+        || echo "absent — Cubase 15 Hub crashes without it; install with --segoe-from DIR" )"
 printf '  %-34s %s\n' "DirectWrite family substitutes" \
     "$( [ "$have_subst" -eq 1 ] && echo "present (${#SUBST_FAMILIES[@]} UI families -> Segoe UI)" \
         || echo "missing ($n_subst of ${#SUBST_FAMILIES[@]})" )"
@@ -527,6 +558,24 @@ elif [ "$DO_MSCORE" -eq 1 ]; then
         echo "    Fedora ships no package — the family is not redistributable."
     fi
 fi
+
+# Segoe UI from the caller's own copy (step 5).  The files keep their Windows
+# names in lower case, which is what the have_segoe check and Windows itself use.
+# The value names are the full names from the files, which fontconfig reports
+# the way Windows registers them ("Segoe UI", "Segoe UI Bold", ...), so they do
+# not collide with another full name (see the stand-ins above).
+n_segoe=0
+for src in "${segoe_sources[@]}"; do
+    b=${src##*/}; b=${b,,}
+    cp -f "$src" "$FONTDIR/$b" || continue
+    copied=$((copied + 1)); n_segoe=$((n_segoe + 1))
+    full=$(fc-scan --format '%{fullname[0]}' "$src" 2>/dev/null)
+    reg_lines+=("\"${full:-${b%.ttf}} (TrueType)\"=\"${b}\"")
+done
+if [ "$n_segoe" -gt 0 ]; then
+    echo "  Segoe UI: $n_segoe file(s) from $SEGOE_FROM"
+    have_segoe=1        # registered below, before the system UI font step reads it
+fi
 echo "  $copied font file(s) copied"
 
 # --- 4. registry ---------------------------------------------------------------
@@ -543,7 +592,7 @@ if [ ${#reg_lines[@]} -gt 0 ]; then
     WINEPREFIX="$PREFIX" WINEDEBUG=-all "$WINE" regedit /S 'C:\wine-font-setup.reg' \
         </dev/null >/dev/null 2>&1
     rm -f "$reg_file"
-    echo "  registered ${#reg_lines[@]} MS Core Font(s) for GDI"
+    echo "  registered ${#reg_lines[@]} font(s) under the Fonts key"
 fi
 
 # FontLink is REG_MULTI_SZ; `reg add` takes \0 separators directly, which is far
