@@ -22942,6 +22942,7 @@ wine_fn_config_makefile dlls/wdscore enable_wdscore
 wine_fn_config_makefile dlls/webservices enable_webservices
 wine_fn_config_makefile dlls/webservices/tests enable_tests
 wine_fn_config_makefile dlls/websocket enable_websocket
+wine_fn_config_makefile dlls/websocket/tests enable_tests
 wine_fn_config_makefile dlls/wer enable_wer
 wine_fn_config_makefile dlls/wer/tests enable_tests
 wine_fn_config_makefile dlls/wevtapi enable_wevtapi
