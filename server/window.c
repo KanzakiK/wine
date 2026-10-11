@@ -1256,6 +1256,26 @@ static inline int is_ulw_window( const struct window *win )
 }
 
 
+/* A window painted through UpdateLayeredWindow() hands out a one-pixel surface
+ * rect (win32u, apply_window_pos()), which keeps GDI out of it and out of its
+ * children: on Windows such a window shows the bitmap given to
+ * UpdateLayeredWindow() and none of their GDI content.  A child with
+ * WS_EX_NOREDIRECTIONBITMAP has no GDI content on Windows to begin with; the DWM
+ * composes its DirectComposition tree over the layered image (measured on
+ * Windows 10).  Here dcomp delivers that tree with GDI, and a child of another
+ * process paints straight into the top-level's drawable, which the owner's
+ * surface flush leaves alone (clip_pixel_format_children()).  WebView2's GPU
+ * process owns such a child in NinjaTrader 8's WPF chat window.  A child of the
+ * owner's own process would paint into the layered surface instead, which the
+ * next UpdateLayeredWindow() overwrites, so that case keeps the clip. */
+static int composes_over_layered_ancestor( const struct window *win, const struct window *ancestor )
+{
+    if (!(win->ex_style & WS_EX_NOREDIRECTIONBITMAP) || !is_ulw_window( ancestor )) return 0;
+    if (!win->thread || !ancestor->thread) return 0;
+    return win->thread->process != ancestor->thread->process;
+}
+
+
 /* get the top-level window to clip against for a given window */
 static inline struct window *get_top_clipping_window( struct window *win )
 {
@@ -1269,6 +1289,7 @@ static inline struct window *get_top_clipping_window( struct window *win )
 static struct region *get_visible_region( struct window *win, unsigned int flags )
 {
     struct region *tmp = NULL, *region;
+    const struct window *self = win;
     int offset_x, offset_y;
 
     if (!(region = create_empty_region())) return NULL;
@@ -1328,7 +1349,14 @@ static struct region *get_visible_region( struct window *win, unsigned int flags
             offset_x += win->client_rect.left;
             offset_y += win->client_rect.top;
             offset_region( region, win->client_rect.left, win->client_rect.top );
-            set_region_client_rect( tmp, win );
+            if (composes_over_layered_ancestor( self, win ))
+            {
+                struct rectangle rect;
+
+                intersect_rect( &rect, &win->window_rect, &win->client_rect );
+                set_region_rect( tmp, &rect );
+            }
+            else set_region_client_rect( tmp, win );
             if (win->win_region && !intersect_window_region( tmp, win )) goto error;
             if (!intersect_region( region, region, tmp )) goto error;
             if (is_region_empty( region )) break;
@@ -1384,7 +1412,7 @@ static int child_draws_from_foreign_process( struct window *child, struct proces
 /* clip all children with a custom pixel format out of the visible region */
 static struct region *clip_pixel_format_children( struct window *parent, struct region *parent_clip,
                                                   struct region *region, int offset_x, int offset_y,
-                                                  struct process *owner )
+                                                  struct process *owner, const struct window *top )
 {
     struct window *ptr;
     struct region *clip = create_empty_region();
@@ -1400,9 +1428,12 @@ static struct region *clip_pixel_format_children( struct window *parent, struct 
          * next flush that covers it overwrites what was presented there.  JUCE's
          * OpenGL native window carries WS_EX_TRANSPARENT (windowIgnoresMouseClicks),
          * so an embedded JUCE editor flickered with the host's background whenever
-         * the host repainted its whole window. */
+         * the host repainted its whole window.  The same holds for a child that
+         * composes over a layered top-level from another process: Chromium's
+         * "Intermediate D3D Window" carries WS_EX_TRANSPARENT. */
         if ((ptr->ex_style & WS_EX_TRANSPARENT) &&
-            !(ptr->paint_flags & (PAINT_HAS_PIXEL_FORMAT | PAINT_PIXEL_FORMAT_CHILD)))
+            !(ptr->paint_flags & (PAINT_HAS_PIXEL_FORMAT | PAINT_PIXEL_FORMAT_CHILD)) &&
+            !composes_over_layered_ancestor( ptr, top ))
             continue;
 
         /* add the visible rect */
@@ -1448,7 +1479,7 @@ static struct region *clip_pixel_format_children( struct window *parent, struct 
             break;
 
         if (!clip_pixel_format_children( ptr, clip, region, offset_x + ptr->client_rect.left,
-                                         offset_y + ptr->client_rect.top, owner ))
+                                         offset_y + ptr->client_rect.top, owner, top ))
             break;
     }
     free_region( clip );
@@ -1493,7 +1524,7 @@ static struct region *get_surface_region( struct window *win )
     else offset_x = offset_y = 0;
 
     if (!clip_pixel_format_children( win, clip, region, offset_x, offset_y,
-                                     win->thread ? win->thread->process : NULL )) goto error;
+                                     win->thread ? win->thread->process : NULL, win )) goto error;
 
     free_region( clip );
     return region;

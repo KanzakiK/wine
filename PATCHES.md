@@ -244,6 +244,18 @@ This is the recommended branch. What it changes, by subsystem:
   stale frame or undefined pixmap content, and SynthEdit 1.5's menus came up as a copy of
   the screen below them or black once the empty-region flush above was disabled. WineHQ
   bug 60173 reports the same for every WPF menu, tooltip and `AllowsTransparency` window.
+- **wineserver, winex11**: a child window of another process with
+  `WS_EX_NOREDIRECTIONBITMAP` shows its DirectComposition content over a top-level painted
+  through `UpdateLayeredWindow()`, as the DWM composes it on Windows. Such a top-level
+  hands out a one-pixel surface rect that keeps GDI out of it and its children, and dcomp
+  delivers a tree through GDI; the DC of that child now keeps the top-level's client area.
+  The top-level's surface flush leaves the child alone like any foreign child, also when
+  the child carries `WS_EX_TRANSPARENT` (Chromium's "Intermediate D3D Window" does) or
+  covers the whole window: an empty surface region no longer means an unclipped flush for
+  a layered window. NinjaTrader 8's chat window, a WPF layered window around a
+  WebView2 page, showed only its grey background (WineHQ bug 58921). A child of the
+  layered window's own process still shows nothing, since it paints into the layered
+  surface that the next `UpdateLayeredWindow()` overwrites
 - **winex11**: a DC on a window whose top-level belongs to another process takes the
   visual that top-level was created with instead of the default one. The xrender picture
   format follows the DC's visual, and a format whose depth differs from the drawable's makes
