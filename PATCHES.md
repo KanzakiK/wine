@@ -115,7 +115,11 @@ This is the recommended branch. What it changes, by subsystem:
   three times horizontally and filters each row with the five-tap FIR FreeType uses for
   `FT_RENDER_MODE_LCD`; D2D1 blends such runs once per colour channel; GDI takes its
   antialiasing from the prefix rather than the host's fontconfig. Needs the registry keys
-  under *Font Setup* below — without them nothing changes. See `Related` for the origin
+  under *Font Setup* below — without them nothing changes. The one-pixel padding of a
+  ClearType glyph's bounds reads the glyph cache under the fontface lock like every other
+  cache user: WPF rasterises on its render thread with the fontfaces its UI threads lay
+  text out with, and NinjaTrader 8 crashed in the heap while a chart was resized. See
+  `Related` for the origin
 - **DXGI**: composition swapchain, FLIP_SEQUENTIAL preservation, DComp popup handling,
   monitored fence support. The swapchain-to-window mapping is published on the desktop
   window, whose property list is shared across the window station, so it is keyed by

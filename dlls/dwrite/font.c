@@ -6007,8 +6007,14 @@ static void glyphrunanalysis_get_texturebounds(struct dwrite_glyphrunanalysis *a
         {
             BOOL has_contours;
 
+            /* The glyph cache belongs to the fontface, which other threads use
+             * at the same time: WPF lays text out on its UI threads while its
+             * render thread rasterises glyph runs of the same face.  Every
+             * other caller of fontface_get_glyph_advance() holds the lock. */
+            EnterCriticalSection(&fontface->cs);
             fontface_get_glyph_advance(fontface, glyph_bitmap.emsize, glyph_bitmap.glyph,
                     DWRITE_MEASURING_MODE_NATURAL, &has_contours);
+            LeaveCriticalSection(&fontface->cs);
             if (has_contours && !IsRectEmpty(bbox))
             {
                 --bbox->left;
@@ -6107,8 +6113,10 @@ static HRESULT glyphrunanalysis_render(struct dwrite_glyphrunanalysis *analysis)
         {
             BOOL has_contours;
 
+            EnterCriticalSection(&fontface->cs);
             fontface_get_glyph_advance(fontface, glyph_bitmap.emsize, glyph_bitmap.glyph,
                     DWRITE_MEASURING_MODE_NATURAL, &has_contours);
+            LeaveCriticalSection(&fontface->cs);
             if (has_contours && !IsRectEmpty(bbox))
             {
                 --bbox->left;
