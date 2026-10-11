@@ -70,6 +70,14 @@ pwrshsip (new) · powershell.exe · winemenubuilder.exe · and more than twenty 
 <table>
 <tr>
 <td width="240" align="center" valign="top">
+  <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/nuendo15-crone-video.png" width="200" alt="Nuendo 15 with the demo project The Crone and its ProRes clip in the video player">
+</td>
+<td valign="top">
+  <b>Nuendo 15.0.30</b> (DComp + D2D1 + DirectWrite, as Cubase) — the demo project "The Crone" in playback: the video track with its thumbnails, the floating video player with the 10-bit ProRes 422 clip, the loudness curve, Foley tracks with automation lanes and the master meter in the right zone. The video player needs the d2d1 bitmap-format table from this fork; without <code>R10G10B10A2_UNORM</code> in <code>IsDxgiFormatSupported</code> it stays black.
+</td>
+</tr>
+<tr>
+<td width="240" align="center" valign="top">
   <img src="https://raw.githubusercontent.com/giang17/wine/assets/readme-screenshots/cubase15-pro-mixconsole.png" width="200" alt="Cubase Pro 15 running on this fork">
 </td>
 <td valign="top">
