@@ -1,7 +1,7 @@
 EXTRADEFS = -DWINOLE32API=
 MODULE    = combase.dll
 IMPORTLIB = combase
-IMPORTS   = advapi32 ole32 user32 gdi32 uuid rpcrt4
+IMPORTS   = advapi32 ole32 user32 gdi32 uuid rpcrt4 bcrypt
 DELAYIMPORTS = oleaut32
 
 SOURCES = \
@@ -14,6 +14,7 @@ SOURCES = \
 	malloc.c \
 	marshal.c \
 	roapi.c \
+	parameterized.c \
 	rpc.c \
 	string.c \
 	stubmanager.c \

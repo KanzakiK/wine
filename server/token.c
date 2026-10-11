@@ -81,6 +81,7 @@ static const struct sid interactive_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORI
 static const struct sid anonymous_logon_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_ANONYMOUS_LOGON_RID } };
 static const struct sid authenticated_user_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_AUTHENTICATED_USER_RID } };
 static const struct sid high_label_sid = { SID_REVISION, 1, SECURITY_MANDATORY_LABEL_AUTHORITY, { SECURITY_MANDATORY_HIGH_RID } };
+static const struct sid untrusted_label_sid = { SID_REVISION, 1, SECURITY_MANDATORY_LABEL_AUTHORITY, { SECURITY_MANDATORY_UNTRUSTED_RID } };
 
 static struct luid prev_luid_value = { 1000, 0 };
 
@@ -1338,6 +1339,30 @@ DECL_HANDLER(duplicate_token)
         release_object( src_token );
     }
     if (params.root) release_object( params.root );
+}
+
+/* Impersonate the anonymous logon identity, not the caller's primary token. */
+DECL_HANDLER(impersonate_anonymous_token)
+{
+    struct thread *thread;
+    struct token *token;
+    struct sid_attrs groups[2] = {
+        { &untrusted_label_sid, SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED },
+        { &world_sid, SE_GROUP_MANDATORY | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_ENABLED }
+    };
+
+    if (!(thread = get_thread_from_handle( req->handle, THREAD_IMPERSONATE ))) return;
+    token = create_token( FALSE, token_get_session_id( thread->process->token ), &anonymous_logon_sid,
+                          groups, req->include_everyone ? 2 : 1, NULL, 0, NULL, NULL,
+                          ~0u, SecurityImpersonation, 0 );
+    if (token)
+    {
+        token->owner = token->user;
+        token->primary_group = token->user;
+        if (thread->token) release_object( thread->token );
+        thread->token = token;
+    }
+    release_object( thread );
 }
 
 /* creates a restricted version of a token */

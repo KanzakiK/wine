@@ -143,6 +143,7 @@ struct file_view
 #define VPROT_SYSTEM           0x0200  /* system view (underlying mmap not under our control) */
 #define VPROT_PLACEHOLDER      0x0400
 #define VPROT_FREE_PLACEHOLDER 0x0800
+#define VPROT_IMAGE_CACHE      0x1000  /* private image backed by a shared layout cache */
 
 /* Conversion from VPROT_* to Win32 flags */
 static const BYTE VIRTUAL_Win32Flags[16] =
@@ -2014,8 +2015,54 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
  *
  * Change the protection of a range of pages.
  */
+/* Android rejects re-adding execute permission to modified private file pages.
+ * Keep immutable image pages shared; convert only a range acquiring write or
+ * execute permission to anonymous memory, before changing its protection.
+ * Explicitly shared images never carry VPROT_IMAGE_CACHE. */
+static BOOL prepare_image_protection( struct file_view *view, void *base, size_t size, BYTE vprot )
+{
+#ifdef __linux__
+    char *addr = ROUND_ADDR( base, host_page_mask );
+    char *end = addr + ROUND_SIZE( base, size, host_page_mask );
+    int requested = get_unix_prot( vprot );
+    if (!(view->protect & VPROT_IMAGE_CACHE)) return TRUE;
+    while (addr < end)
+    {
+        int previous = get_unix_prot( get_host_page_vprot( addr ) );
+        BOOL copying = ((requested & PROT_WRITE) && !(previous & PROT_WRITE)) ||
+                       ((requested & PROT_EXEC) && !(previous & PROT_EXEC));
+        void *temporary;
+        size_t count;
+        if (!copying) { addr += host_page_size; continue; }
+        for (count = host_page_size; addr + count < end && count < 0x100000; count += host_page_size)
+            if (get_unix_prot( get_host_page_vprot( addr + count ) ) != previous) break;
+        if ((temporary = anon_mmap_alloc( count, PROT_READ | PROT_WRITE )) == MAP_FAILED) return FALSE;
+        if (!(previous & PROT_READ) && mprotect( addr, count, previous | PROT_READ ))
+        {
+            munmap( temporary, count );
+            return FALSE;
+        }
+        memcpy( temporary, addr, count );
+        if (!(previous & PROT_READ) && mprotect( addr, count, previous ))
+        {
+            munmap( temporary, count );
+            return FALSE;
+        }
+        if (mprotect( temporary, count, previous ) ||
+            mremap( temporary, count, count, MREMAP_MAYMOVE | MREMAP_FIXED, addr ) == MAP_FAILED)
+        {
+            munmap( temporary, count );
+            return FALSE;
+        }
+        addr += count;
+    }
+#endif
+    return TRUE;
+}
+
 static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vprot )
 {
+    if (!prepare_image_protection( view, base, size, vprot )) return FALSE;
     if (!use_kernel_writewatch && view->protect & VPROT_WRITEWATCH)
     {
         /* each page may need different protections depending on write watch flag */
@@ -2373,7 +2420,10 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
 
     /* only try mmap if media is not removable (or if we require write access),
        and if alignment is correct */
-    if ((!removable || (flags & MAP_SHARED)) && host_addr == map_addr && host_size == map_size)
+    /* Private image pages may be patched and made executable again. Android
+     * rejects this for dirty file mappings; use the existing copy path. */
+    if ((!(view->protect & SEC_IMAGE) || (flags & MAP_SHARED)) &&
+        (!removable || (flags & MAP_SHARED)) && host_addr == map_addr && host_size == map_size)
     {
         if (mmap( host_addr, host_size, prot, flags, fd, offset ) != MAP_FAILED)
             return STATUS_SUCCESS;
@@ -3053,6 +3103,7 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
     char *ptr = view->base;
     SIZE_T header_size, header_map_size, total_size = view->size;
     SIZE_T align_mask = max( image_info->alignment - 1, page_mask );
+    BOOL cached = !!(image_info->image_flags & IMAGE_FLAGS_ImageCachedLayout);
     INT_PTR delta;
 
     TRACE_(module)( "mapping PE file %s at %p-%p\n", debugstr_us(nt_name), ptr, ptr + total_size );
@@ -3062,7 +3113,16 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
     fstat( fd, &st );
     header_size = min( image_info->header_size, st.st_size );
     header_map_size = min( image_info->header_map_size, ROUND_SIZE( 0, st.st_size, host_page_mask ));
-    if ((status = map_pe_header( view->base, header_size, header_map_size, fd, &removable )))
+    if (cached)
+    {
+        if (shared_fd == -1 || mmap( ptr, ROUND_SIZE( 0, total_size, host_page_mask ),
+                                    PROT_READ | PROT_WRITE | PROT_EXEC,
+                                    MAP_FIXED | MAP_PRIVATE, shared_fd, 0 ) == MAP_FAILED)
+            return STATUS_ACCESS_DENIED;
+        view->protect |= VPROT_IMAGE_CACHE;
+        set_page_vprot( ptr, total_size, VPROT_COMMITTED | VPROT_READ | VPROT_WRITE | VPROT_EXEC );
+    }
+    else if ((status = map_pe_header( view->base, header_size, header_map_size, fd, &removable )))
         return status;
 
     status = STATUS_INVALID_IMAGE_FORMAT;  /* generic error */
@@ -3181,9 +3241,9 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
         if (sec[i].PointerToRawData >= st.st_size ||
             end > ((st.st_size + sector_align) & ~sector_align) ||
             end < file_start ||
-            map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start,
+            (!cached && map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start,
                                 VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY,
-                                removable ) != STATUS_SUCCESS)
+                                removable ) != STATUS_SUCCESS))
         {
             ERR_(module)( "Could not map %s section %.8s, file probably truncated\n",
                           debugstr_us(nt_name), sec[i].Name );
@@ -3224,15 +3284,18 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
 
     /* relocate to dynamic base */
 
-    if (image_info->map_addr && (delta = image_info->map_addr - image_info->base))
+    /* The server's shared ASLR address may be outside the host address space.
+     * If map_view() chose another address, relocate directly to that address;
+     * otherwise the PE loader would relocate every section a second time. */
+    if (image_info->map_addr && (delta = (ULONG_PTR)ptr - image_info->base))
     {
         TRACE_(module)( "relocating %s dynamic base %lx -> %lx mapped at %p\n", debugstr_us(nt_name),
-                        (ULONG_PTR)image_info->base, (ULONG_PTR)image_info->map_addr, ptr );
+                        (ULONG_PTR)image_info->base, (ULONG_PTR)ptr, ptr );
 
         if (nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
-            ((IMAGE_NT_HEADERS64 *)nt)->OptionalHeader.ImageBase = image_info->map_addr;
+            ((IMAGE_NT_HEADERS64 *)nt)->OptionalHeader.ImageBase = (ULONG_PTR)ptr;
         else
-            ((IMAGE_NT_HEADERS32 *)nt)->OptionalHeader.ImageBase = image_info->map_addr;
+            ((IMAGE_NT_HEADERS32 *)nt)->OptionalHeader.ImageBase = (ULONG_PTR)ptr;
 
         if ((dir = get_data_dir( nt, total_size, IMAGE_DIRECTORY_ENTRY_BASERELOC )))
         {
@@ -3711,7 +3774,8 @@ void virtual_init(void)
     view_block_start = anon_mmap_alloc( view_block_size, PROT_READ | PROT_WRITE );
     view_block_end = view_block_start + view_block_size / sizeof(*view_block_start);
     free_ranges = anon_mmap_alloc( view_block_size, PROT_READ | PROT_WRITE );
-    pages_vprot = anon_mmap_alloc( pages_vprot_size * sizeof(*pages_vprot), PROT_READ | PROT_WRITE );
+    pages_vprot = anon_mmap_alloc( ROUND_SIZE( 0, pages_vprot_size * sizeof(*pages_vprot), host_page_mask ),
+                                  PROT_READ | PROT_WRITE );
 #else
     /* try to find space in a reserved area for the views and pages protection table */
     view_block_start = alloc_virtual_heap( 2 * view_block_size + (1U << (32 - page_shift)) );

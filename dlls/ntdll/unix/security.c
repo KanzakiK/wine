@@ -887,8 +887,38 @@ NTSTATUS WINAPI NtPrivilegeCheck( HANDLE token, PRIVILEGE_SET *privs, BOOLEAN *r
  */
 NTSTATUS WINAPI NtImpersonateAnonymousToken( HANDLE thread )
 {
-    FIXME( "(%p): stub\n", thread );
-    return STATUS_NOT_IMPLEMENTED;
+    static const WCHAR lsa_key[] = {'\\','R','e','g','i','s','t','r','y','\\',
+        'M','a','c','h','i','n','e','\\','S','y','s','t','e','m','\\',
+        'C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t','\\',
+        'C','o','n','t','r','o','l','\\','L','s','a',0};
+    static const WCHAR everyone_value[] = {'E','v','e','r','y','o','n','e','I','n','c','l','u','d','e','s',
+        'A','n','o','n','y','m','o','u','s',0};
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING name;
+    HANDLE key;
+    ULONG buffer[8], size;
+    KEY_VALUE_PARTIAL_INFORMATION *info = (void *)buffer;
+    unsigned int status, include_everyone = 0;
+
+    TRACE( "(%p)\n", thread );
+    init_unicode_string( &name, lsa_key );
+    InitializeObjectAttributes( &attr, &name, OBJ_CASE_INSENSITIVE, 0, NULL );
+    if (!NtOpenKey( &key, KEY_QUERY_VALUE, &attr ))
+    {
+        init_unicode_string( &name, everyone_value );
+        if (!NtQueryValueKey( key, &name, KeyValuePartialInformation, buffer, sizeof(buffer), &size ) &&
+            info->Type == REG_DWORD && info->DataLength == sizeof(ULONG))
+            include_everyone = *(ULONG *)info->Data != 0;
+        NtClose( key );
+    }
+    SERVER_START_REQ( impersonate_anonymous_token )
+    {
+        req->handle = wine_server_obj_handle( thread );
+        req->include_everyone = include_everyone;
+        status = wine_server_call( req );
+    }
+    SERVER_END_REQ;
+    return status;
 }
 
 

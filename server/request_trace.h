@@ -3538,6 +3538,12 @@ static void dump_alpc_create_port_reply( const struct alpc_create_port_reply *re
     fprintf( stderr, " handle=%04x", req->handle );
 }
 
+static void dump_impersonate_anonymous_token_request( const struct impersonate_anonymous_token_request *req )
+{
+    fprintf( stderr, " handle=%04x", req->handle );
+    fprintf( stderr, ", include_everyone=%08x", req->include_everyone );
+}
+
 typedef void (*dump_func)( const void *req );
 
 static const dump_func req_dumpers[REQ_NB_REQUESTS] =
@@ -3850,6 +3856,7 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] =
     (dump_func)dump_d3dkmt_mutex_acquire_request,
     (dump_func)dump_d3dkmt_mutex_release_request,
     (dump_func)dump_alpc_create_port_request,
+    (dump_func)dump_impersonate_anonymous_token_request,
 };
 
 static const dump_func reply_dumpers[REQ_NB_REQUESTS] =
@@ -4162,6 +4169,7 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] =
     (dump_func)dump_d3dkmt_mutex_acquire_reply,
     NULL,
     (dump_func)dump_alpc_create_port_reply,
+    NULL,
 };
 
 static const char * const req_names[REQ_NB_REQUESTS] =
@@ -4474,6 +4482,7 @@ static const char * const req_names[REQ_NB_REQUESTS] =
     "d3dkmt_mutex_acquire",
     "d3dkmt_mutex_release",
     "alpc_create_port",
+    "impersonate_anonymous_token",
 };
 
 static const struct

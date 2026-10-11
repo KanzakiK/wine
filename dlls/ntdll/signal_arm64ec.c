@@ -733,7 +733,6 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size, 
     NTSTATUS status;
 
     if (!pNotifyMapViewOfSection) return;
-    if (!NtCurrentTeb()->Tib.ArbitraryUserPointer) return;
     if (NtQuerySection( handle, SectionImageInformation, &info, sizeof(info), NULL )) return;
     status = pNotifyMapViewOfSection( NULL, addr, NULL, size, alloc, protect );
     if (NT_SUCCESS(status)) return;

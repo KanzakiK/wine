@@ -577,6 +577,69 @@ static int find_committed_range( struct memory_view *view, file_pos_t start, mem
 }
 
 /* allocate and fill the temp file for a shared PE image mapping */
+/* Cache a private image in virtual-address layout once, rather than copying
+ * every unaligned PE section into anonymous memory in every client process.
+ * Explicitly shared writable sections continue using the original shared map. */
+static int copy_image_bytes( int source, int destination, off_t read_pos, off_t write_pos, size_t size )
+{
+    char buffer[65536];
+    while (size)
+    {
+        size_t count = min( size, sizeof(buffer) );
+        ssize_t read_count = pread( source, buffer, count, read_pos );
+        size_t written = 0;
+        if (!read_count && size < 0x200) return 1; /* zero-filled partial sector */
+        if (read_count <= 0) return 0;
+        while (written < read_count)
+        {
+            ssize_t result = pwrite( destination, buffer + written, read_count - written, write_pos + written );
+            if (result <= 0) return 0;
+            written += result;
+        }
+        size -= read_count;
+        read_pos += read_count;
+        write_pos += read_count;
+    }
+    return 1;
+}
+
+static int build_cached_image( struct mapping *mapping, size_t align_mask, int fd,
+                               IMAGE_SECTION_HEADER *sec, unsigned int nb_sec )
+{
+    struct shared_map *shared;
+    struct file *file;
+    struct stat st;
+    unsigned int i;
+    size_t file_size, map_size;
+    off_t read_pos;
+    int image_fd;
+
+    if ((mapping->shared = get_shared_file( mapping->fd ))) goto success;
+    if ((image_fd = create_temp_file( mapping->image.map_size )) == -1) return 0;
+    if (!(file = create_file_for_fd( image_fd, FILE_GENERIC_READ | FILE_GENERIC_WRITE, 0 ))) return 0;
+    if (fstat( fd, &st ) == -1 ||
+        !copy_image_bytes( fd, image_fd, 0, 0, min( mapping->image.header_size, st.st_size ))) goto error;
+    for (i = 0; i < nb_sec; i++)
+    {
+        get_section_sizes( &sec[i], align_mask, &map_size, &read_pos, &file_size );
+        if (map_size > mapping->image.map_size ||
+            sec[i].VirtualAddress > mapping->image.map_size - map_size) goto error;
+        if (!sec[i].PointerToRawData || !file_size) continue;
+        if (!copy_image_bytes( fd, image_fd, read_pos, sec[i].VirtualAddress, file_size )) goto error;
+    }
+    if (!(shared = alloc_object( &shared_map_ops ))) goto error;
+    shared->fd = (struct fd *)grab_object( mapping->fd );
+    shared->file = file;
+    list_add_head( &shared_map_list, &shared->entry );
+    mapping->shared = shared;
+success:
+    mapping->image.image_flags |= IMAGE_FLAGS_ImageCachedLayout;
+    return 1;
+error:
+    release_object( file );
+    return 0;
+}
+
 static int build_shared_mapping( struct mapping *mapping, size_t align_mask, int fd,
                                  IMAGE_SECTION_HEADER *sec, unsigned int nb_sec )
 {
@@ -603,7 +666,11 @@ static int build_shared_mapping( struct mapping *mapping, size_t align_mask, int
             total_size += map_size;
         }
     }
-    if (!total_size) return 1;  /* nothing to do */
+    if (!total_size)
+    {
+        if (mapping->image.image_flags & IMAGE_FLAGS_ImageMappedFlat) return 1;
+        return build_cached_image( mapping, align_mask, fd, sec, nb_sec );
+    }
 
     if ((mapping->shared = get_shared_file( mapping->fd ))) return 1;
 

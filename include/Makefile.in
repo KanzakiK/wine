@@ -1260,12 +1260,16 @@ SOURCES = \
 
 INSTALL_LIB = \
 	windows.applicationmodel.winmd \
+	windows.foundation.winmd \
+	windows.foundation.collections.winmd \
 	windows.globalization.winmd \
 	windows.graphics.winmd \
 	windows.media.winmd \
 	windows.networking.winmd \
 	windows.perception.winmd \
 	windows.storage.winmd \
+	windows.storage.streams.winmd \
+	windows.storage.fileproperties.winmd \
 	windows.system.winmd \
 	windows.ui.winmd \
 	windows.ui.xaml.winmd

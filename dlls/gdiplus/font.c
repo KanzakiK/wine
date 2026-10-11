@@ -756,7 +756,10 @@ GpStatus WINGDIPAPI GdipCreateFontFamilyFromName(GDIPCONST WCHAR *name,
         if (status != Ok) return status;
     }
 
-    status = FontFamilyNotFound;
+    /* A collection's own family name is authoritative, including private
+     * fonts whose full face name differs from their family name. */
+    status = find_font_family(collection, name, family);
+    if (status != FontFamilyNotFound) return status;
 
     hdc = CreateCompatibleDC(0);
 

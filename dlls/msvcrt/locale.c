@@ -379,8 +379,13 @@ BOOL locale_to_sname(const char *locale, unsigned short *codepage, BOOL *sname_m
             search.allow_sname = TRUE;
         }
 
-#if _MSVCR_VER >= 110
+#if _MSVCR_VER >= 140
+        /* UCRT accepts a locale name followed by a code-page suffix. */
+        if (!region)
+#elif _MSVCR_VER >= 110
         if(!cp && !region)
+#endif
+#if _MSVCR_VER >= 110
         {
             search.allow_sname = TRUE;
         }

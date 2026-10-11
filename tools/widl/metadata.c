@@ -2923,7 +2923,9 @@ static void add_method_contract_attrs( const type_t *class, const type_t *iface,
 {
     UINT parent, attr_type, value_size;
     BYTE value[MAX_NAME + sizeof(UINT) + 5];
-    const attr_t *attr = get_attr( iface->attrs, ATTR_CONTRACT );
+    const attr_t *attr = get_attr( class->attrs, ATTR_CONTRACT );
+
+    if (!attr) return;
 
     parent = has_customattribute( TABLE_METHODDEF, method->md.def );
     attr_type = customattribute_type( TABLE_MEMBERREF, attr->md_member );

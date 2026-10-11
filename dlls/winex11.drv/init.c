@@ -248,12 +248,90 @@ Drawable get_dc_drawable( HDC hdc, RECT *rect )
     return escape.drawable;
 }
 
+/* Transparent containers are not themselves opaque, but their opaque children
+ * still occlude lower GPU surfaces. GDI intentionally ignores the transparent
+ * sibling for paint ordering; a GPU present is asynchronous and needs the
+ * descendants' coverage explicitly, without changing the GDI visible region. */
+static void collect_opaque_children( HWND parent, HRGN coverage )
+{
+    HWND child;
+    for (child = NtUserGetWindowRelative( parent, GW_CHILD ); child;
+         child = NtUserGetWindowRelative( child, GW_HWNDNEXT ))
+    {
+        DWORD style = NtUserGetWindowLongW( child, GWL_STYLE );
+        DWORD ex_style = NtUserGetWindowLongW( child, GWL_EXSTYLE );
+        HRGN region;
+        HDC dc;
+
+        if (!(style & WS_VISIBLE) || (ex_style & WS_EX_LAYERED)) continue;
+        if (ex_style & WS_EX_TRANSPARENT)
+        {
+            collect_opaque_children( child, coverage );
+            continue;
+        }
+        if (!(region = NtGdiCreateRectRgn( 0, 0, 0, 0 ))) continue;
+        /* Include its children as coverage, but retain ancestor/sibling clips. */
+        if ((dc = NtUserGetDCEx( child, 0, DCX_CACHE | DCX_CLIPSIBLINGS )))
+        {
+            if (NtGdiGetRandomRgn( dc, region, SYSRGN ) > 0)
+                NtGdiCombineRgn( coverage, coverage, region, RGN_OR );
+            NtUserReleaseDC( child, dc );
+        }
+        NtGdiDeleteObjectApp( region );
+    }
+}
+
+static HRGN get_surface_occlusion( HWND hwnd )
+{
+    HWND ancestor, parent, sibling;
+    UINT dpi = NtUserGetDpiForWindow( hwnd ), raw_dpi = NtUserGetWinMonitorDpi( hwnd, MDT_RAW_DPI );
+    HRGN coverage, mapped = 0;
+    RGNDATA *data;
+    DWORD size;
+    POINT origin = {0};
+    XFORM transform;
+
+    if (!dpi || !raw_dpi || !(coverage = NtGdiCreateRectRgn( 0, 0, 0, 0 ))) return 0;
+    for (ancestor = hwnd; (parent = NtUserGetAncestor( ancestor, GA_PARENT )) &&
+                         parent != NtUserGetDesktopWindow(); ancestor = parent)
+    {
+        if (!(NtUserGetWindowLongW( ancestor, GWL_STYLE ) & WS_CLIPSIBLINGS)) continue;
+        for (sibling = NtUserGetWindowRelative( ancestor, GW_HWNDPREV ); sibling;
+             sibling = NtUserGetWindowRelative( sibling, GW_HWNDPREV ))
+        {
+            DWORD ex_style = NtUserGetWindowLongW( sibling, GWL_EXSTYLE );
+            if (!(NtUserGetWindowLongW( sibling, GWL_STYLE ) & WS_VISIBLE)) continue;
+            if (!(ex_style & WS_EX_TRANSPARENT) || (ex_style & WS_EX_LAYERED)) continue;
+            collect_opaque_children( sibling, coverage );
+        }
+    }
+    if ((size = NtGdiGetRegionData( coverage, 0, NULL )) && (data = malloc( size )))
+    {
+        NtUserMapWindowPoints( hwnd, 0, &origin, 1, dpi );
+        transform = (XFORM){(FLOAT)raw_dpi / dpi, 0, 0, (FLOAT)raw_dpi / dpi,
+                            -(FLOAT)origin.x * raw_dpi / dpi, -(FLOAT)origin.y * raw_dpi / dpi};
+        if (NtGdiGetRegionData( coverage, size, data ))
+            mapped = NtGdiExtCreateRegion( &transform, size, data );
+        free( data );
+    }
+    NtGdiDeleteObjectApp( coverage );
+    return mapped;
+}
+
 HRGN get_dc_monitor_region( HWND hwnd, HDC hdc )
 {
-    HRGN region;
+    HRGN region, coverage;
 
     if (!(region = NtGdiCreateRectRgn( 0, 0, 0, 0 ))) return 0;
-    if (NtGdiGetRandomRgn( hdc, region, SYSRGN | NTGDI_RGN_MONITOR_DPI ) > 0) return region;
+    if (NtGdiGetRandomRgn( hdc, region, SYSRGN | NTGDI_RGN_MONITOR_DPI ) > 0)
+    {
+        if ((coverage = get_surface_occlusion( hwnd )))
+        {
+            NtGdiCombineRgn( region, region, coverage, RGN_DIFF );
+            NtGdiDeleteObjectApp( coverage );
+        }
+        return region;
+    }
     NtGdiDeleteObjectApp( region );
     return 0;
 }

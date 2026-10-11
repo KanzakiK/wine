@@ -889,6 +889,7 @@ struct pe_image_info
 #define IMAGE_FLAGS_ImageMappedFlat           0x08
 #define IMAGE_FLAGS_BaseBelow4gb              0x10
 #define IMAGE_FLAGS_ComPlusPrefer32bit        0x20
+#define IMAGE_FLAGS_ImageCachedLayout        0x40
 
 struct rawinput_device
 {
@@ -4339,4 +4340,10 @@ enum inproc_sync_type
     VARARG(obj_attr,object_attributes); /* object attributes */
 @REPLY
     obj_handle_t        handle;         /* handle to the ALPC port */
+@END
+
+/* Impersonate the anonymous logon token with THREAD_IMPERSONATE access. */
+@REQ(impersonate_anonymous_token)
+    obj_handle_t handle;          /* target thread */
+    unsigned int include_everyone; /* Lsa\EveryoneIncludesAnonymous policy */
 @END

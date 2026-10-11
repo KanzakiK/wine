@@ -873,6 +873,7 @@ struct pe_image_info
 #define IMAGE_FLAGS_ImageMappedFlat           0x08
 #define IMAGE_FLAGS_BaseBelow4gb              0x10
 #define IMAGE_FLAGS_ComPlusPrefer32bit        0x20
+#define IMAGE_FLAGS_ImageCachedLayout        0x40
 
 struct rawinput_device
 {
@@ -6171,6 +6172,19 @@ struct d3dkmt_share_objects_reply
 };
 
 
+struct impersonate_anonymous_token_request
+{
+    struct request_header __header;
+    obj_handle_t handle;
+    unsigned int include_everyone;
+    char __pad_20[4];
+};
+struct impersonate_anonymous_token_reply
+{
+    struct reply_header __header;
+};
+
+
 
 struct d3dkmt_object_open_name_request
 {
@@ -6554,6 +6568,7 @@ enum request
     REQ_d3dkmt_mutex_acquire,
     REQ_d3dkmt_mutex_release,
     REQ_alpc_create_port,
+    REQ_impersonate_anonymous_token,
     REQ_NB_REQUESTS
 };
 
@@ -6869,6 +6884,7 @@ union generic_request
     struct d3dkmt_mutex_acquire_request d3dkmt_mutex_acquire_request;
     struct d3dkmt_mutex_release_request d3dkmt_mutex_release_request;
     struct alpc_create_port_request alpc_create_port_request;
+    struct impersonate_anonymous_token_request impersonate_anonymous_token_request;
 };
 union generic_reply
 {
@@ -7182,8 +7198,9 @@ union generic_reply
     struct d3dkmt_mutex_acquire_reply d3dkmt_mutex_acquire_reply;
     struct d3dkmt_mutex_release_reply d3dkmt_mutex_release_reply;
     struct alpc_create_port_reply alpc_create_port_reply;
+    struct impersonate_anonymous_token_reply impersonate_anonymous_token_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 962
+#define SERVER_PROTOCOL_VERSION 964
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
