@@ -7201,6 +7201,6 @@ union generic_reply
     struct impersonate_anonymous_token_reply impersonate_anonymous_token_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 965
+#define SERVER_PROTOCOL_VERSION 964
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
