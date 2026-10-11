@@ -1249,6 +1249,13 @@ static void set_region_visible_rect( struct region *region, struct window *win )
 }
 
 
+/* a layered window without layered attributes is painted through UpdateLayeredWindow() only */
+static inline int is_ulw_window( const struct window *win )
+{
+    return (win->ex_style & WS_EX_LAYERED) && !win->is_layered;
+}
+
+
 /* get the top-level window to clip against for a given window */
 static inline struct window *get_top_clipping_window( struct window *win )
 {
@@ -1464,7 +1471,16 @@ static struct region *get_surface_region( struct window *win )
     set_region_rect( clip, &win->client_rect );
     if (win->win_region && !intersect_window_region( clip, win )) goto error;
 
-    if ((win->paint_flags & PAINT_HAS_PIXEL_FORMAT) && !subtract_region( region, region, clip ))
+    /* A layered window without layered attributes shows what UpdateLayeredWindow()
+     * put into its surface and nothing else.  A client window that a swap chain
+     * created on it is rendered offscreen (winex11, needs_offscreen_rendering()),
+     * so its pixel format does not take the client area away from the surface:
+     * WPF renders such a window through Direct3D 9 and hands each frame to
+     * UpdateLayeredWindow().  Children drawn by another process or through their
+     * own pixel format are still subtracted below; NinjaTrader 8's chat window
+     * is a WPF layered window around a WebView2 child of another process. */
+    if ((win->paint_flags & PAINT_HAS_PIXEL_FORMAT) && !is_ulw_window( win ) &&
+        !subtract_region( region, region, clip ))
         goto error;
 
     /* clip children */
