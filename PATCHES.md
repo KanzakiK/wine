@@ -48,6 +48,18 @@ This is the recommended branch. What it changes, by subsystem:
   `BeginDraw()`/`EndDraw()` span rather than around every primitive (3 485 swaps per
   step, each a full state emission both ways, 28 now); a nested `BeginDraw()` on
   another context of the same device takes the state over and hands it back.
+- **D2D1 curve edges**: a filled curve is drawn as a polygon plus one triangle per curve
+  piece, and the antialiasing ramp of that triangle reaches half a pixel to either side of
+  the curve. Next to a short piece the triangle is thinner than that, so both halves of the
+  ramp were cut off. Cubic Béziers are split in geometry units, which means artwork defined
+  in large units and scaled down — an SVG logo, an icon set — is all short pieces, and its
+  round edges came out stepped. Curve triangles now get a skirt on their open side, and
+  the polygon ramps towards a curve seam by the distance to the curve instead of staying
+  opaque up to it (including triangles that touch the outline only at a corner). Measured
+  against box-filter coverage on a ring of radius 15 px drawn the way an SVG is, RMS error
+  at the outer edge 0.061 before, 0.012 after, Windows 10 0.031; the d2d1 tests fail at
+  the same places as before. Visible on the Steinberg logo of HALion 7's Writing Room Synths
+  macro page
 - **D2D1 layers on an opaque target**: a layer bitmap inherited the target's alpha mode,
   so on a render target created as `ALPHA_MODE_IGNORE` the layer's own coverage was thrown
   away and everything drawn inside it turned the background colour, usually black. All
