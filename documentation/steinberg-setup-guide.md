@@ -142,6 +142,13 @@ Download Assistant's session is already running; until the next session start it
 sign-in link has nowhere to go. The command writes the handler right away. Closing every
 program in the prefix and starting again has the same effect.
 
+**Known limitation:** the sign-in does not survive closing the Activation Manager yet.
+Wine drops the attributes of stored credentials, and Steinberg's License Engine then
+discards its refresh token (`1.1 Format refresh token detecting -- resetting` in
+`AppData\Roaming\Steinberg\Activation Manager\Logs\License Engine.txt`). Activations
+stay valid, but each later start of a Steinberg product opens the Activation Manager on
+its login page until you sign in again.
+
 Steinberg counts activations per computer, and a newly created Wine prefix registers as
 a separate computer. A copy of a prefix (`cp -a`) kept the identity of its original in
 an earlier measurement. Deactivating the licences before deleting a prefix keeps the
