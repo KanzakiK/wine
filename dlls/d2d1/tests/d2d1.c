@@ -14983,6 +14983,90 @@ static void test_transform_graph_input_count(BOOL d3d11)
     release_test_context(&ctx);
 }
 
+/* Which DXGI formats ID2D1DeviceContext::IsDxgiFormatSupported() says yes to,
+ * and whether CreateBitmap() agrees for each alpha mode, with and without
+ * D2D1_BITMAP_OPTIONS_TARGET. */
+static void test_dxgi_format_support(BOOL d3d11)
+{
+    static const struct
+    {
+        DXGI_FORMAT format;
+        /* Indexed by D2D1_ALPHA_MODE: UNKNOWN, PREMULTIPLIED, STRAIGHT, IGNORE. */
+        BOOL alpha_mode[4];
+        BOOL target;
+    }
+    formats[] =
+    {
+        {DXGI_FORMAT_R32G32B32A32_FLOAT,  {FALSE, TRUE,  FALSE, TRUE },  TRUE },
+        {DXGI_FORMAT_R16G16B16A16_FLOAT,  {FALSE, TRUE,  FALSE, TRUE },  TRUE },
+        {DXGI_FORMAT_R16G16B16A16_UNORM,  {FALSE, TRUE,  FALSE, TRUE },  TRUE },
+        {DXGI_FORMAT_R10G10B10A2_UNORM,   {FALSE, TRUE,  FALSE, TRUE },  FALSE},
+        {DXGI_FORMAT_R8G8B8A8_UNORM,      {FALSE, TRUE,  FALSE, TRUE },  TRUE },
+        {DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, {FALSE, TRUE,  FALSE, TRUE },  TRUE },
+        {DXGI_FORMAT_R8G8_UNORM,          {FALSE, FALSE, FALSE, TRUE },  FALSE},
+        {DXGI_FORMAT_R8_UNORM,            {FALSE, FALSE, FALSE, TRUE },  FALSE},
+        {DXGI_FORMAT_A8_UNORM,            {FALSE, TRUE,  TRUE,  FALSE},  TRUE },
+        {DXGI_FORMAT_BC1_UNORM,           {FALSE, TRUE,  FALSE, TRUE },  FALSE},
+        {DXGI_FORMAT_BC2_UNORM,           {FALSE, TRUE,  FALSE, TRUE },  FALSE},
+        {DXGI_FORMAT_BC3_UNORM,           {FALSE, TRUE,  FALSE, TRUE },  FALSE},
+        {DXGI_FORMAT_B8G8R8A8_UNORM,      {FALSE, TRUE,  FALSE, TRUE },  TRUE },
+        {DXGI_FORMAT_B8G8R8X8_UNORM,      {FALSE, FALSE, FALSE, TRUE },  FALSE},
+        {DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, {FALSE, TRUE,  FALSE, TRUE },  TRUE },
+    };
+    D2D1_BITMAP_PROPERTIES1 desc;
+    struct d2d1_test_context ctx;
+    D2D1_SIZE_U size = {4, 4};
+    unsigned int format, i, j;
+    BOOL supported, supported_format, expected;
+    ID2D1Bitmap1 *bitmap;
+    HRESULT hr;
+
+    if (!init_test_context(&ctx, d3d11))
+        return;
+
+    for (format = DXGI_FORMAT_UNKNOWN; format <= DXGI_FORMAT_V408; ++format)
+    {
+        for (j = 0; j < ARRAY_SIZE(formats); ++j)
+        {
+            if (formats[j].format == format)
+                break;
+        }
+
+        supported_format = j < ARRAY_SIZE(formats);
+        supported = ID2D1DeviceContext_IsDxgiFormatSupported(ctx.context, format);
+        ok(supported == supported_format, "Format %u: got supported %d.\n", format, supported);
+
+        for (i = D2D1_ALPHA_MODE_UNKNOWN; i <= D2D1_ALPHA_MODE_IGNORE; ++i)
+        {
+            memset(&desc, 0, sizeof(desc));
+            desc.dpiX = 96.0f;
+            desc.dpiY = 96.0f;
+            desc.pixelFormat.format = format;
+            desc.pixelFormat.alphaMode = i;
+
+            expected = supported_format && formats[j].alpha_mode[i];
+            desc.bitmapOptions = D2D1_BITMAP_OPTIONS_NONE;
+            bitmap = NULL;
+            hr = ID2D1DeviceContext_CreateBitmap(ctx.context, size, NULL, 0, &desc, &bitmap);
+            ok(hr == (expected ? S_OK : D2DERR_UNSUPPORTED_PIXEL_FORMAT),
+                    "Format %u, alpha mode %u: got hr %#lx.\n", format, i, hr);
+            if (bitmap)
+                ID2D1Bitmap1_Release(bitmap);
+
+            expected = expected && formats[j].target;
+            desc.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET;
+            bitmap = NULL;
+            hr = ID2D1DeviceContext_CreateBitmap(ctx.context, size, NULL, 0, &desc, &bitmap);
+            ok(hr == (expected ? S_OK : D2DERR_UNSUPPORTED_PIXEL_FORMAT),
+                    "Format %u, alpha mode %u, target: got hr %#lx.\n", format, i, hr);
+            if (bitmap)
+                ID2D1Bitmap1_Release(bitmap);
+        }
+    }
+
+    release_test_context(&ctx);
+}
+
 static void test_transform_graph(BOOL d3d11)
 {
     ID2D1OffsetTransform *offset_transform = NULL;
@@ -19544,6 +19628,7 @@ START_TEST(d2d1)
     queue_d3d10_test(test_effect_color_management);
     queue_test(test_transform_graph);
     queue_test(test_transform_graph_input_count);
+    queue_test(test_dxgi_format_support);
     queue_test(test_offset_transform);
     queue_test(test_blend_transform);
     queue_test(test_border_transform);

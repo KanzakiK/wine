@@ -364,38 +364,56 @@ static const struct ID2D1Bitmap1Vtbl d2d_bitmap_vtbl =
     d2d_bitmap_Unmap,
 };
 
-/* The formats bitmaps and targets can be created in.  Also the answer
- * ID2D1DeviceContext::IsDxgiFormatSupported() gives, there for the format alone. */
-static const D2D1_PIXEL_FORMAT supported_formats[] =
+/* The formats bitmaps can be created in, with the alpha modes each takes and
+ * whether it can be a target.  Also the answer
+ * ID2D1DeviceContext::IsDxgiFormatSupported() gives, there for the format
+ * alone.  Measured on Windows 10 for every DXGI format and alpha mode, with
+ * and without D2D1_BITMAP_OPTIONS_TARGET (test_dxgi_format_support). */
+static const struct
 {
-    {DXGI_FORMAT_R32G32B32A32_FLOAT,    D2D1_ALPHA_MODE_PREMULTIPLIED},
-    {DXGI_FORMAT_R32G32B32A32_FLOAT,    D2D1_ALPHA_MODE_IGNORE       },
-    {DXGI_FORMAT_R16G16B16A16_FLOAT,    D2D1_ALPHA_MODE_PREMULTIPLIED},
-    {DXGI_FORMAT_R16G16B16A16_FLOAT,    D2D1_ALPHA_MODE_IGNORE       },
-    {DXGI_FORMAT_R16G16B16A16_UNORM,    D2D1_ALPHA_MODE_PREMULTIPLIED},
-    {DXGI_FORMAT_R16G16B16A16_UNORM,    D2D1_ALPHA_MODE_IGNORE       },
-    {DXGI_FORMAT_R8G8B8A8_UNORM,        D2D1_ALPHA_MODE_PREMULTIPLIED},
-    {DXGI_FORMAT_R8G8B8A8_UNORM,        D2D1_ALPHA_MODE_IGNORE       },
-    {DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_PREMULTIPLIED},
-    {DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_IGNORE       },
-    {DXGI_FORMAT_A8_UNORM,              D2D1_ALPHA_MODE_PREMULTIPLIED},
-    {DXGI_FORMAT_A8_UNORM,              D2D1_ALPHA_MODE_STRAIGHT     },
-    {DXGI_FORMAT_B8G8R8A8_UNORM,        D2D1_ALPHA_MODE_PREMULTIPLIED},
-    {DXGI_FORMAT_B8G8R8A8_UNORM,        D2D1_ALPHA_MODE_IGNORE       },
-    {DXGI_FORMAT_B8G8R8X8_UNORM,        D2D1_ALPHA_MODE_IGNORE       },
-    {DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_PREMULTIPLIED},
-    {DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_IGNORE       },
+    D2D1_PIXEL_FORMAT format;
+    BOOL target;
+}
+supported_formats[] =
+{
+    {{DXGI_FORMAT_R32G32B32A32_FLOAT,    D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R32G32B32A32_FLOAT,    D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R16G16B16A16_FLOAT,    D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R16G16B16A16_FLOAT,    D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R16G16B16A16_UNORM,    D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R16G16B16A16_UNORM,    D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R10G10B10A2_UNORM,     D2D1_ALPHA_MODE_PREMULTIPLIED}, FALSE},
+    {{DXGI_FORMAT_R10G10B10A2_UNORM,     D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_R8G8B8A8_UNORM,        D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R8G8B8A8_UNORM,        D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R8G8_UNORM,            D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_R8_UNORM,              D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_A8_UNORM,              D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_A8_UNORM,              D2D1_ALPHA_MODE_STRAIGHT     }, TRUE },
+    {{DXGI_FORMAT_BC1_UNORM,             D2D1_ALPHA_MODE_PREMULTIPLIED}, FALSE},
+    {{DXGI_FORMAT_BC1_UNORM,             D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_BC2_UNORM,             D2D1_ALPHA_MODE_PREMULTIPLIED}, FALSE},
+    {{DXGI_FORMAT_BC2_UNORM,             D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_BC3_UNORM,             D2D1_ALPHA_MODE_PREMULTIPLIED}, FALSE},
+    {{DXGI_FORMAT_BC3_UNORM,             D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_B8G8R8A8_UNORM,        D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_B8G8R8A8_UNORM,        D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_B8G8R8X8_UNORM,        D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_IGNORE       }, TRUE },
 };
 
-static BOOL format_supported(const D2D1_PIXEL_FORMAT *format)
+static BOOL format_supported(const D2D1_PIXEL_FORMAT *format, D2D1_BITMAP_OPTIONS options)
 {
     unsigned int i;
 
     for (i = 0; i < ARRAY_SIZE(supported_formats); ++i)
     {
-        if (supported_formats[i].format == format->format
-                && supported_formats[i].alphaMode == format->alphaMode)
-            return TRUE;
+        if (supported_formats[i].format.format == format->format
+                && supported_formats[i].format.alphaMode == format->alphaMode)
+            return !(options & D2D1_BITMAP_OPTIONS_TARGET) || supported_formats[i].target;
     }
 
     return FALSE;
@@ -407,7 +425,7 @@ BOOL d2d_dxgi_format_supported(DXGI_FORMAT format)
 
     for (i = 0; i < ARRAY_SIZE(supported_formats); ++i)
     {
-        if (supported_formats[i].format == format)
+        if (supported_formats[i].format.format == format)
             return TRUE;
     }
 
@@ -482,7 +500,7 @@ HRESULT d2d_bitmap_create(struct d2d_device_context *context, D2D1_SIZE_U size, 
     ID3D11Texture2D *texture;
     HRESULT hr;
 
-    if (!format_supported(&desc->pixelFormat))
+    if (!format_supported(&desc->pixelFormat, desc->bitmapOptions))
     {
         WARN("Tried to create bitmap with unsupported format {%#x / %#x}.\n",
                 desc->pixelFormat.format, desc->pixelFormat.alphaMode);
@@ -615,7 +633,7 @@ HRESULT d2d_bitmap_create_shared(struct d2d_device_context *context, REFIID iid,
         }
         desc = &d;
 
-        if (!format_supported(&desc->pixelFormat))
+        if (!format_supported(&desc->pixelFormat, desc->bitmapOptions))
         {
             WARN("Tried to create bitmap with unsupported format {%#x / %#x}.\n",
                     desc->pixelFormat.format, desc->pixelFormat.alphaMode);
