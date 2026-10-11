@@ -2333,6 +2333,16 @@ static void test_cexpf(void)
         {  100.0f,    M_PI_2,   -1.17501331e36f, INFINITY, ERANGE },
         { -120.0f,    1.0f,      0.0f,      0.0f,    ERANGE },
     };
+    static const struct {
+        double r, i;
+        double rexp, iexp;
+        errno_t e;
+    } tests_cexp[] = {
+        { -800.0,     1.0,       0.0,       0.0,     ERANGE },
+        { -740.0,     1.0,       2.2727019708697341e-322, 3.5078660854728505e-322 },
+        {  709.8,     M_PI_2,    1.1199641237968229e292, INFINITY, ERANGE },
+    };
+    _Dcomplex rd;
     _Fcomplex r;
     int i;
 
@@ -2347,6 +2357,20 @@ static void test_cexpf(void)
             "expected (%0.7e, %0.7e), got (%0.7e, %0.7e)\n",
             tests[i].rexp, tests[i].iexp, r._Val[0], r._Val[1]);
         ok(errno == (tests[i].e ? tests[i].e : -1), "errno = %d\n", errno);
+        ok(exception.type == -1, "exception.type = %d\n", exception.type);
+        winetest_pop_context();
+    }
+
+    /* cexp reports underflow through errno as well */
+    for(i=0; i<ARRAY_SIZE(tests_cexp); i++) {
+        winetest_push_context("cexp %d", i);
+        errno = -1;
+        exception.type = -1;
+        rd = cexp(_Cbuild(tests_cexp[i].r, tests_cexp[i].i));
+        ok(dpart_eq(rd._Val[0], tests_cexp[i].rexp, 1) && dpart_eq(rd._Val[1], tests_cexp[i].iexp, 1),
+            "expected (%0.16e, %0.16e), got (%0.16e, %0.16e)\n",
+            tests_cexp[i].rexp, tests_cexp[i].iexp, rd._Val[0], rd._Val[1]);
+        ok(errno == (tests_cexp[i].e ? tests_cexp[i].e : -1), "errno = %d\n", errno);
         ok(exception.type == -1, "exception.type = %d\n", exception.type);
         winetest_pop_context();
     }
