@@ -223,6 +223,25 @@ This is the recommended branch. What it changes, by subsystem:
   ramp set outside Wine whenever a windowed D3D application exited. A viewport update
   that does not change the state emits no packet (d2d1 set it per primitive).
 - **ntdll**: MADV_FREE for MEM_RESET (improved page reclaim behaviour)
+- **Unix pipes and sockets on the standard handles (ntdll)**: a FIFO or Unix socket
+  inherited on fds 0-2 — the journald stream socket of a desktop launcher, `wine app |
+  tee` — reads as `FILE_TYPE_PIPE`, but it is a plain file object and every named-pipe
+  call on it failed: `SetNamedPipeHandleState()` with `ERROR_INVALID_HANDLE`,
+  `GetNamedPipeHandleState()`/`GetNamedPipeInfo()` with `ERROR_INVALID_FUNCTION`,
+  `PeekNamedPipe()` with `ERROR_NOT_SUPPORTED`, `FlushFileBuffers()` with
+  `ERROR_INVALID_PARAMETER`. libuv's `uv_pipe_open()` turned the first into `EBADF`, and
+  Electron applications started from a `.desktop` file aborted with "Uncaught Exception:
+  Error: open EBADF" while creating `process.stderr` (Native Access). ntdll now answers
+  these calls for such a descriptor as Windows 10 does for an anonymous pipe: byte mode
+  and blocking waits are accepted, message mode is refused with `ERROR_INVALID_PARAMETER`,
+  `FilePipeLocalInformation` reports the real buffer size and the bytes pending, the
+  closing state once the writer is gone, `PeekNamedPipe()` returns the bytes available
+  (copied without consuming them, `tee()` for a FIFO and `MSG_PEEK` for a socket),
+  `ERROR_BROKEN_PIPE` on an empty pipe without writer and `ERROR_ACCESS_DENIED` on the
+  write end, `FileNameInformation` is an empty name, and a flush succeeds. Only
+  `PIPE_NOWAIT` is still refused (`ERROR_NOT_SUPPORTED`; Windows accepts it), because it
+  would need `O_NONBLOCK` on a file description the other end shares. Real named pipes
+  are untouched, the server still handles them
 - **ntdll heap**: the first-fit walk in `find_free_block()` tries 16 blocks of the first
   free list and then continues with the next list, where every block is large enough.
   With many free blocks of nearly the same size the walk took thousands of steps for each
