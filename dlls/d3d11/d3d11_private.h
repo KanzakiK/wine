@@ -49,6 +49,23 @@ const char *debug_float4(const float *values);
 
 DXGI_FORMAT dxgi_format_from_wined3dformat(enum wined3d_format_id format);
 enum wined3d_format_id wined3dformat_from_dxgi_format(DXGI_FORMAT format);
+
+/* What a DXGI format is, as opposed to what the backend can do with it; see
+ * dxgi_format_properties() and d3d11_device_CheckFormatSupport(). */
+#define D3D11_FORMAT_PROP_TYPELESS          0x0001 /* usable only through a typed view */
+#define D3D11_FORMAT_PROP_INTEGER           0x0002 /* UINT or SINT components */
+#define D3D11_FORMAT_PROP_DEPTH             0x0004 /* D16, D24S8, D32, D32S8X24: depth-stencil binding only */
+#define D3D11_FORMAT_PROP_DEPTH_VIEW        0x0008 /* shader view of a depth-stencil texture */
+#define D3D11_FORMAT_PROP_DEPTH_READ        0x0010 /* samples a depth texture, so comparison sampling */
+#define D3D11_FORMAT_PROP_COMPRESSED        0x0020 /* BC1-7 */
+#define D3D11_FORMAT_PROP_SRGB              0x0040
+#define D3D11_FORMAT_PROP_VIDEO             0x0080 /* packed or planar video */
+#define D3D11_FORMAT_PROP_CASTABLE          0x0100 /* belongs to a typeless family */
+#define D3D11_FORMAT_PROP_STREAM_OUTPUT     0x0200 /* 32-bit components, stream output target */
+#define D3D11_FORMAT_PROP_DISPLAY           0x0400 /* swapchain scan-out format */
+#define D3D11_FORMAT_PROP_DISPLAY_FL10      0x0800 /* ... from feature level 10_0 on */
+#define D3D11_FORMAT_PROP_BACK_BUFFER_CAST  0x1000 /* back buffer may be viewed as another format */
+unsigned int dxgi_format_properties(DXGI_FORMAT format);
 void d3d11_primitive_topology_from_wined3d_primitive_type(enum wined3d_primitive_type primitive_type,
         unsigned int patch_vertex_count, D3D11_PRIMITIVE_TOPOLOGY *topology);
 void wined3d_primitive_type_from_d3d11_primitive_topology(D3D11_PRIMITIVE_TOPOLOGY topology,

@@ -147,6 +147,20 @@ This is the recommended branch. What it changes, by subsystem:
   of array textures and the resource reference leaked by `DiscardView()`); before that
   they were stubs whose FIXME made up 95 % of the log of a 9.5-minute Reaper session,
   because a WebView2 plug-in issues `DiscardView()` dozens of times per second
+- **D3D11 format support**: `CheckFormatSupport()` handed out what the backend can do with
+  the texture standing in for a format, so a typeless format was sampleable and a render
+  target, integer formats were filterable, blendable and resolvable, D32_FLOAT was readable
+  by shaders while R32_FLOAT had no comparison sampling, and the bits that are properties
+  of the format itself — `DISPLAY`, `CAST_WITHIN_BIT_LAYOUT`, `BACK_BUFFER_CAST`,
+  `SO_BUFFER` — were never set. FNA3D gates its swapchain on `DISPLAY` (WineHQ bug 56383).
+  Measured on Windows 10 for every DXGI format at feature levels 9_3 to 11_1: the answer is
+  restricted by what the format is (typeless, integer, depth, depth view, compressed, sRGB,
+  video) and completed with the format's own properties, `TYPED_UNORDERED_ACCESS_VIEW` needs
+  11_0. `CheckFeatureSupport(D3D11_FEATURE_FORMAT_SUPPORT2)` was `E_NOTIMPL`; it now reports
+  typed UAV stores, the guaranteed R32 loads and atomics, and fails like Windows when no bit
+  applies (tiled resources, logic ops and shared resources are not reported, consistent with
+  the `D3D11_OPTIONS` the device returns). Two `todo_wine` in the d3d11 and d3d10core tests
+  are gone; the tests pass on Windows 10 in both architectures
 - **WineD3D**: composition buffer with dirty rect accumulation, GL buffer recycling pool
   (70 % RSS reduction), and a `vs_out` initialisation that no longer trips NVIDIA's shader
   compiler warnings. Client threads that wait for the command-stream thread (a map that
