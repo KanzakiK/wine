@@ -45,3 +45,9 @@ HRESULT WINAPI DCompositionCreateDevice3(IUnknown *rendering_device, REFIID iid,
 
     return E_NOTIMPL;
 }
+
+HRESULT WINAPI DCompositionBoostCompositorClock(BOOL enable)
+{
+    FIXME("%d: stub.\n", enable);
+    return S_OK;
+}

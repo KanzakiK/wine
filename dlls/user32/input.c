@@ -906,3 +906,15 @@ void WINAPI UndelegateInput(void *p1, void *p2)
 {
     FIXME( "p1 %p p2 %p stub!\n", p1, p2 );
 }
+
+/***********************************************************************
+ *           SetWindowFeedbackSetting (USER32.@)
+ */
+BOOL WINAPI SetWindowFeedbackSetting( HWND hwnd, FEEDBACK_TYPE feedback, DWORD flags,
+                                     UINT32 size, const void *configuration )
+{
+    FIXME( "hwnd %p, feedback %u, flags %#lx, size %u, configuration %p not supported.\n",
+           hwnd, feedback, flags, size, configuration );
+    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
+    return FALSE;
+}

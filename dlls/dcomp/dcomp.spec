@@ -25,3 +25,5 @@
 @ stub DwmFlush
 @ stub DwmpEnableDDASupport
 @ stub SerializeEffectDescription
+
+@ stdcall DCompositionBoostCompositorClock(long)
