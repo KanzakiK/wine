@@ -1122,22 +1122,39 @@ static void d2d_cubic_bezier_split(D2D1_POINT_2F *before, D2D1_POINT_2F *after,
 
 static unsigned int d2d_cubic_bezier_quadratic_count(const D2D1_POINT_2F *p)
 {
-    float deviation, count;
+    float deviation, count, turn = 1.0f, t0x, t0y, t1x, t1y, l0, l1;
     D2D1_POINT_2F e;
 
     e.x = p[3].x - 3.0f * p[2].x + 3.0f * p[1].x - p[0].x;
     e.y = p[3].y - 3.0f * p[2].y + 3.0f * p[1].y - p[0].y;
     deviation = sqrtf(e.x * e.x + e.y * e.y) * D2D_BEZIER_REDUCTION_DEVIATION;
 
+    /* The deviation is measured in geometry units, which say nothing about
+     * pixels once the geometry is scaled up, and a single quadratic through a
+     * quarter circle lies up to 1.1 % of the radius inside it (0.14 px on a
+     * 13 px ring, as a stroke drawn under Scale 2 showed). Give a curve at
+     * least one piece per 45 degrees of turn between its end tangents, which
+     * halves that error for every fourth piece and does not depend on units. */
+    t0x = p[1].x - p[0].x;
+    t0y = p[1].y - p[0].y;
+    t1x = p[3].x - p[2].x;
+    t1y = p[3].y - p[2].y;
+    l0 = sqrtf(t0x * t0x + t0y * t0y);
+    l1 = sqrtf(t1x * t1x + t1y * t1y);
+    if (l0 > 0.0f && l1 > 0.0f)
+        turn = ceilf(acosf(max(-1.0f, min(1.0f, (t0x * t1x + t0y * t1y) / (l0 * l1)))) / (float)(M_PI / 4.0) - 1e-3f);
+
     /* Negated so that a deviation that is not a number ends up with one piece. */
     if (!(deviation > D2D_BEZIER_REDUCTION_TOLERANCE))
-        return 1;
-
-    count = ceilf(powf(deviation / D2D_BEZIER_REDUCTION_TOLERANCE, 1.0f / 3.0f));
+        count = 1.0f;
+    else
+        count = ceilf(powf(deviation / D2D_BEZIER_REDUCTION_TOLERANCE, 1.0f / 3.0f));
+    if (turn > count)
+        count = turn;
     if (count >= (float)D2D_BEZIER_MAX_QUADRATICS)
         return D2D_BEZIER_MAX_QUADRATICS;
 
-    return count;
+    return count < 1.0f ? 1 : count;
 }
 
 struct d2d_quadratic_bezier
