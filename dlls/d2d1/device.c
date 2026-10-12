@@ -1267,7 +1267,8 @@ static HRESULT d2d_device_context_update_ps_cb(struct d2d_device_context *contex
 }
 
 static HRESULT d2d_device_context_update_vs_cb(struct d2d_device_context *context,
-        const D2D_MATRIX_3X2_F *geometry_transform, float stroke_width, float miter_limit)
+        const D2D_MATRIX_3X2_F *geometry_transform, float stroke_width, float miter_limit,
+        D2D1_LINE_JOIN line_join, D2D1_CAP_STYLE start_cap, D2D1_CAP_STYLE end_cap)
 {
     D3D11_MAPPED_SUBRESOURCE map_desc;
     ID3D11DeviceContext *d3d_context;
@@ -1284,6 +1285,10 @@ static HRESULT d2d_device_context_update_vs_cb(struct d2d_device_context *contex
     new_cb.transform_geometry._22 = geometry_transform->_22;
     new_cb.transform_geometry._32 = geometry_transform->_32;
     new_cb.transform_geometry.stroke_width = stroke_width;
+    new_cb.stroke_params.x = line_join;
+    new_cb.stroke_params.y = start_cap;
+    new_cb.stroke_params.z = end_cap;
+    new_cb.stroke_params.w = 0.0f;
 
     w = &context->drawing_state.transform;
 
@@ -1402,7 +1407,7 @@ static void d2d_device_context_render_mask_to_stencil(struct d2d_device_context 
 
     /* Bail on CB map failure rather than drawing the stencil mask with stale
      * constants, which would yield an undefined clip mask. */
-    if (FAILED(hr = d2d_device_context_update_vs_cb(context, &mask_geo->transform, 0.0f, 0.0f))
+    if (FAILED(hr = d2d_device_context_update_vs_cb(context, &mask_geo->transform, 0.0f, 0.0f, D2D1_LINE_JOIN_MITER, D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_FLAT))
             || FAILED(hr = d2d_device_context_update_ps_cb(context, NULL, NULL, FALSE, FALSE)))
     {
         WARN("Failed to update constant buffers, hr %#lx.\n", hr);
@@ -1473,7 +1478,7 @@ static void d2d_device_context_flush_lines(struct d2d_device_context *context)
     brush.opacity = batch->runs[0].opacity;
     brush.u.solid.color = batch->runs[0].colour;
 
-    if (FAILED(hr = d2d_device_context_update_vs_cb(context, &identity, batch->stroke_width, batch->miter_limit)))
+    if (FAILED(hr = d2d_device_context_update_vs_cb(context, &identity, batch->stroke_width, batch->miter_limit, D2D1_LINE_JOIN_MITER, batch->start_cap, batch->end_cap)))
     {
         WARN("Failed to update vs constant buffer, hr %#lx.\n", hr);
         goto done;
@@ -1532,37 +1537,42 @@ static BOOL d2d_device_context_batch_line(struct d2d_device_context *context, co
         const D2D1_POINT_2F *p1, struct d2d_brush *brush, float stroke_width, ID2D1StrokeStyle *stroke_style)
 {
     struct d2d_stroke_style *stroke_style_impl = unsafe_impl_from_ID2D1StrokeStyle(stroke_style);
+    D2D1_CAP_STYLE start_cap = D2D1_CAP_STYLE_FLAT, end_cap = D2D1_CAP_STYLE_FLAT;
     struct d2d_line_batch *batch = &context->line_batch;
     struct d2d_outline_vertex *v;
     float qx, qy, len, miter_limit;
     struct d2d_line_run *run;
     struct d2d_face *f;
-    size_t base;
+    size_t base, extra;
 
     if (!brush || brush->type != D2D_BRUSH_TYPE_SOLID
             || context->target.type != D2D_TARGET_BITMAP || batch->flushing)
         return FALSE;
 
-    /* The same two things DrawGeometry() takes from a stroke style; caps,
-     * joins and dashes are ignored there as well. */
+    /* What DrawGeometry() takes from a stroke style for a two-point figure;
+     * dashes are ignored there as well. */
     miter_limit = 10.0f;
     if (stroke_style_impl)
     {
         if (stroke_style_impl->desc.transformType == D2D1_STROKE_TRANSFORM_TYPE_FIXED)
             stroke_width /= context->drawing_state.transform.m11;
         miter_limit = stroke_style_impl->desc.miterLimit;
+        start_cap = stroke_style_impl->desc.startCap;
+        end_cap = stroke_style_impl->desc.endCap;
     }
+    extra = (start_cap != D2D1_CAP_STYLE_FLAT ? 4 : 0) + (end_cap != D2D1_CAP_STYLE_FLAT ? 4 : 0);
 
     /* One vertex buffer with 16-bit indices per batch. */
-    if (batch->run_count && (batch->vertex_count + 4 > 0xffff || batch->stroke_width != stroke_width
+    if (batch->run_count && (batch->vertex_count + 4 + extra > 0xffff || batch->stroke_width != stroke_width
             || batch->miter_limit != miter_limit
+            || batch->start_cap != start_cap || batch->end_cap != end_cap
             || memcmp(&batch->transform, &context->drawing_state.transform, sizeof(batch->transform))))
         d2d_device_context_flush_lines(context);
 
     if (!d2d_array_reserve((void **)&batch->vertices, &batch->vertices_size,
-            batch->vertex_count + 4, sizeof(*batch->vertices))
+            batch->vertex_count + 4 + extra, sizeof(*batch->vertices))
             || !d2d_array_reserve((void **)&batch->faces, &batch->faces_size,
-            batch->face_count + 2, sizeof(*batch->faces))
+            batch->face_count + 2 + extra / 2, sizeof(*batch->faces))
             || !d2d_array_reserve((void **)&batch->runs, &batch->runs_size,
             batch->run_count + 1, sizeof(*batch->runs)))
         return FALSE;
@@ -1572,6 +1582,8 @@ static BOOL d2d_device_context_batch_line(struct d2d_device_context *context, co
         batch->transform = context->drawing_state.transform;
         batch->stroke_width = stroke_width;
         batch->miter_limit = miter_limit;
+        batch->start_cap = start_cap;
+        batch->end_cap = end_cap;
     }
 
     run = batch->run_count ? &batch->runs[batch->run_count - 1] : NULL;
@@ -1619,16 +1631,48 @@ static BOOL d2d_device_context_batch_line(struct d2d_device_context *context, co
     batch->face_count += 2;
     run->face_count += 2;
 
+    if (start_cap != D2D1_CAP_STYLE_FLAT)
+    {
+        base = batch->vertex_count;
+        d2d_outline_cap_vertices(&batch->vertices[base], p0, -qx, -qy, TRUE);
+        batch->vertex_count += 4;
+        f = &batch->faces[batch->face_count];
+        f[0].v[0] = base + 2;
+        f[0].v[1] = base + 3;
+        f[0].v[2] = base + 0;
+        f[1].v[0] = base + 0;
+        f[1].v[1] = base + 3;
+        f[1].v[2] = base + 1;
+        batch->face_count += 2;
+        run->face_count += 2;
+    }
+    if (end_cap != D2D1_CAP_STYLE_FLAT)
+    {
+        base = batch->vertex_count;
+        d2d_outline_cap_vertices(&batch->vertices[base], p1, qx, qy, FALSE);
+        batch->vertex_count += 4;
+        f = &batch->faces[batch->face_count];
+        f[0].v[0] = base + 2;
+        f[0].v[1] = base + 3;
+        f[0].v[2] = base + 0;
+        f[1].v[0] = base + 0;
+        f[1].v[1] = base + 3;
+        f[1].v[2] = base + 1;
+        batch->face_count += 2;
+        run->face_count += 2;
+    }
+
     return TRUE;
 }
 
 static void d2d_device_context_draw_geometry(struct d2d_device_context *render_target,
-        const struct d2d_geometry *geometry, struct d2d_brush *brush, float stroke_width, float miter_limit)
+        const struct d2d_geometry *geometry, struct d2d_brush *brush, float stroke_width, float miter_limit,
+        D2D1_LINE_JOIN line_join, D2D1_CAP_STYLE start_cap, D2D1_CAP_STYLE end_cap)
 {
     ID3D11Buffer *ib, *vb;
     HRESULT hr;
 
-    if (FAILED(hr = d2d_device_context_update_vs_cb(render_target, &geometry->transform, stroke_width, miter_limit)))
+    if (FAILED(hr = d2d_device_context_update_vs_cb(render_target, &geometry->transform, stroke_width, miter_limit, line_join, start_cap, end_cap)))
     {
         WARN("Failed to update vs constant buffer, hr %#lx.\n", hr);
         return;
@@ -1765,10 +1809,19 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawGeometry(ID2D1DeviceContext
     }
 
     {
+        D2D1_CAP_STYLE start_cap = D2D1_CAP_STYLE_FLAT, end_cap = D2D1_CAP_STYLE_FLAT;
+        D2D1_LINE_JOIN line_join = D2D1_LINE_JOIN_MITER;
         float miter_limit = 10.0f;
+
         if (stroke_style_impl)
+        {
             miter_limit = stroke_style_impl->desc.miterLimit;
-        d2d_device_context_draw_geometry(context, geometry_impl, brush_impl, stroke_width, miter_limit);
+            line_join = stroke_style_impl->desc.lineJoin;
+            start_cap = stroke_style_impl->desc.startCap;
+            end_cap = stroke_style_impl->desc.endCap;
+        }
+        d2d_device_context_draw_geometry(context, geometry_impl, brush_impl, stroke_width, miter_limit,
+                line_join, start_cap, end_cap);
     }
 }
 
@@ -2503,7 +2556,7 @@ static void d2d_device_context_fill_geometry(struct d2d_device_context *render_t
 {
     HRESULT hr;
 
-    if (FAILED(hr = d2d_device_context_update_vs_cb(render_target, &geometry->transform, 0.0f, 0.0f)))
+    if (FAILED(hr = d2d_device_context_update_vs_cb(render_target, &geometry->transform, 0.0f, 0.0f, D2D1_LINE_JOIN_MITER, D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_FLAT)))
     {
         WARN("Failed to update vs constant buffer, hr %#lx.\n", hr);
         return;
@@ -4632,7 +4685,7 @@ static void STDMETHODCALLTYPE d2d_device_context_Clear(ID2D1DeviceContext6 *ifac
 
     /* Update vs_cb with identity transform for Clear. */
     {
-        struct d2d_vs_cb new_vs;
+        struct d2d_vs_cb new_vs = {{0}};
 
         new_vs.transform_geometry._11 = 1.0f;
         new_vs.transform_geometry._21 = 0.0f;
@@ -8008,6 +8061,7 @@ static const char shape_vs_code_outline[] =
     "float4 transform_geometry_r1;\n"
     "float4 transform_rtx;\n"
     "float4 transform_rty;\n"
+    "float4 stroke_params;\n"
     "\n"
     "struct output\n"
     "{\n"
@@ -8034,10 +8088,15 @@ static const char shape_vs_code_outline[] =
     " *   q⃑ₚᵣₑᵥ = P₀ - Pₚᵣₑᵥ */\n"
     "void main(float2 position : POSITION, float2 prev : PREV, float2 next : NEXT, out struct output o)\n"
     "{\n"
-    "    float2 q_prev, q_next, v_p, q_i;\n"
-    "    float2x2 geom;\n"
+    "    float2 q_prev, q_next, v_p, q_i, pos_w, off_w = 0.0f;\n"
+    "    float2x2 geom, rt;\n"
+    "    float2x3 to_px;\n"
+    "    float hw;\n"
     "\n"
-    "    o.stroke_transform = float2x2(transform_rtx.xy, transform_rty.xy) * transform_geometry_r1.w * 0.5f;\n"
+    "    rt = float2x2(transform_rtx.xy, transform_rty.xy);\n"
+    "    to_px = float2x3(transform_rtx.xyz, transform_rty.xyz);\n"
+    "    hw = transform_geometry_r1.w * 0.5f;\n"
+    "    o.stroke_transform = rt * hw;\n"
     "    o.seam_t = 0.0f;\n"
     "    o.seam_c1 = 0.0f;\n"
     "    o.seam_c2 = 0.0f;\n"
@@ -8048,53 +8107,183 @@ static const char shape_vs_code_outline[] =
     "    geom = float2x2(transform_geometry_r0.xy, transform_geometry_r1.xy);\n"
     "    q_prev = normalize(mul(geom, prev));\n"
     "    q_next = normalize(mul(geom, next));\n"
+    "    pos_w = float2(dot(float3(position, 1.0f), transform_geometry_r0.xyz), dot(float3(position, 1.0f), transform_geometry_r1.xyz));\n"
     "\n"
-    "    /* tan(½θ) = sin(θ) / (1 + cos(θ))\n"
-    "     *         = (q̂ₚᵣₑᵥ⊥ · q̂ₙₑₓₜ) / (1 + (q̂ₚᵣₑᵥ · q̂ₙₑₓₜ)) */\n"
-    "    v_p = float2(-q_prev.y, q_prev.x);\n"
-    "    float denom = 1.0f + dot(q_prev, q_next);\n"
-    "    if (denom < 1e-6f)\n"
-    "        q_i = v_p;\n"
+    "    if (dot(q_prev, q_next) < 0.9999f)\n"
+    "    {\n"
+    "        /* A join or a cap. The four vertices sit on the corner, prev and next\n"
+    "         * are the directions into and out of it (for a cap: outward and back),\n"
+    "         * and the vector lengths name the corner of the kite: |prev| 1/2 and\n"
+    "         * |next| 1/2 give inner point, edge point of prev, edge point of next,\n"
+    "         * tip; a cap carries 3/4 instead of 1/2 on the next vector (start cap)\n"
+    "         * or on the prev vector (end cap). The kite is widened by 0.75 px like\n"
+    "         * the segment quads, and the pixel shader gets what it needs to ramp\n"
+    "         * the real outline: the offset from the corner and the radius for a\n"
+    "         * round join or cap (b.w = 3), or the signed pixel distances to three\n"
+    "         * bounding lines for the others (b.w = 4). */\n"
+    "        float2 pp, pn, m0, mh, c_px, v_px, d1 = 0.0f, d2 = 0.0f, d3 = 0.0f;\n"
+    "        float2 inner = 0.0f, e_p = 0.0f, e_n = 0.0f, tip = 0.0f, off = 0.0f;\n"
+    "        float2 a1 = 0.0f, a2 = 0.0f, a3 = 0.0f, n1 = 0.0f, n2 = 0.0f, n3 = 0.0f;\n"
+    "        float s, cosh, limit, mlen, hw_px, expand, marker = 4.0f;\n"
+    "        uint join, cap, role;\n"
+    "        bool hairpin, bevel, is_cap, start;\n"
+    "\n"
+    "        is_cap = max(length(prev), length(next)) > 2.5f;\n"
+    "        start = length(next) > 2.5f;\n"
+    "        if (is_cap)\n"
+    "            role = (length(prev) > (start ? 1.5f : 3.5f) ? 2 : 0) + (length(next) > (start ? 3.5f : 1.5f) ? 1 : 0);\n"
+    "        else\n"
+    "            role = (length(prev) > 1.5f ? 2 : 0) + (length(next) > 1.5f ? 1 : 0);\n"
+    "        join = (uint)stroke_params.x;\n"
+    "        cap = (uint)(start ? stroke_params.y : stroke_params.z);\n"
+    "        pp = float2(-q_prev.y, q_prev.x);\n"
+    "        pn = float2(-q_next.y, q_next.x);\n"
+    "        m0 = pp + pn;\n"
+    "        cosh = length(m0) * 0.5f;\n"
+    "        hairpin = cosh < 0.05f;\n"
+    "        /* The outer side is the one the path turns away from. At a hairpin\n"
+    "         * or a cap m0 is rounding noise, and the four vertices would each\n"
+    "         * decide the sign for themselves, so the rectangle takes the sides\n"
+    "         * as they are. */\n"
+    "        s = !hairpin && dot(m0, q_next - q_prev) > 0.0f ? -1.0f : 1.0f;\n"
+    "        pp *= s;\n"
+    "        pn *= s;\n"
+    "        m0 *= s;\n"
+    "        mh = hairpin ? q_prev : m0 / (2.0f * cosh);\n"
+    "        limit = max(transform_geometry_r0.w, 1.0f);\n"
+    "        mlen = hairpin ? limit : min(1.0f / cosh, limit);\n"
+    "        hw_px = length(mul(rt, mh)) * hw;\n"
+    "        expand = hw_px > 0.001f ? 0.75f / hw_px : 0.0f;\n"
+    "        c_px = mul(to_px, float3(pos_w, 1.0f));\n"
+    "\n"
+    "        if (is_cap)\n"
+    "        {\n"
+    "            /* q_prev points outward, pp and pn are the two sides of the stroke. */\n"
+    "            /* Round and square caps fill the rectangle past the end, whose\n"
+    "             * four corners the four vertices take: inner and e_p on the\n"
+    "             * stroke's edge, tip and e_n out at the cap's end. */\n"
+    "            if (cap == 2)\n"
+    "            {\n"
+    "                inner = pp;\n"
+    "                e_p = pp + mh;\n"
+    "                e_n = pn;\n"
+    "                tip = pn + mh;\n"
+    "                marker = 3.0f;\n"
+    "            }\n"
+    "            else if (cap == 1)\n"
+    "            {\n"
+    "                inner = pp;\n"
+    "                e_p = pp + mh;\n"
+    "                e_n = pn;\n"
+    "                tip = pn + mh;\n"
+    "                a1 = c_px + mul(rt, pp * hw);\n"
+    "                a2 = c_px + mul(rt, pn * hw);\n"
+    "                a3 = c_px + mul(rt, mh * hw);\n"
+    "                d1 = normalize(mul(rt, mh));\n"
+    "                n1 = float2(-d1.y, d1.x);\n"
+    "                n1 *= sign(dot(n1, c_px - a1));\n"
+    "                n2 = -n1;\n"
+    "                n3 = -d1;\n"
+    "            }\n"
+    "            else if (cap == 3)\n"
+    "            {\n"
+    "                e_p = pp;\n"
+    "                e_n = pn;\n"
+    "                tip = mh;\n"
+    "                a1 = c_px + mul(rt, pp * hw);\n"
+    "                a2 = c_px + mul(rt, pn * hw);\n"
+    "                d1 = normalize(mul(rt, mh - pp));\n"
+    "                d2 = normalize(mul(rt, mh - pn));\n"
+    "                n1 = float2(-d1.y, d1.x);\n"
+    "                n1 *= sign(dot(n1, c_px - a1));\n"
+    "                n2 = float2(-d2.y, d2.x);\n"
+    "                n2 *= sign(dot(n2, c_px - a2));\n"
+    "                a3 = a1;\n"
+    "                n3 = n1;\n"
+    "            }\n"
+    "        }\n"
+    "        else if (join == 2)\n"
+    "        {\n"
+    "            /* Round join; at a hairpin the half disc past the corner, covered\n"
+    "             * by the rectangle corner, edge points, tip. */\n"
+    "            inner = hairpin ? pp : float2(0.0f, 0.0f);\n"
+    "            e_p = hairpin ? pp + mh : pp;\n"
+    "            e_n = hairpin ? pn : pn;\n"
+    "            tip = hairpin ? pn + mh : mh * mlen;\n"
+    "            marker = 3.0f;\n"
+    "        }\n"
+    "        else if (!hairpin)\n"
+    "        {\n"
+    "            bevel = join == 1 || (join == 3 && 1.0f / cosh > limit);\n"
+    "            e_p = pp;\n"
+    "            e_n = pn;\n"
+    "            tip = mh * (bevel ? cosh : mlen);\n"
+    "            a1 = c_px + mul(rt, pp * hw);\n"
+    "            a2 = c_px + mul(rt, pn * hw);\n"
+    "            d1 = normalize(mul(rt, q_prev));\n"
+    "            d2 = normalize(mul(rt, q_next));\n"
+    "            n1 = float2(-d1.y, d1.x);\n"
+    "            n1 *= sign(dot(n1, c_px - a1));\n"
+    "            n2 = float2(-d2.y, d2.x);\n"
+    "            n2 *= sign(dot(n2, c_px - a2));\n"
+    "            if (bevel)\n"
+    "            {\n"
+    "                d3 = normalize(a2 - a1);\n"
+    "                a3 = a1;\n"
+    "                n3 = float2(-d3.y, d3.x);\n"
+    "                n3 *= sign(dot(n3, c_px - a3));\n"
+    "            }\n"
+    "            else\n"
+    "            {\n"
+    "                a3 = c_px + mul(rt, mh * hw * mlen);\n"
+    "                n3 = -normalize(mul(rt, mh));\n"
+    "            }\n"
+    "        }\n"
+    "        /* A miter or bevel join at a hairpin, and a flat cap, draw nothing. */\n"
+    "\n"
+    "        off = role == 1 ? e_p : role == 2 ? e_n : role == 3 ? tip : inner;\n"
+    "        off_w = off * hw * (1.0f + expand);\n"
+    "        v_px = mul(to_px, float3(pos_w + off_w, 1.0f));\n"
+    "        if (marker == 3.0f)\n"
+    "            o.b = float4(v_px - c_px, hw_px, 3.0f);\n"
+    "        else\n"
+    "            o.b = float4(dot(n1, v_px - a1), dot(n2, v_px - a2), dot(n3, v_px - a3), 4.0f);\n"
+    "    }\n"
     "    else\n"
-    "        q_i = (-dot(v_p, q_next) / denom) * q_prev + v_p;\n"
-    "    if (transform_geometry_r0.w > 0.0f && length(q_i) > transform_geometry_r0.w)\n"
-    "        q_i = normalize(q_i) * transform_geometry_r0.w;\n"
+    "    {\n"
+    "        /* tan(½θ) = sin(θ) / (1 + cos(θ))\n"
+    "         *         = (q̂ₚᵣₑᵥ⊥ · q̂ₙₑₓₜ) / (1 + (q̂ₚᵣₑᵥ · q̂ₙₑₓₜ)) */\n"
+    "        float side, q_len, hw_pixels, expand, denom;\n"
+    "        float2 q_norm;\n"
     "\n"
-    "    float side = length(prev) > 1.5f ? -1.0f : 1.0f;\n"
-    "    float2x2 rt = float2x2(transform_rtx.xy, transform_rty.xy);\n"
-    "    float q_len = length(q_i);\n"
-    "    float2 q_norm = q_len > 0.0001f ? q_i / q_len : float2(0.0f, 0.0f);\n"
-    "    float hw_pixels = length(mul(rt, q_norm)) * transform_geometry_r1.w * 0.5f * q_len;\n"
-    "    float expand = hw_pixels > 0.001f ? 0.75f / hw_pixels : 0.0f;\n"
-    "    o.b = float4(side * (1.0f + expand), 0.0, 0.0, 1.0);\n"
+    "        v_p = float2(-q_prev.y, q_prev.x);\n"
+    "        denom = 1.0f + dot(q_prev, q_next);\n"
+    "        if (denom < 1e-6f)\n"
+    "            q_i = v_p;\n"
+    "        else\n"
+    "            q_i = (-dot(v_p, q_next) / denom) * q_prev + v_p;\n"
+    "        if (transform_geometry_r0.w > 0.0f && length(q_i) > transform_geometry_r0.w)\n"
+    "            q_i = normalize(q_i) * transform_geometry_r0.w;\n"
     "\n"
-    "    o.p = float2(dot(float3(position, 1.0f), transform_geometry_r0.xyz), dot(float3(position, 1.0f), transform_geometry_r1.xyz)) + transform_geometry_r1.w * 0.5f * (1.0f + expand) * q_i;\n"
-    "    position = mul(float2x3(transform_rtx.xyz, transform_rty.xyz), float3(o.p, 1.0f))\n"
-    "            * float2(transform_rtx.w, transform_rty.w);\n"
+    "        side = length(prev) > 1.5f ? -1.0f : 1.0f;\n"
+    "        q_len = length(q_i);\n"
+    "        q_norm = q_len > 0.0001f ? q_i / q_len : float2(0.0f, 0.0f);\n"
+    "        hw_pixels = length(mul(rt, q_norm)) * hw * q_len;\n"
+    "        expand = hw_pixels > 0.001f ? 0.75f / hw_pixels : 0.0f;\n"
+    "        o.b = float4(side * (1.0f + expand), 0.0, 0.0, 1.0);\n"
+    "        off_w = hw * (1.0f + expand) * q_i;\n"
+    "    }\n"
+    "\n"
+    "    o.p = pos_w + off_w;\n"
+    "    position = mul(to_px, float3(o.p, 1.0f)) * float2(transform_rtx.w, transform_rty.w);\n"
     "    o.position = float4(position + float2(-1.0f, 1.0f), 0.0f, 1.0f);\n"
     "}\n";
-/*     ⎡p0.x p0.y 1⎤
- * A = ⎢p1.x p1.y 1⎥
- *     ⎣p2.x p2.y 1⎦
- *
- *     ⎡0 0⎤
- * B = ⎢½ 0⎥
- *     ⎣1 1⎦
- *
- * A' = ⎡p1.x-p0.x p1.y-p0.y⎤
- *      ⎣p2.x-p0.x p2.y-p0.y⎦
- *
- * B' = ⎡½ 0⎤
- *      ⎣1 1⎦
- *
- * A'T = B'
- * T = A'⁻¹B'
- */
 static const char shape_vs_code_bezier_outline[] =
     "float4 transform_geometry_r0;\n"
     "float4 transform_geometry_r1;\n"
     "float4 transform_rtx;\n"
     "float4 transform_rty;\n"
+    "float4 stroke_params;\n"
     "\n"
     "struct output\n"
     "{\n"
@@ -8207,6 +8396,7 @@ static const char shape_vs_code_arc_outline[] =
     "float4 transform_geometry_r1;\n"
     "float4 transform_rtx;\n"
     "float4 transform_rty;\n"
+    "float4 stroke_params;\n"
     "\n"
     "struct output\n"
     "{\n"
@@ -8284,6 +8474,7 @@ static const char shape_vs_code_triangle[] =
     "float4 transform_geometry_r1;\n"
     "float4 transform_rtx;\n"
     "float4 transform_rty;\n"
+    "float4 stroke_params;\n"
     "\n"
     "struct output\n"
     "{\n"
@@ -8319,6 +8510,7 @@ static const char shape_vs_code_fill_aa[] =
     "float4 transform_geometry_r1;\n"
     "float4 transform_rtx;\n"
     "float4 transform_rty;\n"
+    "float4 stroke_params;\n"
     "\n"
     "struct output\n"
     "{\n"
@@ -8372,6 +8564,7 @@ static const char shape_vs_code_curve[] =
     "float4 transform_geometry_r1;\n"
     "float4 transform_rtx;\n"
     "float4 transform_rty;\n"
+    "float4 stroke_params;\n"
     "\n"
     "struct output\n"
     "{\n"
@@ -8668,85 +8861,51 @@ static const char shape_ps_code[] =
     "\n"
     "    if (outline)\n"
     "    {\n"
+    "        /* Every outline vertex layout boils down to one signed distance to\n"
+    "         * the stroke edge in pixels, positive inside; the antialiasing ramp\n"
+    "         * and the aliased clip are shared below.\n"
+    "         *\n"
+    "         * Straight segment (b.w = 1): b.x runs from -(1 + expand) to\n"
+    "         * +(1 + expand) across the stroke, |b.x| = 1 is the edge.\n"
+    "         * Round join or cap (b.w = 3): b.xy is the pixel offset from the\n"
+    "         * corner, b.z the half width in pixels.\n"
+    "         * Mitered, beveled or square join or cap (b.w = 4): b.xyz are\n"
+    "         * the signed pixel distances to three bounding lines.\n"
+    "         * Curves: the implicit form (u² - v = 0 for Béziers, u² + v² - 1 = 0\n"
+    "         * for arcs) in texture space, with the screen-space partial\n"
+    "         * derivatives to convert the distance to pixels,\n"
+    "         * d(x, y) = |f(x, y)| / ‖∇f(x, y)‖, and the stroke's half width in\n"
+    "         * the same units from the stroke transform. */\n"
     "        float2 du, dv, df;\n"
-    "        float4 uv;\n"
+    "        float4 uv = i.b;\n"
+    "        float edge;\n"
     "\n"
-    "        /* Evaluate the implicit form of the curve (u² - v = 0\n"
-    "         * for Béziers, u² + v² - 1 = 0 for arcs) in texture\n"
-    "         * space, using the screen-space partial derivatives\n"
-    "         * to convert the calculated distance to object space.\n"
-    "         *\n"
-    "         * d(x, y) = |f(x, y)| / ‖∇f(x, y)‖\n"
-    "         *         = |f(x, y)| / √((∂f/∂x)² + (∂f/∂y)²)\n"
-    "         *\n"
-    "         * For Béziers:\n"
-    "         * f(x, y) = u(x, y)² - v(x, y)\n"
-    "         * ∂f/∂x = 2u · ∂u/∂x - ∂v/∂x\n"
-    "         * ∂f/∂y = 2u · ∂u/∂y - ∂v/∂y\n"
-    "         *\n"
-    "         * For arcs:\n"
-    "         * f(x, y) = u(x, y)² + v(x, y)² - 1\n"
-    "         * ∂f/∂x = 2u · ∂u/∂x + 2v · ∂v/∂x\n"
-    "         * ∂f/∂y = 2u · ∂u/∂y + 2v · ∂v/∂y\n"
-    "         *\n"
-    "         * When aa_mode is set, instead of hard clip() we use:\n"
-    "         * aa = saturate(edge / pixel_width + 0.5)\n"
-    "         * for smooth ~1px alpha transitions. */\n"
-    "        uv = i.b;\n"
-    "\n"
-    "        /* Straight line outline: b.x interpolates from -(1+expand) to +(1+expand)\n"
-    "         * across stroke width, where |b.x|=1 is the nominal stroke edge.\n"
-    "         * b.w=1 marks this as a straight line (vs bezier/arc). */\n"
     "        if (uv.w == 1.0f)\n"
     "        {\n"
-    "            if (aa_mode)\n"
-    "            {\n"
-    "                float edge_dist = 1.0f - abs(uv.x);\n"
-    "                float grad = length(float2(ddx(uv.x), ddy(uv.x)));\n"
-    "                float edge_pixels = edge_dist / max(grad, 0.0001f);\n"
-    "                float aa = saturate(edge_pixels + 0.5f);\n"
-    "                colour.a *= aa;\n"
-    "                colour.rgb *= aa;\n"
-    "            }\n"
+    "            float grad = length(float2(ddx(uv.x), ddy(uv.x)));\n"
+    "            edge = (1.0f - abs(uv.x)) / max(grad, 0.0001f);\n"
+    "        }\n"
+    "        else if (uv.w == 3.0f)\n"
+    "        {\n"
+    "            edge = uv.z - length(uv.xy);\n"
+    "        }\n"
+    "        else if (uv.w == 4.0f)\n"
+    "        {\n"
+    "            edge = min(uv.x, min(uv.y, uv.z));\n"
     "        }\n"
     "        else\n"
     "        {\n"
+    "            float side, val, grad_len;\n"
     "\n"
-    "        du = float2(ddx(uv.x), ddy(uv.x));\n"
-    "        dv = float2(ddx(uv.y), ddy(uv.y));\n"
-    "\n"
-    "        if (!is_arc)\n"
-    "        {\n"
-    "            df = 2.0f * uv.x * du - dv;\n"
-    "            float side = dot(df, uv.zw);\n"
-    "            float val = uv.x * uv.x - uv.y;\n"
-    "            float grad_len = length(mul(i.stroke_transform, df));\n"
-    "\n"
-    "            if (aa_mode)\n"
+    "            du = float2(ddx(uv.x), ddy(uv.x));\n"
+    "            dv = float2(ddx(uv.y), ddy(uv.y));\n"
+    "            if (!is_arc)\n"
     "            {\n"
-    "                if (side < 0.0f) discard;\n"
-    "                float edge = grad_len - abs(val);\n"
-    "                float pixel_w = length(df);\n"
-    "                float aa = saturate(edge / max(pixel_w, 0.0001f) + 0.5f);\n"
-    "                colour.a *= aa;\n"
-    "                colour.rgb *= aa;\n"
+    "                df = 2.0f * uv.x * du - dv;\n"
+    "                val = abs(uv.x * uv.x - uv.y);\n"
     "            }\n"
     "            else\n"
     "            {\n"
-    "                clip(side);\n"
-    "                clip(grad_len - abs(val));\n"
-    "            }\n"
-    "        }\n"
-    "        else\n"
-    "        {\n"
-    "            df = 2.0f * uv.x * du + 2.0f * uv.y * dv;\n"
-    "            float side = dot(df, uv.zw);\n"
-    "            float val = uv.x * uv.x + uv.y * uv.y - 1.0f;\n"
-    "            float grad_len = length(mul(i.stroke_transform, df));\n"
-    "\n"
-    "            if (aa_mode)\n"
-    "            {\n"
-    "                if (side < 0.0f) discard;\n"
     "                /* |f|/|∇f| with f = r² - 1 is (r - 1)(r + 1)/(2r): short of\n"
     "                 * the distance to the circle by r - 1 over 2 outside and\n"
     "                 * long by as much inside, which for a 3.4 px stroke on a\n"
@@ -8754,18 +8913,25 @@ static const char shape_ps_code[] =
     "                 * edge came out too bright and the inner one too dark.\n"
     "                 * Scale f back to r - 1 in the same units. */\n"
     "                float r_uv = sqrt(uv.x * uv.x + uv.y * uv.y);\n"
-    "                float edge = grad_len - abs(val) * 2.0f * r_uv / max(r_uv + 1.0f, 0.0001f);\n"
-    "                float pixel_w = length(df);\n"
-    "                float aa = saturate(edge / max(pixel_w, 0.0001f) + 0.5f);\n"
-    "                colour.a *= aa;\n"
-    "                colour.rgb *= aa;\n"
+    "                df = 2.0f * uv.x * du + 2.0f * uv.y * dv;\n"
+    "                val = abs(uv.x * uv.x + uv.y * uv.y - 1.0f) * 2.0f * r_uv / max(r_uv + 1.0f, 0.0001f);\n"
     "            }\n"
-    "            else\n"
-    "            {\n"
-    "                clip(side);\n"
-    "                clip(grad_len - abs(val));\n"
-    "            }\n"
+    "            side = dot(df, uv.zw);\n"
+    "            grad_len = length(mul(i.stroke_transform, df));\n"
+    "            if (side < 0.0f)\n"
+    "                discard;\n"
+    "            edge = (grad_len - val) / max(length(df), 0.0001f);\n"
     "        }\n"
+    "\n"
+    "        if (aa_mode)\n"
+    "        {\n"
+    "            float aa = saturate(edge + 0.5f);\n"
+    "            colour.a *= aa;\n"
+    "            colour.rgb *= aa;\n"
+    "        }\n"
+    "        else\n"
+    "        {\n"
+    "            clip(edge);\n"
     "        }\n"
     "    }\n"
     "    else\n"

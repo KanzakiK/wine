@@ -71,6 +71,19 @@ This is the recommended branch. What it changes, by subsystem:
   inside the curve and its stroke moved inwards by a fifth of a pixel. RMS error against
   box-filter coverage on the stroked ring of issue 444: 0.067 → 0.011 (Windows 10 0.032),
   scaled stroke 0.169 → 0.011; fills and the d2d1 tests unchanged
+- **D2D1 stroke styles**: `DrawGeometry()` and `DrawLine()` took only the miter limit and the
+  transform type from a stroke style; every join was mitered and every end flat, whatever the
+  style asked for, and the mitered join fan was all but invisible under antialiasing, leaving
+  only its spike. Serum 2 strokes its waveforms with round joins and round caps, and the spikes
+  showed as thin dark hairs at every peak once the view was zoomed in. Joins now follow
+  `lineJoin` — miter clipped at the limit, bevel, miter-or-bevel, round — and open figures
+  and lines get their `startCap`/`endCap` (flat, square, round, triangle). The corner's four
+  vertices are built by the outline vertex shader from the two directions and the join type,
+  and the pixel shader ramps the exact outline (a disc for round, three bounding lines for the
+  rest) instead of relying on the geometry. On the zig-zag of `projects/d2d1-curve-edge-aa`
+  the round-joined stroke went from RMS 0.098 to 0.007 against the ideal coverage (Windows 10
+  0.015), miter and bevel to 0.021 and 0.024 against Windows; 28 stroke figure checks in the
+  d2d1 suite pass that did not before (56 → 28 failures). Dashes are still ignored
 - **D2D1 layers on an opaque target**: a layer bitmap inherited the target's alpha mode,
   so on a render target created as `ALPHA_MODE_IGNORE` the layer's own coverage was thrown
   away and everything drawn inside it turned the background colour, usually black. All
