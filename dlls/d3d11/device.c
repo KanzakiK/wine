@@ -4778,7 +4778,7 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFormatSupport(ID3D11Device5 *
     enum wined3d_format_id wined3d_format;
     D3D_FEATURE_LEVEL feature_level;
     struct wined3d *wined3d;
-    unsigned int i;
+    unsigned int i, props;
 
     static const struct
     {
@@ -4804,7 +4804,7 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFormatSupport(ID3D11Device5 *
     };
     HRESULT hr;
 
-    FIXME("iface %p, format %u, format_support %p partial-stub!\n", iface, format, format_support);
+    TRACE("iface %p, format %s, format_support %p.\n", iface, debug_dxgi_format(format), format_support);
 
     wined3d_format = wined3dformat_from_dxgi_format(format);
     if (format && !wined3d_format)
@@ -4815,6 +4815,7 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFormatSupport(ID3D11Device5 *
     }
 
     *format_support = 0;
+    props = dxgi_format_properties(format);
 
     wined3d_mutex_lock();
     feature_level = device->state->feature_level;
@@ -4855,7 +4856,10 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFormatSupport(ID3D11Device5 *
         if (feature_level >= D3D_FEATURE_LEVEL_10_1)
             *format_support |= D3D11_FORMAT_SUPPORT_SHADER_GATHER;
 
-        if (*format_support & D3D11_FORMAT_SUPPORT_DEPTH_STENCIL)
+        /* Comparison sampling belongs to the formats a shader reads a depth
+         * texture through (R32_FLOAT, R24_UNORM_X8_TYPELESS, ...), not to the
+         * D* formats, which can only be bound as depth-stencil. */
+        if (props & D3D11_FORMAT_PROP_DEPTH_READ)
         {
             if (feature_level >= D3D_FEATURE_LEVEL_10_0)
                 *format_support |= D3D11_FORMAT_SUPPORT_SHADER_SAMPLE_COMPARISON;
@@ -4864,6 +4868,9 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFormatSupport(ID3D11Device5 *
                 *format_support |= D3D11_FORMAT_SUPPORT_SHADER_GATHER_COMPARISON;
         }
     }
+
+    if (feature_level < D3D_FEATURE_LEVEL_11_0)
+        *format_support &= ~D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
 
     /* d3d11 requires 4 and 8 sample counts support for formats reported to
      * support multisample. */
@@ -4875,6 +4882,73 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFormatSupport(ID3D11Device5 *
         *format_support |= D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE
                 | D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET
                 | D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
+    }
+
+    /* wined3d answers for the backend's texture, which is typed, filterable
+     * and blendable regardless of the DXGI format it stands in for. Windows
+     * answers for the format: a typeless one is only storage until a view
+     * types it, integers are neither filtered, blended nor resolved, a D*
+     * format binds as depth-stencil only while its shader view does the
+     * reading, compressed and sRGB formats fit no buffer, and video formats
+     * have neither mips nor cubes. Measured on Windows 10 for every format
+     * at feature levels 9_3 to 11_1. */
+    if (props & D3D11_FORMAT_PROP_TYPELESS)
+        *format_support &= D3D11_FORMAT_SUPPORT_TEXTURE1D | D3D11_FORMAT_SUPPORT_TEXTURE2D
+                | D3D11_FORMAT_SUPPORT_TEXTURE3D | D3D11_FORMAT_SUPPORT_TEXTURECUBE
+                | D3D11_FORMAT_SUPPORT_MIP | D3D11_FORMAT_SUPPORT_CPU_LOCKABLE;
+    if (props & D3D11_FORMAT_PROP_INTEGER)
+        *format_support &= ~(D3D11_FORMAT_SUPPORT_SHADER_SAMPLE | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE_COMPARISON
+                | D3D11_FORMAT_SUPPORT_SHADER_GATHER | D3D11_FORMAT_SUPPORT_SHADER_GATHER_COMPARISON
+                | D3D11_FORMAT_SUPPORT_BLENDABLE | D3D11_FORMAT_SUPPORT_MIP_AUTOGEN
+                | D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE);
+    if (props & D3D11_FORMAT_PROP_DEPTH)
+        *format_support &= D3D11_FORMAT_SUPPORT_TEXTURE1D | D3D11_FORMAT_SUPPORT_TEXTURE2D
+                | D3D11_FORMAT_SUPPORT_TEXTURECUBE | D3D11_FORMAT_SUPPORT_MIP
+                | D3D11_FORMAT_SUPPORT_DEPTH_STENCIL | D3D11_FORMAT_SUPPORT_CPU_LOCKABLE
+                | D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
+    if (props & D3D11_FORMAT_PROP_DEPTH_VIEW)
+        *format_support &= D3D11_FORMAT_SUPPORT_TEXTURE1D | D3D11_FORMAT_SUPPORT_TEXTURE2D
+                | D3D11_FORMAT_SUPPORT_TEXTURECUBE | D3D11_FORMAT_SUPPORT_SHADER_LOAD
+                | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE_COMPARISON
+                | D3D11_FORMAT_SUPPORT_SHADER_GATHER | D3D11_FORMAT_SUPPORT_SHADER_GATHER_COMPARISON
+                | D3D11_FORMAT_SUPPORT_MIP | D3D11_FORMAT_SUPPORT_CPU_LOCKABLE
+                | D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
+    if (props & D3D11_FORMAT_PROP_COMPRESSED)
+        *format_support &= ~(D3D11_FORMAT_SUPPORT_BUFFER | D3D11_FORMAT_SUPPORT_IA_VERTEX_BUFFER
+                | D3D11_FORMAT_SUPPORT_IA_INDEX_BUFFER | D3D11_FORMAT_SUPPORT_TEXTURE1D
+                | D3D11_FORMAT_SUPPORT_RENDER_TARGET | D3D11_FORMAT_SUPPORT_BLENDABLE
+                | D3D11_FORMAT_SUPPORT_MIP_AUTOGEN | D3D11_FORMAT_SUPPORT_DEPTH_STENCIL
+                | D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE | D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET
+                | D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD | D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW);
+    if (props & D3D11_FORMAT_PROP_SRGB)
+        *format_support &= ~(D3D11_FORMAT_SUPPORT_BUFFER | D3D11_FORMAT_SUPPORT_IA_VERTEX_BUFFER
+                | D3D11_FORMAT_SUPPORT_IA_INDEX_BUFFER | D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW);
+    if (props & D3D11_FORMAT_PROP_VIDEO)
+        *format_support &= ~(D3D11_FORMAT_SUPPORT_TEXTURE1D | D3D11_FORMAT_SUPPORT_TEXTURE3D
+                | D3D11_FORMAT_SUPPORT_TEXTURECUBE | D3D11_FORMAT_SUPPORT_MIP
+                | D3D11_FORMAT_SUPPORT_MIP_AUTOGEN);
+
+    /* The remaining bits are properties of the format rather than of the
+     * backend, for a format the backend supports at all. Below 10_0 Windows
+     * reports no casting and no stream output, and scan-out only for the
+     * 8-bit RGBA and BGRA formats. */
+    if (*format_support)
+    {
+        if (feature_level >= D3D_FEATURE_LEVEL_10_0)
+        {
+            if (props & D3D11_FORMAT_PROP_CASTABLE)
+                *format_support |= D3D11_FORMAT_SUPPORT_CAST_WITHIN_BIT_LAYOUT;
+            if (props & D3D11_FORMAT_PROP_STREAM_OUTPUT
+                    && *format_support & (D3D11_FORMAT_SUPPORT_BUFFER | D3D11_FORMAT_SUPPORT_IA_VERTEX_BUFFER))
+                *format_support |= D3D11_FORMAT_SUPPORT_SO_BUFFER;
+        }
+        if (props & D3D11_FORMAT_PROP_DISPLAY && *format_support & D3D11_FORMAT_SUPPORT_RENDER_TARGET
+                && (feature_level >= D3D_FEATURE_LEVEL_10_0 || !(props & D3D11_FORMAT_PROP_DISPLAY_FL10)))
+        {
+            *format_support |= D3D11_FORMAT_SUPPORT_DISPLAY;
+            if (props & D3D11_FORMAT_PROP_BACK_BUFFER_CAST)
+                *format_support |= D3D11_FORMAT_SUPPORT_BACK_BUFFER_CAST;
+        }
     }
 
     return *format_support ? S_OK : E_FAIL;
@@ -5164,6 +5238,55 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFeatureSupport(ID3D11Device5 
             }
 
             return d3d11_device_CheckFormatSupport(iface, data->InFormat, &data->OutFormatSupport);
+        }
+
+        case D3D11_FEATURE_FORMAT_SUPPORT2:
+        {
+            D3D11_FEATURE_DATA_FORMAT_SUPPORT2 *data = feature_support_data;
+            unsigned int support;
+
+            if (feature_support_data_size != sizeof(*data))
+            {
+                WARN("Invalid size %u for D3D11_FEATURE_FORMAT_SUPPORT2.\n", feature_support_data_size);
+                return E_INVALIDARG;
+            }
+
+            data->OutFormatSupport2 = 0;
+            if (FAILED(hr = d3d11_device_CheckFormatSupport(iface, data->InFormat, &support)))
+                return hr;
+
+            /* A typed UAV can be stored to in any format it exists for; loads
+             * are guaranteed for the three R32 formats only, the rest hang on
+             * D3D11_OPTIONS2.TypedUAVLoadAdditionalFormats, which is not
+             * reported. Tiled resources, output merger logic ops and shared
+             * resources are not reported either, so neither are their bits;
+             * Windows fails the call when no bit is set. */
+            if (device->state->feature_level >= D3D_FEATURE_LEVEL_11_0
+                    && support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW)
+            {
+                data->OutFormatSupport2 |= D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE;
+                switch (data->InFormat)
+                {
+                    case DXGI_FORMAT_R32_UINT:
+                    case DXGI_FORMAT_R32_SINT:
+                        data->OutFormatSupport2 |= D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD
+                                | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_ADD
+                                | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_BITWISE_OPS
+                                | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_COMPARE_STORE_OR_COMPARE_EXCHANGE
+                                | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_EXCHANGE
+                                | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_SIGNED_MIN_OR_MAX
+                                | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_UNSIGNED_MIN_OR_MAX;
+                        break;
+                    case DXGI_FORMAT_R32_FLOAT:
+                        data->OutFormatSupport2 |= D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD
+                                | D3D11_FORMAT_SUPPORT2_UAV_ATOMIC_EXCHANGE;
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+            return data->OutFormatSupport2 ? S_OK : E_FAIL;
         }
 
         case D3D11_FEATURE_D3D9_SIMPLE_INSTANCING_SUPPORT:
