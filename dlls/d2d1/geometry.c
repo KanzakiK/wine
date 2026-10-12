@@ -3602,14 +3602,27 @@ static BOOL d2d_path_geometry_add_figure(struct d2d_geometry *geometry)
     return TRUE;
 }
 
+/* The four vertices of a join sit on the corner. "prev" and "next" are the unit
+ * directions into and out of it; which corner of the join kite a vertex stands
+ * for is encoded in the vector lengths, 1 or 2: inner point (1, 1), edge point
+ * of prev (1, 2), edge point of next (2, 1), tip (2, 2). The outline vertex
+ * shader builds the kite for the stroke's line join from that, so the join
+ * type does not have to be known when the geometry is tessellated. A straight
+ * continuation needs no join; a hairpin is left to the shader, which draws the
+ * half disc of a round join there and nothing for the others. */
 static BOOL d2d_geometry_outline_add_join(struct d2d_geometry *geometry,
         const D2D1_POINT_2F *prev, const D2D1_POINT_2F *p0, const D2D1_POINT_2F *next)
 {
-    static const D2D1_POINT_2F origin = {0.0f, 0.0f};
     struct d2d_outline_vertex *v;
     struct d2d_face *f;
     size_t base_idx;
-    float ccw;
+    float dx, dy;
+
+    /* prev points from p0 back to the previous vertex. */
+    dx = -prev->x;
+    dy = -prev->y;
+    if (dx * next->x + dy * next->y > 0.9999f)
+        return TRUE;
 
     if (!d2d_array_reserve((void **)&geometry->outline.vertices, &geometry->outline.vertices_size,
             geometry->outline.vertex_count + 4, sizeof(*geometry->outline.vertices)))
@@ -3628,53 +3641,62 @@ static BOOL d2d_geometry_outline_add_join(struct d2d_geometry *geometry,
     }
     f = &geometry->outline.faces[geometry->outline.face_count];
 
-    ccw = d2d_point_ccw(&origin, prev, next);
-    if (ccw == 0.0f)
-    {
-        /* Collinear case: prev and next are parallel. Check if same direction
-         * (straight through) or opposite direction (U-turn/hairpin).
-         * In both cases, keep all vertices at p0 — the vertex shader computes
-         * the actual stroke-width offset. The previous code offset v[2]/v[3]
-         * by a hardcoded 25.0f in geometry space, creating visible spikes. */
-        float dot = prev->x * next->x + prev->y * next->y;
-        if (dot >= 0.0f)
-        {
-            /* Same direction: the two segments continue straight.
-             * Create a degenerate join (zero area) since no visible join is needed. */
-            d2d_outline_vertex_set(&v[0], p0->x, p0->y, -prev->x, -prev->y, -prev->x, -prev->y);
-            d2d_outline_vertex_set(&v[1], p0->x, p0->y,  prev->x,  prev->y,  prev->x,  prev->y);
-            d2d_outline_vertex_set(&v[2], p0->x, p0->y,  prev->x,  prev->y,  prev->x,  prev->y);
-            d2d_outline_vertex_set(&v[3], p0->x, p0->y, -prev->x, -prev->y, -prev->x, -prev->y);
-        }
-        else
-        {
-            /* U-turn (hairpin): segments go in opposite directions.
-             * Create a flat end cap by using perpendicular directions. */
-            float perp_x = -prev->y, perp_y = prev->x;
-            d2d_outline_vertex_set(&v[0], p0->x, p0->y,  perp_x,  perp_y, -prev->x, -prev->y);
-            d2d_outline_vertex_set(&v[1], p0->x, p0->y, -perp_x, -perp_y, -perp_x, -perp_y);
-            d2d_outline_vertex_set(&v[2], p0->x, p0->y, -perp_x, -perp_y,  prev->x,  prev->y);
-            d2d_outline_vertex_set(&v[3], p0->x, p0->y,  prev->x,  prev->y,  prev->x,  prev->y);
-        }
-    }
-    else if (ccw < 0.0f)
-    {
-        d2d_outline_vertex_set(&v[0], p0->x, p0->y,  next->x,  next->y, -prev->x, -prev->y);
-        d2d_outline_vertex_set(&v[1], p0->x, p0->y, -next->x, -next->y, -next->x, -next->y);
-        d2d_outline_vertex_set(&v[2], p0->x, p0->y, -next->x, -next->y,  prev->x,  prev->y);
-        d2d_outline_vertex_set(&v[3], p0->x, p0->y,  prev->x,  prev->y,  prev->x,  prev->y);
-    }
-    else
-    {
-        d2d_outline_vertex_set(&v[0], p0->x, p0->y,  prev->x,  prev->y, -next->x, -next->y);
-        d2d_outline_vertex_set(&v[1], p0->x, p0->y, -prev->x, -prev->y, -prev->x, -prev->y);
-        d2d_outline_vertex_set(&v[2], p0->x, p0->y, -prev->x, -prev->y,  next->x,  next->y);
-        d2d_outline_vertex_set(&v[3], p0->x, p0->y,  next->x,  next->y,  next->x,  next->y);
-    }
+    d2d_outline_vertex_set(&v[0], p0->x, p0->y, dx, dy, next->x, next->y);
+    d2d_outline_vertex_set(&v[1], p0->x, p0->y, dx, dy, 2.0f * next->x, 2.0f * next->y);
+    d2d_outline_vertex_set(&v[2], p0->x, p0->y, 2.0f * dx, 2.0f * dy, next->x, next->y);
+    d2d_outline_vertex_set(&v[3], p0->x, p0->y, 2.0f * dx, 2.0f * dy, 2.0f * next->x, 2.0f * next->y);
     geometry->outline.vertex_count += 4;
 
-    d2d_face_set(&f[0], base_idx + 1, base_idx + 0, base_idx + 2);
-    d2d_face_set(&f[1], base_idx + 2, base_idx + 0, base_idx + 3);
+    d2d_face_set(&f[0], base_idx + 2, base_idx + 3, base_idx + 0);
+    d2d_face_set(&f[1], base_idx + 0, base_idx + 3, base_idx + 1);
+    geometry->outline.face_count += 2;
+
+    return TRUE;
+}
+
+/* The four vertices of a cap sit on the end point, "prev" is the outward
+ * direction and "next" its opposite; the vector lengths encode the corner of
+ * the cap quad as for a join, with the lengths 3 and 4 in place of 1 and 2 on
+ * the next vector of a start cap and on the prev vector of an end cap, which
+ * tells the outline vertex shader that it is a cap and which cap style to use. */
+void d2d_outline_cap_vertices(struct d2d_outline_vertex *v, const D2D1_POINT_2F *p,
+        float dx, float dy, BOOL start)
+{
+    float a = start ? 1.0f : 3.0f, b = start ? 3.0f : 1.0f;
+
+    d2d_outline_vertex_set(&v[0], p->x, p->y, a * dx, a * dy, -b * dx, -b * dy);
+    d2d_outline_vertex_set(&v[1], p->x, p->y, a * dx, a * dy, -(b + 1.0f) * dx, -(b + 1.0f) * dy);
+    d2d_outline_vertex_set(&v[2], p->x, p->y, (a + 1.0f) * dx, (a + 1.0f) * dy, -b * dx, -b * dy);
+    d2d_outline_vertex_set(&v[3], p->x, p->y, (a + 1.0f) * dx, (a + 1.0f) * dy, -(b + 1.0f) * dx, -(b + 1.0f) * dy);
+}
+
+static BOOL d2d_geometry_outline_add_cap(struct d2d_geometry *geometry,
+        const D2D1_POINT_2F *p, const D2D1_POINT_2F *outward, BOOL start)
+{
+    struct d2d_face *f;
+    size_t base_idx;
+
+    if (!d2d_array_reserve((void **)&geometry->outline.vertices, &geometry->outline.vertices_size,
+            geometry->outline.vertex_count + 4, sizeof(*geometry->outline.vertices)))
+    {
+        ERR("Failed to grow outline vertices array.\n");
+        return FALSE;
+    }
+    base_idx = geometry->outline.vertex_count;
+
+    if (!d2d_array_reserve((void **)&geometry->outline.faces, &geometry->outline.faces_size,
+            geometry->outline.face_count + 2, sizeof(*geometry->outline.faces)))
+    {
+        ERR("Failed to grow outline faces array.\n");
+        return FALSE;
+    }
+    f = &geometry->outline.faces[geometry->outline.face_count];
+
+    d2d_outline_cap_vertices(&geometry->outline.vertices[base_idx], p, outward->x, outward->y, start);
+    geometry->outline.vertex_count += 4;
+
+    d2d_face_set(&f[0], base_idx + 2, base_idx + 3, base_idx + 0);
+    d2d_face_set(&f[1], base_idx + 0, base_idx + 3, base_idx + 1);
     geometry->outline.face_count += 2;
 
     return TRUE;
@@ -3920,9 +3942,35 @@ static BOOL d2d_geometry_add_figure_outline(struct d2d_geometry *geometry,
                 return FALSE;
             }
         }
+        else
+        {
+            D2D1_POINT_2F outward;
+
+            /* The start cap of an open figure points away from the first segment. */
+            d2d_point_subtract(&outward, p0, next);
+            d2d_point_normalise(&outward);
+            if (!d2d_geometry_outline_add_cap(geometry, p0, &outward, TRUE))
+            {
+                ERR("Failed to add start cap.\n");
+                return FALSE;
+            }
+        }
 
         p0 = p1;
         prev = next_prev;
+    }
+
+    if (figure_end != D2D1_FIGURE_END_CLOSED)
+    {
+        D2D1_POINT_2F outward;
+
+        d2d_point_subtract(&outward, p0, prev);
+        d2d_point_normalise(&outward);
+        if (!d2d_geometry_outline_add_cap(geometry, p0, &outward, FALSE))
+        {
+            ERR("Failed to add end cap.\n");
+            return FALSE;
+        }
     }
 
     return TRUE;

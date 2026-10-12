@@ -251,6 +251,8 @@ struct d2d_vs_cb
     } transform_geometry;
     struct d2d_vec4 transform_rtx;
     struct d2d_vec4 transform_rty;
+    /* x: D2D1_LINE_JOIN of the stroke, y and z: its start and end D2D1_CAP_STYLE. */
+    struct d2d_vec4 stroke_params;
 };
 
 struct d2d_device_context_ops
@@ -319,6 +321,7 @@ struct d2d_line_batch
     D2D1_MATRIX_3X2_F transform;
     float stroke_width;
     float miter_limit;
+    D2D1_CAP_STYLE start_cap, end_cap;
     BOOL flushing;
 };
 
@@ -770,6 +773,9 @@ struct d2d_outline_vertex
     D2D1_POINT_2F prev;
     D2D1_POINT_2F next;
 };
+
+void d2d_outline_cap_vertices(struct d2d_outline_vertex *v, const D2D1_POINT_2F *p,
+        float dx, float dy, BOOL start);
 
 struct d2d_curve_outline_vertex
 {
