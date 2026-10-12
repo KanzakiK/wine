@@ -908,6 +908,97 @@ static void test_math_errors(void)
            "%s(%f, %ld) got exception arg2 %f\n", testsdl[i].func, testsdl[i].a, testsdl[i].b, exception.arg2);
     }
 
+    /* _hypot() hands _matherr the magnitudes scaled the way it scales them before squaring:
+     * by 2^-600 on x86_64, by the larger one on i386, where a subnormal result is reported
+     * as an underflow as well. _hypotf() reports on x86_64 only, with the arguments as
+     * passed. Windows 10, ucrtbase and msvcrt.dll alike. */
+    {
+        const BOOL is_i386 = sizeof(void *) == 4;
+        const double dmax = __port_max_double(), dmin = __port_min_pos_double();
+        const struct {
+            char func[16];
+            double a;
+            double b;
+            int error;
+            int exception;
+            int exception_i386;
+        } tests_hypot[] = {
+            {"_hypot", dmax, dmax, ERANGE, _OVERFLOW, _OVERFLOW},
+            {"hypot", -dmax, dmax, ERANGE, _OVERFLOW, _OVERFLOW},
+            {"_hypot", dmax, 1, -1, -1, -1},
+            {"_hypot", 1e154, 1e154, -1, -1, -1},
+            {"_hypot", INFINITY, NAN, -1, -1, -1},
+            {"_hypot", NAN, 1, -1, -1, -1},
+            {"_hypot", INFINITY, dmax, -1, -1, -1},
+            {"_hypot", 0, 0, -1, -1, -1},
+            {"_hypot", 1e-320, 1e-320, -1, -1, _UNDERFLOW},
+            {"_hypot", 1e-320, 0, -1, -1, _UNDERFLOW},
+            {"hypot", 3e-310, 4e-310, -1, -1, _UNDERFLOW},
+            {"_hypot", dmin, dmin, -1, -1, -1},
+            {"_hypot", 1e-160, 1e-160, -1, -1, -1},
+            {"_hypot", 1e-310, 1e-300, -1, -1, -1},
+        };
+        const struct {
+            float a;
+            float b;
+            int error;
+            int exception;
+        } tests_hypotf[] = {
+            {FLT_MAX, FLT_MAX, ERANGE, _OVERFLOW},
+            {-FLT_MAX, FLT_MAX, ERANGE, _OVERFLOW},
+            {3e38f, 1e38f, -1, -1},
+            {FLT_MAX, 1, -1, -1},
+            {1e-40f, 1e-40f, -1, -1},
+            {INFINITY, NAN, -1, -1},
+        };
+        float (CDECL *p__hypotf)(float, float) = (void*)GetProcAddress(module, "_hypotf");
+        double m, arg1, arg2;
+        int expect;
+
+        for(i = 0; i < ARRAY_SIZE(tests_hypot); i++) {
+            p_func2d = (void*)GetProcAddress(module, tests_hypot[i].func);
+            errno = -1;
+            exception.type = -1;
+            d = p_func2d(tests_hypot[i].a, tests_hypot[i].b);
+            expect = is_i386 ? tests_hypot[i].exception_i386 : tests_hypot[i].exception;
+            ok(errno == tests_hypot[i].error,
+               "%s(%g, %g) got errno %d\n", tests_hypot[i].func, tests_hypot[i].a, tests_hypot[i].b, errno);
+            ok(exception.type == expect,
+               "%s(%g, %g) got exception type %d\n", tests_hypot[i].func, tests_hypot[i].a, tests_hypot[i].b, exception.type);
+            if(exception.type == -1) continue;
+            ok(!strcmp(exception.name, "_hypot"),
+               "%s(%g, %g) got exception name %s\n", tests_hypot[i].func, tests_hypot[i].a, tests_hypot[i].b, exception.name);
+            ok(exception.retval == d,
+               "%s(%g, %g) got exception retval %g, returned %g\n", tests_hypot[i].func, tests_hypot[i].a, tests_hypot[i].b, exception.retval, d);
+            m = max(fabs(tests_hypot[i].a), fabs(tests_hypot[i].b));
+            arg1 = is_i386 ? fabs(tests_hypot[i].a) / m : fabs(tests_hypot[i].a) * 0x1p-600;
+            arg2 = is_i386 ? fabs(tests_hypot[i].b) / m : fabs(tests_hypot[i].b) * 0x1p-600;
+            ok(exception.arg1 == arg1,
+               "%s(%g, %g) got exception arg1 %.17g, expected %.17g\n", tests_hypot[i].func, tests_hypot[i].a, tests_hypot[i].b, exception.arg1, arg1);
+            ok(exception.arg2 == arg2,
+               "%s(%g, %g) got exception arg2 %.17g, expected %.17g\n", tests_hypot[i].func, tests_hypot[i].a, tests_hypot[i].b, exception.arg2, arg2);
+        }
+
+        for(i = 0; i < ARRAY_SIZE(tests_hypotf); i++) {
+            float f;
+
+            errno = -1;
+            exception.type = -1;
+            f = p__hypotf(tests_hypotf[i].a, tests_hypotf[i].b);
+            ok(errno == (is_i386 ? -1 : tests_hypotf[i].error),
+               "_hypotf(%g, %g) got errno %d\n", tests_hypotf[i].a, tests_hypotf[i].b, errno);
+            ok(exception.type == (is_i386 ? -1 : tests_hypotf[i].exception),
+               "_hypotf(%g, %g) got exception type %d\n", tests_hypotf[i].a, tests_hypotf[i].b, exception.type);
+            if(exception.type == -1) continue;
+            ok(!strcmp(exception.name, "_hypotf"),
+               "_hypotf(%g, %g) got exception name %s\n", tests_hypotf[i].a, tests_hypotf[i].b, exception.name);
+            ok(exception.arg1 == tests_hypotf[i].a && exception.arg2 == tests_hypotf[i].b,
+               "_hypotf(%g, %g) got exception args %g, %g\n", tests_hypotf[i].a, tests_hypotf[i].b, exception.arg1, exception.arg2);
+            ok(exception.retval == f,
+               "_hypotf(%g, %g) got exception retval %g, returned %g\n", tests_hypotf[i].a, tests_hypotf[i].b, exception.retval, f);
+        }
+    }
+
     d = acos(2.0);
     ok(d == -1.0, "failed to change log10 return value: %e\n", d);
 }
