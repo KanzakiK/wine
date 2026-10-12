@@ -60,6 +60,17 @@ This is the recommended branch. What it changes, by subsystem:
   at the outer edge 0.061 before, 0.012 after, Windows 10 0.031; the d2d1 tests fail at
   the same places as before. Visible on the Steinberg logo of HALion 7's Writing Room Synths
   macro page
+- **D2D1 stroked curves**: `DrawGeometry()` and `DrawEllipse()` draw a curve's stroke as a
+  strip of triangles that ended exactly at the stroke edge, so the half of the antialiasing
+  ramp outside the edge had no pixels to run on and a stroked circle lost 3 % of its area;
+  the strip now carries the same 0.75 px skirt the straight outline already had. The arc
+  shader's distance estimate is corrected for curvature (it was 6 % short on a 3.4 px stroke
+  around a 13 px radius, bright outside and dark inside), and a Bézier piece is drawn as its
+  chord only when its control point lies within 1/16 px of it instead of a whole pixel — a
+  path in large units, split into 30° pieces, had every piece replaced by a chord half a pixel
+  inside the curve and its stroke moved inwards by a fifth of a pixel. RMS error against
+  box-filter coverage on the stroked ring of issue 444: 0.067 → 0.011 (Windows 10 0.032),
+  scaled stroke 0.169 → 0.011; fills and the d2d1 tests unchanged
 - **D2D1 layers on an opaque target**: a layer bitmap inherited the target's alpha mode,
   so on a render target created as `ALPHA_MODE_IGNORE` the layer's own coverage was thrown
   away and everything drawn inside it turned the background colour, usually black. All
