@@ -70,7 +70,12 @@ This is the recommended branch. What it changes, by subsystem:
   path in large units, split into 30° pieces, had every piece replaced by a chord half a pixel
   inside the curve and its stroke moved inwards by a fifth of a pixel. RMS error against
   box-filter coverage on the stroked ring of issue 444: 0.067 → 0.011 (Windows 10 0.032),
-  scaled stroke 0.169 → 0.011; fills and the d2d1 tests unchanged
+  scaled stroke 0.169 → 0.011; fills and the d2d1 tests unchanged. A cubic is split into at
+  least one quadratic per 45° of turn, whatever its units: a single quadratic through a quarter
+  circle lies up to 1.1 % of the radius inside it, and a ring drawn under an up-scaling
+  transform (where the unit-based tolerance allowed one piece) had its stroke a twentieth of a
+  pixel inside the ideal ring; the Bézier stroke distance is exact to second order now, which
+  takes the width error off wide strokes (6 px: 0.019 → 0.014)
 - **D2D1 stroke styles**: `DrawGeometry()` and `DrawLine()` took only the miter limit and the
   transform type from a stroke style; every join was mitered and every end flat, whatever the
   style asked for, and the mitered join fan was all but invisible under antialiasing, leaving
