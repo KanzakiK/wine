@@ -441,6 +441,14 @@ This is the recommended branch. What it changes, by subsystem:
   existing `cexp` and `carg`; their edge cases (errno, `_matherr`, Inf and NaN) were
   measured on Windows 10 in both architectures, and `cpow` takes `pow()` for a real base
   and exponent as Windows does (`cpow(2, 3)` is exactly 8)
+- **msvcrt/ucrtbase (`_hypot`, `_hypotf`)**: both returned the musl result without a math
+  error, so an overflow reached neither `errno` nor the application's `_matherr` handler,
+  and `cabs`/`cabsf` inherited that. Measured on Windows 10 through ucrtbase and
+  msvcrt.dll in both architectures: `_hypot` reports `_OVERFLOW` with `ERANGE` everywhere,
+  handing `_matherr` the magnitudes scaled by 2^-600 on x86_64 and by the larger one on
+  i386, where every subnormal result — an exact one such as `_hypot(1e-320, 0)` included —
+  is reported as `_UNDERFLOW` without touching `errno`; `_hypotf` reports `_OVERFLOW` on
+  x86_64 only, with the arguments as passed. Inf and NaN arguments are not reported
 - **advapi32 (credential attributes)**: `CredWriteW` dropped `CREDENTIAL.Attributes`, and
   `CredReadW`/`CredEnumerateW` returned none. Steinberg's License Engine marks its stored
   refresh token with an attribute (`isUtf-8`) and discards a token without it ("1.1 Format
