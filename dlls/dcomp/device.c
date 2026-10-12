@@ -51,3 +51,11 @@ HRESULT WINAPI DCompositionBoostCompositorClock(BOOL enable)
     FIXME("%d: stub.\n", enable);
     return S_OK;
 }
+
+HRESULT WINAPI CreatePresentationFactory(IUnknown *device, REFIID iid, void **factory)
+{
+    FIXME("%p, %s, %p: stub.\n", device, debugstr_guid(iid), factory);
+    if (!factory) return E_POINTER;
+    *factory = NULL;
+    return E_NOTIMPL;
+}

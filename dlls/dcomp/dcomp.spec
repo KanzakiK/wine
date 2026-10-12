@@ -27,3 +27,5 @@
 @ stub SerializeEffectDescription
 
 @ stdcall DCompositionBoostCompositorClock(long)
+
+@ stdcall CreatePresentationFactory(ptr ptr ptr)

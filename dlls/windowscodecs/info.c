@@ -1334,8 +1334,42 @@ static HRESULT WINAPI PixelFormatInfo_GetFormatGUID(IWICPixelFormatInfo2 *iface,
 static HRESULT WINAPI PixelFormatInfo_GetColorContext(IWICPixelFormatInfo2 *iface,
     IWICColorContext **ppIColorContext)
 {
-    FIXME("(%p,%p): stub\n", iface, ppIColorContext);
-    return E_NOTIMPL;
+    PixelFormatInfo *This = impl_from_IWICPixelFormatInfo2(iface);
+    HRESULT hr;
+
+    TRACE("(%p,%p)\n", iface, ppIColorContext);
+    if (!ppIColorContext) return E_INVALIDARG;
+    *ppIColorContext = NULL;
+    /* Integer RGB and indexed formats use sRGB. Do not label scRGB or CMYK as sRGB. */
+    if (!IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat1bppIndexed) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat2bppIndexed) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat4bppIndexed) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat8bppIndexed) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat16bppBGR555) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat16bppBGR565) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat24bppBGR) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat24bppRGB) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat32bppBGR) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat32bppBGRA) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat32bppPBGRA) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat32bppRGB) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat32bppRGBA) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat32bppPRGBA) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat48bppRGB) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat64bppRGBA) &&
+        !IsEqualGUID(&This->base.clsid, &GUID_WICPixelFormat64bppPRGBA))
+        return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    hr = ColorContext_Create(ppIColorContext);
+    if (SUCCEEDED(hr))
+    {
+        hr = IWICColorContext_InitializeFromExifColorSpace(*ppIColorContext, 1);
+        if (FAILED(hr))
+        {
+            IWICColorContext_Release(*ppIColorContext);
+            *ppIColorContext = NULL;
+        }
+    }
+    return hr;
 }
 
 static HRESULT WINAPI PixelFormatInfo_GetBitsPerPixel(IWICPixelFormatInfo2 *iface,

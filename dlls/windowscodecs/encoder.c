@@ -65,6 +65,8 @@ typedef struct CommonEncoderFrame {
     BOOL frame_created;
     UINT lines_written;
     BOOL committed;
+    IWICMetadataWriter **metadata_writers;
+    UINT metadata_count;
 } CommonEncoderFrame;
 
 static inline CommonEncoder *impl_from_IWICBitmapEncoder(IWICBitmapEncoder *iface)
@@ -129,6 +131,10 @@ static ULONG WINAPI CommonEncoderFrame_Release(IWICBitmapFrameEncode *iface)
 
     if (ref == 0)
     {
+        UINT i;
+        for (i = 0; i < This->metadata_count; ++i)
+            IWICMetadataWriter_Release(This->metadata_writers[i]);
+        free(This->metadata_writers);
         IWICBitmapEncoder_Release(&This->parent->IWICBitmapEncoder_iface);
         free(This);
     }
@@ -434,6 +440,30 @@ static HRESULT WINAPI CommonEncoderFrame_WriteSource(IWICBitmapFrameEncode *ifac
     return hr;
 }
 
+/* libpng has finished image data and IEND at this point. Insert metadata before IEND. */
+static HRESULT write_png_metadata(CommonEncoderFrame *frame)
+{
+    static const BYTE end_chunk[12] = {0,0,0,0,'I','E','N','D',0xae,0x42,0x60,0x82};
+    LARGE_INTEGER offset;
+    HRESULT hr;
+    ULONG written;
+    UINT i;
+
+    if (!frame->metadata_count) return S_OK;
+    offset.QuadPart = -sizeof(end_chunk);
+    hr = IStream_Seek(frame->parent->stream, offset, STREAM_SEEK_CUR, NULL);
+    if (FAILED(hr)) return hr;
+    for (i = 0; i < frame->metadata_count; ++i)
+    {
+        hr = WICSerializeMetadataContent(&GUID_ContainerFormatPng, frame->metadata_writers[i], 0,
+                frame->parent->stream);
+        if (FAILED(hr)) return hr;
+    }
+    hr = IStream_Write(frame->parent->stream, end_chunk, sizeof(end_chunk), &written);
+    if (SUCCEEDED(hr) && written != sizeof(end_chunk)) hr = STG_E_WRITEFAULT;
+    return hr;
+}
+
 static HRESULT WINAPI CommonEncoderFrame_Commit(IWICBitmapFrameEncode *iface)
 {
     CommonEncoderFrame *This = impl_from_IWICBitmapFrameEncode(iface);
@@ -451,6 +481,8 @@ static HRESULT WINAPI CommonEncoderFrame_Commit(IWICBitmapFrameEncode *iface)
     else
     {
         hr = encoder_commit_frame(This->parent->encoder);
+        if (SUCCEEDED(hr) && IsEqualGUID(&This->parent->encoder_info.container_format, &GUID_ContainerFormatPng))
+            hr = write_png_metadata(This);
         if (SUCCEEDED(hr))
         {
             This->committed = TRUE;
@@ -718,9 +750,54 @@ static HRESULT WINAPI CommonEncoderFrame_Block_GetWriterByIndex(IWICMetadataBloc
 
 static HRESULT WINAPI CommonEncoderFrame_Block_AddWriter(IWICMetadataBlockWriter *iface, IWICMetadataWriter *metadata_writer)
 {
-    FIXME("iface %p, metadata_writer %p.\n", iface, metadata_writer);
+    CommonEncoderFrame *frame = impl_from_IWICMetadataBlockWriter(iface);
+    IWICMetadataWriter **writers;
+    PROPVARIANT schema, id, value;
+    GUID format;
+    HRESULT hr;
+    DWORD length;
 
-    return E_NOTIMPL;
+    TRACE("iface %p, metadata_writer %p.\n", iface, metadata_writer);
+    if (!metadata_writer) return E_INVALIDARG;
+    if (!IsEqualGUID(&frame->parent->encoder_info.container_format, &GUID_ContainerFormatPng))
+        return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    hr = IWICMetadataWriter_GetMetadataFormat(metadata_writer, &format);
+    if (FAILED(hr)) return hr;
+    if (!IsEqualGUID(&format, &GUID_MetadataFormatUnknown)) return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    PropVariantInit(&schema);
+    PropVariantInit(&id);
+    PropVariantInit(&value);
+    hr = IWICMetadataWriter_GetValue(metadata_writer, &schema, &id, &value);
+    if (SUCCEEDED(hr))
+    {
+        if (value.vt != VT_BLOB || value.blob.cbSize < 8 || !value.blob.pBlobData)
+            hr = WINCODEC_ERR_BADMETADATAHEADER;
+        else
+        {
+            BYTE *data = value.blob.pBlobData;
+            length = (DWORD)data[0] << 24 | (DWORD)data[1] << 16 | (DWORD)data[2] << 8 | data[3];
+            if (length != value.blob.cbSize - 8 || !(data[4] & 0x20))
+                hr = WINCODEC_ERR_BADMETADATAHEADER;
+            else if (memcmp(data + 4, "eXIf", 4) && memcmp(data + 4, "tEXt", 4) &&
+                     memcmp(data + 4, "zTXt", 4) && memcmp(data + 4, "iTXt", 4))
+                hr = WINCODEC_ERR_UNSUPPORTEDOPERATION;
+        }
+    }
+    PropVariantClear(&value);
+    if (FAILED(hr)) return hr;
+    EnterCriticalSection(&frame->parent->lock);
+    if (!frame->initialized || frame->committed)
+        hr = WINCODEC_ERR_WRONGSTATE;
+    else if (!(writers = realloc(frame->metadata_writers, (frame->metadata_count + 1) * sizeof(*writers))))
+        hr = E_OUTOFMEMORY;
+    else
+    {
+        frame->metadata_writers = writers;
+        IWICMetadataWriter_AddRef(metadata_writer);
+        frame->metadata_writers[frame->metadata_count++] = metadata_writer;
+    }
+    LeaveCriticalSection(&frame->parent->lock);
+    return hr;
 }
 
 static HRESULT WINAPI CommonEncoderFrame_Block_SetWriterByIndex(IWICMetadataBlockWriter *iface, UINT index,
@@ -896,4 +973,85 @@ HRESULT CommonEncoder_CreateInstance(struct encoder *encoder,
     IWICBitmapEncoder_Release(&This->IWICBitmapEncoder_iface);
 
     return ret;
+}
+
+static HRESULT get_png_metadata_blob(REFGUID container, IWICMetadataWriter *writer, PROPVARIANT *value)
+{
+    PROPVARIANT schema, id;
+    GUID format;
+    DWORD length;
+    HRESULT hr;
+    BYTE *data;
+
+    if (!container || !writer) return E_INVALIDARG;
+    if (!IsEqualGUID(container, &GUID_ContainerFormatPng)) return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    hr = IWICMetadataWriter_GetMetadataFormat(writer, &format);
+    if (FAILED(hr)) return hr;
+    if (!IsEqualGUID(&format, &GUID_MetadataFormatUnknown)) return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    PropVariantInit(&schema);
+    PropVariantInit(&id);
+    hr = IWICMetadataWriter_GetValue(writer, &schema, &id, value);
+    if (FAILED(hr)) return hr;
+    if (value->vt == (VT_VECTOR | VT_UI1)) value->vt = VT_BLOB;
+    if (value->vt != VT_BLOB || value->blob.cbSize < 8 || !value->blob.pBlobData)
+        return WINCODEC_ERR_BADMETADATAHEADER;
+    data = value->blob.pBlobData;
+    length = (DWORD)data[0] << 24 | (DWORD)data[1] << 16 | (DWORD)data[2] << 8 | data[3];
+    if ((length != value->blob.cbSize - 8 && (value->blob.cbSize < 12 || length != value->blob.cbSize - 12)) || !(data[4] & 0x20)) return WINCODEC_ERR_BADMETADATAHEADER;
+    return S_OK;
+}
+
+HRESULT WINAPI WICGetMetadataContentSize(REFGUID container, IWICMetadataWriter *writer, ULARGE_INTEGER *size)
+{
+    PROPVARIANT value;
+    HRESULT hr;
+
+    if (!size) return E_INVALIDARG;
+    PropVariantInit(&value);
+    hr = get_png_metadata_blob(container, writer, &value);
+    if (SUCCEEDED(hr))
+    {
+        BYTE *data = value.blob.pBlobData;
+        DWORD length = (DWORD)data[0] << 24 | (DWORD)data[1] << 16 | (DWORD)data[2] << 8 | data[3];
+        size->QuadPart = (ULONGLONG)length + 12;
+    }
+    PropVariantClear(&value);
+    return hr;
+}
+
+HRESULT WINAPI WICSerializeMetadataContent(REFGUID container, IWICMetadataWriter *writer, DWORD options, IStream *stream)
+{
+    PROPVARIANT value;
+    HRESULT hr;
+    ULONG crc = ~0u, written, j, length;
+    UINT bit;
+    BYTE crc_bytes[4];
+
+    if (!stream) return E_INVALIDARG;
+    PropVariantInit(&value);
+    hr = get_png_metadata_blob(container, writer, &value);
+    if (SUCCEEDED(hr))
+    {
+        BYTE *data = value.blob.pBlobData;
+        length = (DWORD)data[0] << 24 | (DWORD)data[1] << 16 | (DWORD)data[2] << 8 | data[3];
+        for (j = 4; j < length + 8; ++j)
+        {
+            crc ^= value.blob.pBlobData[j];
+            for (bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320u & -(crc & 1));
+        }
+        crc = ~crc;
+        crc_bytes[0] = crc >> 24;
+        crc_bytes[1] = crc >> 16;
+        crc_bytes[2] = crc >> 8;
+        crc_bytes[3] = crc;
+        hr = IStream_Write(stream, value.blob.pBlobData, length + 8, &written);
+        if (SUCCEEDED(hr) && written != length + 8) hr = STG_E_WRITEFAULT;
+        if (SUCCEEDED(hr))
+        {
+            hr = IStream_Write(stream, crc_bytes, sizeof(crc_bytes), &written);
+            if (SUCCEEDED(hr) && written != sizeof(crc_bytes)) hr = STG_E_WRITEFAULT;
+        }
+    }
+    PropVariantClear(&value);
+    return hr;
 }

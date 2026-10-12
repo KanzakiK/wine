@@ -109,10 +109,10 @@
 @ stdcall WICCreateBitmapFromSectionEx(long long ptr long long long long ptr)
 @ stdcall WICCreateColorContext_Proxy(ptr ptr)
 @ stdcall WICCreateImagingFactory_Proxy(long ptr)
-@ stub WICGetMetadataContentSize
+@ stdcall WICGetMetadataContentSize(ptr ptr ptr)
 @ stdcall WICMapGuidToShortName(ptr long ptr ptr)
 @ stdcall WICMapSchemaToName(ptr wstr long ptr ptr)
 @ stdcall WICMapShortNameToGuid(wstr ptr)
 @ stub WICMatchMetadataContent
-@ stub WICSerializeMetadataContent
+@ stdcall WICSerializeMetadataContent(ptr ptr long ptr)
 @ stdcall WICSetEncoderFormat_Proxy(ptr ptr ptr ptr)

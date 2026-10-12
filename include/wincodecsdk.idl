@@ -428,3 +428,6 @@ interface IWICComponentFactory : IWICImagingFactory
         [in] UINT cCount,
         [out] IPropertyBag2 **ppIPropertyBag);
 }
+
+cpp_quote("HRESULT WINAPI WICGetMetadataContentSize(REFGUID, IWICMetadataWriter *, ULARGE_INTEGER *);")
+cpp_quote("HRESULT WINAPI WICSerializeMetadataContent(REFGUID, IWICMetadataWriter *, DWORD, IStream *);")
