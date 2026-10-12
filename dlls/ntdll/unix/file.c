@@ -5022,6 +5022,111 @@ NTSTATUS WINAPI NtQueryAttributesFile( const OBJECT_ATTRIBUTES *attr, FILE_BASIC
 }
 
 
+/* A Unix FIFO or socket inherited on fds 0-2 is a plain file object in the server, but
+ * get_device_info() reports it as FILE_DEVICE_NAMED_PIPE and GetFileType() as
+ * FILE_TYPE_PIPE, so programs treat it as a pipe: libuv's uv_pipe_open() on
+ * process.stdout/stderr (Node, Electron) sets byte mode and blocking waits with
+ * SetNamedPipeHandleState(), reads stdin behind PeekNamedPipe() and queries
+ * FilePipeLocalInformation before flushing. The server rejects all of these for a file
+ * object, so they are answered here as for a byte-mode, blocking anonymous pipe. */
+static BOOL is_unix_pipe( int fd, enum server_fd_type type, struct stat *st )
+{
+    return type == FD_TYPE_CHAR && !fstat( fd, st ) && (S_ISFIFO( st->st_mode ) || S_ISSOCK( st->st_mode ));
+}
+
+static void unix_pipe_local_info( int fd, const struct stat *st, FILE_PIPE_LOCAL_INFORMATION *info )
+{
+    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    int flags = fcntl( fd, F_GETFL ), quota = 0, avail = 0, pending = 0;
+
+    if (S_ISSOCK( st->st_mode ))
+    {
+        socklen_t len = sizeof(quota);
+        getsockopt( fd, SOL_SOCKET, SO_SNDBUF, &quota, &len );
+#ifdef TIOCOUTQ  /* SIOCOUTQ: bytes not yet taken by the peer */
+        ioctl( fd, TIOCOUTQ, &pending );
+#endif
+        ioctl( fd, FIONREAD, &avail );
+    }
+    else
+    {
+#ifdef F_GETPIPE_SZ
+        quota = fcntl( fd, F_GETPIPE_SZ );
+#endif
+        ioctl( fd, FIONREAD, &pending );  /* one buffer for both ends */
+        avail = pending;
+    }
+    if (quota <= 0) quota = 4096;
+    if (pending < 0 || pending > quota) pending = quota;
+    if (avail < 0) avail = 0;
+
+    switch (flags != -1 ? flags & O_ACCMODE : O_RDWR)
+    {
+    case O_RDONLY: info->NamedPipeConfiguration = FILE_PIPE_INBOUND; break;
+    case O_WRONLY: info->NamedPipeConfiguration = FILE_PIPE_OUTBOUND; avail = 0; break;
+    default:       info->NamedPipeConfiguration = FILE_PIPE_FULL_DUPLEX; break;
+    }
+    info->NamedPipeType       = FILE_PIPE_TYPE_BYTE;
+    info->MaximumInstances    = 1;
+    info->CurrentInstances    = 1;
+    info->InboundQuota        = quota;
+    info->ReadDataAvailable   = avail;
+    info->OutboundQuota       = quota;
+    info->WriteQuotaAvailable = quota - pending;
+    info->NamedPipeState      = FILE_PIPE_CONNECTED_STATE;
+    if (info->NamedPipeConfiguration != FILE_PIPE_OUTBOUND && poll( &pfd, 1, 0 ) == 1 && (pfd.revents & POLLHUP))
+        info->NamedPipeState  = FILE_PIPE_CLOSING_STATE;  /* the writer is gone */
+    info->NamedPipeEnd        = FILE_PIPE_CLIENT_END;
+}
+
+/* FSCTL_PIPE_PEEK on a Unix FIFO or socket */
+static NTSTATUS unix_pipe_peek( int fd, const struct stat *st, void *out_buffer, ULONG out_size, ULONG_PTR *size )
+{
+    FILE_PIPE_PEEK_BUFFER *buffer = out_buffer;
+    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    int avail = 0;
+    ULONG count;
+
+    if (out_size < FIELD_OFFSET( FILE_PIPE_PEEK_BUFFER, Data )) return STATUS_INFO_LENGTH_MISMATCH;
+    if (ioctl( fd, FIONREAD, &avail ) == -1) return errno_to_status( errno );
+    if (avail <= 0)
+    {
+        /* nothing to read and no writer left: the pipe is broken, not empty */
+        avail = 0;
+        if (poll( &pfd, 1, 0 ) == 1 && (pfd.revents & POLLHUP)) return STATUS_PIPE_BROKEN;
+    }
+    count = min( (ULONG)avail, out_size - FIELD_OFFSET( FILE_PIPE_PEEK_BUFFER, Data ) );
+    if (count)
+    {
+        ssize_t ret = -1;
+
+        if (S_ISSOCK( st->st_mode )) ret = recv( fd, buffer->Data, count, MSG_PEEK | MSG_DONTWAIT );
+#ifdef __linux__
+        else
+        {
+            /* a FIFO cannot be peeked at; tee() copies its data into a scratch pipe without consuming it */
+            int scratch[2];
+
+            if (!pipe( scratch ))
+            {
+                ret = tee( fd, scratch[1], count, SPLICE_F_NONBLOCK );
+                if (ret > 0) ret = read( scratch[0], buffer->Data, ret );
+                close( scratch[0] );
+                close( scratch[1] );
+            }
+        }
+#endif
+        count = ret > 0 ? ret : 0;
+    }
+    buffer->NamedPipeState    = FILE_PIPE_CONNECTED_STATE;
+    buffer->ReadDataAvailable = avail;
+    buffer->NumberOfMessages  = 0;
+    buffer->MessageLength     = 0;
+    *size = FIELD_OFFSET( FILE_PIPE_PEEK_BUFFER, Data[count] );
+    return STATUS_SUCCESS;
+}
+
+
 /******************************************************************************
  *              NtQueryInformationFile   (NTDLL.@)
  */
@@ -5115,6 +5220,7 @@ NTSTATUS WINAPI NtQueryInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
     unsigned int reparse_tag;
     unsigned int options;
     unsigned int status;
+    enum server_fd_type type;
 
     TRACE( "(%p,%p,%p,0x%08x,0x%08x)\n", handle, io, ptr, len, class);
 
@@ -5129,7 +5235,7 @@ NTSTATUS WINAPI NtQueryInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
     if (len < info_sizes[class])
         return io->Status = STATUS_INFO_LENGTH_MISMATCH;
 
-    if ((status = server_get_unix_fd( handle, 0, &fd, &needs_close, NULL, &options )))
+    if ((status = server_get_unix_fd( handle, 0, &fd, &needs_close, &type, &options )))
     {
         if (status != STATUS_BAD_DEVICE_TYPE) return io->Status = status;
         return server_get_file_info( handle, io, ptr, len, class );
@@ -5209,7 +5315,13 @@ NTSTATUS WINAPI NtQueryInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
     case FileNameInformation:
         {
             LONG name_len = len - FIELD_OFFSET(FILE_NAME_INFORMATION, FileName);
-            status = server_get_name_info( handle, ptr, &name_len );
+            if (is_unix_pipe( fd, type, &st ))  /* no name, like an anonymous pipe */
+            {
+                FILE_NAME_INFORMATION *info = ptr;
+                info->FileNameLength = 0;
+                name_len = 0;
+            }
+            else status = server_get_name_info( handle, ptr, &name_len );
             io->Information = offsetof( FILE_NAME_INFORMATION, FileName ) + name_len;
         }
         break;
@@ -5271,6 +5383,21 @@ NTSTATUS WINAPI NtQueryInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
             info->EffectiveAccess = FILE_ALL_ACCESS; /* FIXME */
         }
         break;
+    case FilePipeInformation:
+    case FilePipeLocalInformation:
+        if (is_unix_pipe( fd, type, &st ))
+        {
+            if (class == FilePipeInformation)
+            {
+                FILE_PIPE_INFORMATION *info = ptr;
+                info->ReadMode       = FILE_PIPE_BYTE_STREAM_MODE;
+                info->CompletionMode = FILE_PIPE_QUEUE_OPERATION;
+            }
+            else unix_pipe_local_info( fd, &st, ptr );
+            break;
+        }
+        if (needs_close) close( fd );
+        return server_get_file_info( handle, io, ptr, len, class );
     default:
         FIXME("Unsupported class (%d)\n", class);
         status = STATUS_NOT_IMPLEMENTED;
@@ -5374,6 +5501,28 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
                 status = wine_server_call( req );
             }
             SERVER_END_REQ;
+
+            if (status == STATUS_OBJECT_TYPE_MISMATCH)
+            {
+                enum server_fd_type type;
+                struct stat st;
+
+                if (server_get_unix_fd( handle, 0, &fd, &needs_close, &type, NULL )) break;
+                if (is_unix_pipe( fd, type, &st ))
+                {
+                    /* a byte-mode blocking pipe already; message mode is what a byte-type pipe
+                     * refuses, and non-blocking mode would need O_NONBLOCK on a file description
+                     * the other end shares */
+                    if (info->ReadMode == FILE_PIPE_MESSAGE_MODE) status = STATUS_INVALID_PARAMETER;
+                    else if (info->CompletionMode == FILE_PIPE_COMPLETE_OPERATION)
+                    {
+                        FIXME( "non-blocking mode not supported on Unix pipe %p\n", handle );
+                        status = STATUS_NOT_SUPPORTED;
+                    }
+                    else status = STATUS_SUCCESS;
+                }
+                if (needs_close) close( fd );
+            }
         }
         else status = STATUS_INVALID_PARAMETER_3;
         break;
@@ -7011,6 +7160,27 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
         TRACE("FSCTL_SET_SPARSE: Ignoring request\n");
         status = STATUS_SUCCESS;
         break;
+    case FSCTL_PIPE_PEEK:
+    {
+        enum server_fd_type type;
+        struct stat st;
+
+        if ((status = server_get_unix_fd( handle, 0, &fd, &needs_close, &type, NULL )))
+            return server_ioctl_file( handle, event, apc, apc_context, io, code,
+                                      in_buffer, in_size, out_buffer, out_size );
+        if (!is_unix_pipe( fd, type, &st ))
+        {
+            if (needs_close) close( fd );
+            return server_ioctl_file( handle, event, apc, apc_context, io, code,
+                                      in_buffer, in_size, out_buffer, out_size );
+        }
+        if (needs_close) close( fd );
+        /* the write end cannot peek */
+        if ((status = server_get_unix_fd( handle, FILE_READ_DATA, &fd, &needs_close, NULL, NULL ))) return status;
+        status = unix_pipe_peek( fd, &st, out_buffer, out_size, &size );
+        if (needs_close) close( fd );
+        break;
+    }
     case FSCTL_GET_REPARSE_POINT:
         status = get_unix_symlink_reparse_data( handle, out_buffer, out_size, &size );
         if (status == STATUS_NOT_A_REPARSE_POINT)  /* xattr-based reparse points live in the server */
@@ -7060,7 +7230,14 @@ NTSTATUS WINAPI NtFlushBuffersFileEx( HANDLE handle, ULONG flags, void *params, 
 
     if (!ret && (type == FD_TYPE_FILE || type == FD_TYPE_DIR || type == FD_TYPE_CHAR))
     {
-        if (fsync(fd)) ret = errno_to_status( errno );
+        if (fsync(fd))
+        {
+            struct stat st;
+            int err = errno;
+
+            /* a Unix pipe or socket has nothing to sync; fsync() fails with EINVAL on it */
+            if (err != EINVAL || !is_unix_pipe( fd, type, &st )) ret = errno_to_status( err );
+        }
         io->Status      = ret;
         io->Information = 0;
     }
