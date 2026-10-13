@@ -490,6 +490,12 @@ This is the recommended branch. What it changes, by subsystem:
   Chromium issues it for every resolution that returns an IPv6 address and discards the
   result on failure (FL Studio 2026's WebView2 hit it 35 times in 18 minutes). Addresses
   are sorted per RFC 6724 §6 with the default policy table
+- **iphlpapi**: `GetAdaptersInfo()` reported one `IP_ADDR_STRING` more than needed for
+  every IPv4 address of the host, loopback's included. Windows 10 reports the adapters
+  times `sizeof(IP_ADAPTER_INFO)` plus one `IP_ADDR_STRING` only for each address of an
+  adapter beyond its first, measured with one and two adapters and with a second address
+  on one. Nuendo 15 sizes its second call as a whole number of `IP_ADAPTER_INFO`
+  structures, got `ERROR_BUFFER_OVERFLOW`, and crashed on Studio > ADR API network setup
 - **msvcp**: the stream classes' move constructors and move assignment were exported as
   stubs, so a C++ application calling one aborted with "Call to unimplemented function" —
   Ableton Live's indexer did, on startup in a fresh prefix, so Live restarted it in a loop
