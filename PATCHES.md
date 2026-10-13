@@ -495,7 +495,9 @@ This is the recommended branch. What it changes, by subsystem:
   times `sizeof(IP_ADAPTER_INFO)` plus one `IP_ADDR_STRING` only for each address of an
   adapter beyond its first, measured with one and two adapters and with a second address
   on one. Nuendo 15 sizes its second call as a whole number of `IP_ADAPTER_INFO`
-  structures, got `ERROR_BUFFER_OVERFLOW`, and crashed on Studio > ADR API network setup
+  structures, got `ERROR_BUFFER_OVERFLOW`, and crashed on Studio > ADR API network setup.
+  The lease times in `IP_ADAPTER_INFO` stay 32-bit in 32-bit code, so the structure keeps
+  Windows' 640 bytes there after `time_t` became 64-bit on i386 in Wine 11.19
 - **msvcp**: the stream classes' move constructors and move assignment were exported as
   stubs, so a C++ application calling one aborted with "Call to unimplemented function" —
   Ableton Live's indexer did, on startup in a fresh prefix, so Live restarted it in a loop
