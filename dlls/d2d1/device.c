@@ -1388,8 +1388,6 @@ static void d2d_device_context_render_mask_to_stencil(struct d2d_device_context 
 {
     const struct d2d_geometry *mask_geo;
     D2D1_MATRIX_3X2_F saved_transform;
-    D3D11_SUBRESOURCE_DATA buf_data;
-    D3D11_BUFFER_DESC buf_desc;
     ID3D11Buffer *geo_ib, *geo_vb;
     HRESULT hr;
 
@@ -1415,29 +1413,25 @@ static void d2d_device_context_render_mask_to_stencil(struct d2d_device_context 
         return;
     }
 
-    buf_desc.Usage = D3D11_USAGE_DEFAULT;
-    buf_desc.CPUAccessFlags = 0;
-    buf_desc.MiscFlags = 0;
-    buf_data.SysMemPitch = 0;
-    buf_data.SysMemSlicePitch = 0;
-
-    buf_desc.ByteWidth = mask_geo->fill.face_count * sizeof(*mask_geo->fill.faces);
-    buf_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-    buf_data.pSysMem = mask_geo->fill.faces;
-    if (SUCCEEDED(ID3D11Device1_CreateBuffer(context->d3d_device, &buf_desc, &buf_data, &geo_ib)))
+    /* The mask goes through the same dynamic scratch buffers as the fills. A
+     * DEFAULT buffer created with initial data cannot be filled from the client
+     * thread, and wined3d drains the command stream for each one: a list of
+     * cards clipped to rounded rectangles pushed about 50 masks per frame and
+     * waited for the command stream twice for each of them. */
+    if (FAILED(hr = d2d_device_context_get_scratch_buffer(context, D3D11_BIND_INDEX_BUFFER,
+            mask_geo->fill.face_count * sizeof(*mask_geo->fill.faces),
+            &context->scratch_ib[D2D_SHAPE_TYPE_TRIANGLE], mask_geo->fill.faces, &geo_ib))
+            || FAILED(hr = d2d_device_context_get_scratch_buffer(context, D3D11_BIND_VERTEX_BUFFER,
+            mask_geo->fill.vertex_count * sizeof(*mask_geo->fill.vertices),
+            &context->scratch_vb[D2D_SHAPE_TYPE_TRIANGLE], mask_geo->fill.vertices, &geo_vb)))
     {
-        buf_desc.ByteWidth = mask_geo->fill.vertex_count * sizeof(*mask_geo->fill.vertices);
-        buf_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-        buf_data.pSysMem = mask_geo->fill.vertices;
-        if (SUCCEEDED(ID3D11Device1_CreateBuffer(context->d3d_device, &buf_desc, &buf_data, &geo_vb)))
-        {
-            d2d_device_context_draw(context, D2D_SHAPE_TYPE_TRIANGLE, geo_ib,
-                    3 * mask_geo->fill.face_count, geo_vb,
-                    sizeof(*mask_geo->fill.vertices), NULL, NULL);
-            ID3D11Buffer_Release(geo_vb);
-        }
-        ID3D11Buffer_Release(geo_ib);
+        WARN("Failed to upload the mask geometry, hr %#lx.\n", hr);
+        context->drawing_state.transform = saved_transform;
+        return;
     }
+
+    d2d_device_context_draw(context, D2D_SHAPE_TYPE_TRIANGLE, geo_ib,
+            3 * mask_geo->fill.face_count, geo_vb, sizeof(*mask_geo->fill.vertices), NULL, NULL);
 
     context->drawing_state.transform = saved_transform;
 }
