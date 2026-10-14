@@ -229,6 +229,13 @@ This is the recommended branch. What it changes, by subsystem:
   ramp set outside Wine whenever a windowed D3D application exited. A viewport update
   that does not change the state emits no packet (d2d1 set it per primitive).
 - **ntdll**: MADV_FREE for MEM_RESET (improved page reclaim behaviour)
+- **ntdll**: the heap enabled the LFH frontend only for size classes up to 1K; blocks between
+  1K and 16K stayed in the backend heap, whose free path writes the free-list links over the
+  first 16 user bytes of a freed block (the vtable pointer of a C++ object). Windows 10 19045
+  switches every class up to 16K once the frontend is active, after ~2040 allocations or 18
+  live blocks, and keeps the content of freed LFH blocks, so use-after-free bugs on such
+  objects are silent there and threw `std::__non_rtti_object` under Wine. Measured with
+  a probe on both sides, test in `kernel32/tests/heap.c` (`test_lfh_activation`)
 - **Unix pipes and sockets on the standard handles (ntdll)**: a FIFO or Unix socket
   inherited on fds 0-2 — the journald stream socket of a desktop launcher, `wine app |
   tee` — reads as `FILE_TYPE_PIPE`, but it is a plain file object and every named-pipe

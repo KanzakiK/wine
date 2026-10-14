@@ -1998,6 +1998,11 @@ static void bin_try_enable( struct heap *heap, struct bin *bin )
 
     if (bin == heap->bins && alloc > 0x10) enable = TRUE;
     else if (bin - heap->bins < 0x30 && alloc > 0x800) enable = TRUE;
+    /* once the frontend is active, every bin up to 16K (bin 0x70: 16K user blocks plus their header)
+     * enables by the same counts, as measured on Windows 10 19045; only the small bins activate the
+     * frontend itself, so a heap that only ever serves large blocks keeps them in the backend */
+    else if (bin - heap->bins <= 0x70 && (alloc > 0x800 || alloc - freed > 0x10)
+             && ReadNoFence( &heap->compat_info ) == HEAP_LFH) enable = TRUE;
     else if (bin - heap->bins < 0x30 && alloc - freed > 0x10) enable = TRUE;
     else if (alloc - freed > 0x400000 / block_size) enable = TRUE;
     if (!enable) return;
