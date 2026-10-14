@@ -102,6 +102,12 @@ This is the recommended branch. What it changes, by subsystem:
   `CreateEffect()` succeeded, but `DrawImage()` had no case for it and drew nothing — JUCE's
   `GlowEffect` rendered empty under Direct2D; the blur is now evaluated over three standard
   deviations, for A8 and 8-bpc BGRA/RGBA
+- **D2D1 device creation**: every device compiled the shape and effect shaders from HLSL
+  source, 27 ms each time, and every WIC, DC and HWND render target creates a device of its
+  own. The compiled code is kept in the factory now and shared by its devices. Nuendo 15
+  draws the icons of its "Add Track" submenu into one WIC render target after another
+  (38 for 19 icons); opening the submenu took 1.42 s, during which the menu ignored the
+  mouse, and takes 0.22 s now
 - **DComp**: IDCompositionDesktopDevice implementation with a D2D1 bitmap rendering path,
   dirty-rect clipping and DIB+BitBlt presentation; IDCompositionDevice3/4/5, composition
   and dynamic textures, D3D11 BeginDraw and surface handle export; rootless visual trees
