@@ -9054,9 +9054,25 @@ shape_info[] =
  * the actual D3D work only once per device; subsequent contexts just AddRef the
  * cached objects. All contexts of a device share the same ID3D11Device (queried
  * from the device's dxgi_device), so the objects are valid across contexts. */
+static const struct
+{
+    float x, y;
+}
+d2d_quad[] =
+{
+    {-1.0f,  1.0f},
+    {-1.0f, -1.0f},
+    { 1.0f,  1.0f},
+    { 1.0f, -1.0f},
+};
+static const UINT16 d2d_quad_indices[] = {0, 1, 2, 2, 1, 3};
+
 static HRESULT d2d_device_ensure_shape_resources(struct d2d_device *device, ID3D11Device1 *d3d_device)
 {
     struct d2d_shape_resources resources[D2D_SHAPE_TYPE_COUNT] = {0};
+    ID3D11Buffer *quad_ib = NULL, *quad_vb = NULL;
+    D3D11_SUBRESOURCE_DATA buffer_data;
+    D3D11_BUFFER_DESC buffer_desc;
     ID3D11PixelShader *ps = NULL;
     ID3D10Blob *precompiled;
     unsigned int i;
@@ -9100,14 +9116,44 @@ static HRESULT d2d_device_ensure_shape_resources(struct d2d_device *device, ID3D
         goto fail;
     }
 
+    buffer_desc.ByteWidth = sizeof(d2d_quad_indices);
+    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    buffer_desc.CPUAccessFlags = 0;
+    buffer_desc.MiscFlags = 0;
+    buffer_desc.StructureByteStride = 0;
+    buffer_data.pSysMem = d2d_quad_indices;
+    buffer_data.SysMemPitch = 0;
+    buffer_data.SysMemSlicePitch = 0;
+    if (FAILED(hr = ID3D11Device1_CreateBuffer(d3d_device, &buffer_desc, &buffer_data, &quad_ib)))
+    {
+        WARN("Failed to create clear index buffer, hr %#lx.\n", hr);
+        goto fail;
+    }
+
+    buffer_desc.ByteWidth = sizeof(d2d_quad);
+    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    buffer_data.pSysMem = d2d_quad;
+    if (FAILED(hr = ID3D11Device1_CreateBuffer(d3d_device, &buffer_desc, &buffer_data, &quad_vb)))
+    {
+        WARN("Failed to create clear vertex buffer, hr %#lx.\n", hr);
+        goto fail;
+    }
+
     for (i = 0; i < D2D_SHAPE_TYPE_COUNT; ++i)
         device->shape_resources[i] = resources[i];
     device->shape_ps = ps;
+    device->quad_ib = quad_ib;
+    device->quad_vb = quad_vb;
     device->shape_resources_ready = TRUE;
     LeaveCriticalSection(&device->shape_cs);
     return S_OK;
 
 fail:
+    if (quad_ib)
+        ID3D11Buffer_Release(quad_ib);
+    if (ps)
+        ID3D11PixelShader_Release(ps);
     for (i = 0; i < D2D_SHAPE_TYPE_COUNT; ++i)
     {
         if (resources[i].vs)
@@ -9122,7 +9168,6 @@ fail:
 static HRESULT d2d_device_context_init(struct d2d_device_context *render_target,
         struct d2d_device *device, IUnknown *outer_unknown, const struct d2d_device_context_ops *ops)
 {
-    D3D11_SUBRESOURCE_DATA buffer_data;
     IDWriteFactory *dwrite_factory;
     D3D11_RASTERIZER_DESC rs_desc;
     D3D11_BUFFER_DESC buffer_desc;
@@ -9130,18 +9175,6 @@ static HRESULT d2d_device_context_init(struct d2d_device_context *render_target,
     unsigned int i;
     HRESULT hr;
 
-    static const struct
-    {
-        float x, y;
-    }
-    quad[] =
-    {
-        {-1.0f,  1.0f},
-        {-1.0f, -1.0f},
-        { 1.0f,  1.0f},
-        { 1.0f, -1.0f},
-    };
-    static const UINT16 indices[] = {0, 1, 2, 2, 1, 3};
     static const D3D_FEATURE_LEVEL feature_levels = D3D_FEATURE_LEVEL_10_0;
 
     render_target->ID2D1DeviceContext6_iface.lpVtbl = &d2d_device_context_vtbl;
@@ -9215,34 +9248,11 @@ static HRESULT d2d_device_context_init(struct d2d_device_context *render_target,
         goto err;
     }
 
-    buffer_desc.ByteWidth = sizeof(indices);
-    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
-    buffer_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-    buffer_desc.CPUAccessFlags = 0;
-    buffer_desc.MiscFlags = 0;
-
-    buffer_data.pSysMem = indices;
-    buffer_data.SysMemPitch = 0;
-    buffer_data.SysMemSlicePitch = 0;
-
-    if (FAILED(hr = ID3D11Device1_CreateBuffer(render_target->d3d_device,
-            &buffer_desc, &buffer_data, &render_target->ib)))
-    {
-        WARN("Failed to create clear index buffer, hr %#lx.\n", hr);
-        goto err;
-    }
-
-    buffer_desc.ByteWidth = sizeof(quad);
-    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    buffer_data.pSysMem = quad;
-
-    render_target->vb_stride = sizeof(*quad);
-    if (FAILED(hr = ID3D11Device1_CreateBuffer(render_target->d3d_device,
-            &buffer_desc, &buffer_data, &render_target->vb)))
-    {
-        WARN("Failed to create clear vertex buffer, hr %#lx.\n", hr);
-        goto err;
-    }
+    render_target->ib = device->quad_ib;
+    ID3D11Buffer_AddRef(render_target->ib);
+    render_target->vb = device->quad_vb;
+    ID3D11Buffer_AddRef(render_target->vb);
+    render_target->vb_stride = sizeof(*d2d_quad);
 
     rs_desc.FillMode = D3D11_FILL_SOLID;
     rs_desc.CullMode = D3D11_CULL_NONE;
@@ -9470,6 +9480,10 @@ static ULONG WINAPI d2d_device_Release(ID2D1Device6 *iface)
             }
             if (device->shape_ps)
                 ID3D11PixelShader_Release(device->shape_ps);
+            if (device->quad_vb)
+                ID3D11Buffer_Release(device->quad_vb);
+            if (device->quad_ib)
+                ID3D11Buffer_Release(device->quad_ib);
         }
         DeleteCriticalSection(&device->shape_cs);
         free(device);

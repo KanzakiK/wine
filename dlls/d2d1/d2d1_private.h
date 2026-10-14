@@ -973,6 +973,10 @@ struct d2d_device
     BOOL shape_resources_ready;
     struct d2d_shape_resources shape_resources[D2D_SHAPE_TYPE_COUNT];
     ID3D11PixelShader *shape_ps;
+    /* The full-target quad drawn by Clear(), shared like the shaders: its
+     * buffers are DEFAULT with initial data, and wined3d drains the command
+     * stream to fill each of them. */
+    ID3D11Buffer *quad_ib, *quad_vb;
 
     struct d2d_indexed_objects shaders;
 };
