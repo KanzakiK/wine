@@ -2890,15 +2890,35 @@ static BOOL d2d_bezier_segments_coincide(const D2D1_POINT_2F *const p[3], const 
     return d2d_point_approx_equal(p[0], q[2]) && d2d_point_approx_equal(p[2], q[0]);
 }
 
+/* Whether the segments p0-p1 and q0-q1 cross or touch. Collinear segments do
+ * not count, just like parallel lines in d2d_geometry_intersect_line_line(). */
+static BOOL d2d_point_segments_cross(const D2D1_POINT_2F *p0, const D2D1_POINT_2F *p1,
+        const D2D1_POINT_2F *q0, const D2D1_POINT_2F *q1)
+{
+    float a, b, c, d;
+
+    a = d2d_point_ccw(q0, q1, p0);
+    b = d2d_point_ccw(q0, q1, p1);
+    if ((a > 0.0f && b > 0.0f) || (a < 0.0f && b < 0.0f))
+        return FALSE;
+
+    c = d2d_point_ccw(p0, p1, q0);
+    d = d2d_point_ccw(p0, p1, q1);
+    if ((c > 0.0f && d > 0.0f) || (c < 0.0f && d < 0.0f))
+        return FALSE;
+
+    return a != 0.0f || b != 0.0f;
+}
+
 static BOOL d2d_geometry_intersect_bezier_bezier(struct d2d_geometry *geometry,
         struct d2d_geometry_intersections *intersections,
         const struct d2d_segment_idx *idx_p, float start_p, float end_p,
         const struct d2d_segment_idx *idx_q, float start_q, float end_q)
 {
+    D2D1_POINT_2F intersection, p_start, p_end, q_start, q_end;
     const D2D1_POINT_2F *p[3], *q[3];
     const struct d2d_figure *figure;
     D2D_RECT_F p_bounds, q_bounds;
-    D2D1_POINT_2F intersection;
     float centre_p, centre_q;
     size_t next;
 
@@ -2936,6 +2956,21 @@ static BOOL d2d_geometry_intersect_bezier_bezier(struct d2d_geometry *geometry,
 
     if (end_p - start_p < 1e-3f)
     {
+        /* Overlapping bounds are not a crossing yet. Two curves that run along
+         * each other closer than the size of a leaf, such as the round caps of
+         * strokes meeting at a point, which lie on the same circle, overlap in
+         * every leaf along the shared stretch. Reporting each of those split
+         * both curves about every other leaf: the caps at the tip of a 1 DIP
+         * wide arrow icon became about 2100 pieces, and the pairwise passes
+         * after this one took 70 ms to close the path. Only report the leaves
+         * in which the two pieces actually cross. */
+        d2d_point_calculate_bezier(&p_start, p[0], p[1], p[2], start_p);
+        d2d_point_calculate_bezier(&p_end, p[0], p[1], p[2], end_p);
+        d2d_point_calculate_bezier(&q_start, q[0], q[1], q[2], start_q);
+        d2d_point_calculate_bezier(&q_end, q[0], q[1], q[2], end_q);
+        if (!d2d_point_segments_cross(&p_start, &p_end, &q_start, &q_end))
+            return TRUE;
+
         d2d_point_calculate_bezier(&intersection, p[0], p[1], p[2], centre_p);
         if (start_p > 0.0f && end_p < 1.0f && !d2d_geometry_intersections_add(intersections,
                 idx_p, centre_p, intersection))
