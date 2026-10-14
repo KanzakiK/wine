@@ -47,7 +47,12 @@ This is the recommended branch. What it changes, by subsystem:
   212 now) — and the private device context state is swapped in once per
   `BeginDraw()`/`EndDraw()` span rather than around every primitive (3 485 swaps per
   step, each a full state emission both ways, 28 now); a nested `BeginDraw()` on
-  another context of the same device takes the state over and hands it back.
+  another context of the same device takes the state over and hands it back. The geometry
+  of a layer mask goes through the same scratch buffers, and the index and vertex buffer of
+  the quad `Clear()` draws are created once per device instead of once per device context:
+  JUCE 8 creates about 1 700 device contexts while the preset list of Minimal Audio Current
+  is scrolled for 4.6 s, and the two buffers of each cost two drains of the command stream
+  (11 806 synchronisations in such a drag before, 4 399 now).
 - **D2D1 curve edges**: a filled curve is drawn as a polygon plus one triangle per curve
   piece, and the antialiasing ramp of that triangle reaches half a pixel to either side of
   the curve. Next to a short piece the triangle is thinner than that, so both halves of the
