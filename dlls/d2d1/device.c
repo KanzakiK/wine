@@ -9741,12 +9741,75 @@ static const char effect_vs_code[] =
     "    return o;\n"
     "}\n";
 
+/* Compiling the shaders takes tens of milliseconds, and every render target created
+ * from the factory (CreateWicBitmapRenderTarget(), CreateDCRenderTarget(),
+ * CreateHwndRenderTarget()) creates a device of its own. Nuendo draws each icon of a
+ * menu into a WIC bitmap render target of its own, and compiling the same shaders for
+ * every one of them held up its "Add Track" submenu for more than a second. The
+ * compiled code does not depend on the device, so compile it once per factory. */
+static HRESULT d2d_factory_get_precompiled_shaders(struct d2d_factory *factory, struct d2d_device *device)
+{
+    ID3D10Blob *compiled;
+    HRESULT hr = S_OK;
+    unsigned int i;
+
+    EnterCriticalSection(&factory->cs);
+
+    for (i = 0; i < ARRAY_SIZE(shape_info); ++i)
+    {
+        const struct shape_info *si = &shape_info[i];
+
+        if (factory->precompiled_shape_vs[i])
+            continue;
+        if (FAILED(hr = D3DCompile(si->vs_code, si->vs_code_size, si->name, NULL, NULL,
+                "main", "vs_4_0", 0, 0, &compiled, NULL)))
+        {
+            WARN("Failed to compile shader for shape type %#x, hr %#lx.\n", si->shape_type, hr);
+            goto done;
+        }
+        factory->precompiled_shape_vs[i] = compiled;
+    }
+
+    if (!factory->precompiled_shape_ps)
+    {
+        if (FAILED(hr = D3DCompile(shape_ps_code, sizeof(shape_ps_code) - 1, "ps", NULL, NULL,
+                "main", "ps_4_0", 0, 0, &compiled, NULL)))
+        {
+            WARN("Failed to compile the pixel shader, hr %#lx.\n", hr);
+            goto done;
+        }
+        factory->precompiled_shape_ps = compiled;
+    }
+
+    if (!factory->precompiled_effect_vs)
+    {
+        if (FAILED(hr = D3DCompile(effect_vs_code, sizeof(effect_vs_code) - 1, "effect_vs", NULL, NULL,
+                "main", "vs_4_0", 0, 0, &compiled, NULL)))
+        {
+            WARN("Failed to compile the effect vertex shader, hr %#lx.\n", hr);
+            goto done;
+        }
+        factory->precompiled_effect_vs = compiled;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(shape_info); ++i)
+    {
+        device->precompiled_shape_vs[i] = factory->precompiled_shape_vs[i];
+        ID3D10Blob_AddRef(device->precompiled_shape_vs[i]);
+    }
+    device->precompiled_shape_ps = factory->precompiled_shape_ps;
+    ID3D10Blob_AddRef(device->precompiled_shape_ps);
+    device->precompiled_effect_vs = factory->precompiled_effect_vs;
+    ID3D10Blob_AddRef(device->precompiled_effect_vs);
+
+done:
+    LeaveCriticalSection(&factory->cs);
+    return hr;
+}
+
 HRESULT d2d_device_init(struct d2d_device *device, ID2D1Factory1 *factory, IDXGIDevice *dxgi_device,
     bool allow_get_dxgi_device)
 {
-    HRESULT hr;
-    ID3D10Blob *compiled;
-
     device->ID2D1Device6_iface.lpVtbl = &d2d_device_vtbl;
     device->refcount = 1;
     /* Initialise first so the destructor can always DeleteCriticalSection, even
@@ -9758,36 +9821,7 @@ HRESULT d2d_device_init(struct d2d_device *device, ID2D1Factory1 *factory, IDXGI
     IDXGIDevice_AddRef(device->dxgi_device);
     device->allow_get_dxgi_device = allow_get_dxgi_device;
 
-    for (unsigned int i = 0; i < ARRAY_SIZE(shape_info); ++i)
-    {
-        const struct shape_info *si = &shape_info[i];
-
-        if (FAILED(hr = D3DCompile(si->vs_code, si->vs_code_size, si->name, NULL, NULL,
-                "main", "vs_4_0", 0, 0, &compiled, NULL)))
-        {
-            WARN("Failed to compile shader for shape type %#x, hr %#lx.\n", si->shape_type, hr);
-            return hr;
-        }
-        device->precompiled_shape_vs[i] = compiled;
-    }
-
-    if (FAILED(hr = D3DCompile(shape_ps_code, sizeof(shape_ps_code) - 1, "ps", NULL, NULL,
-            "main", "ps_4_0", 0, 0, &compiled, NULL)))
-    {
-        WARN("Failed to compile the pixel shader, hr %#lx.\n", hr);
-        return hr;
-    }
-    device->precompiled_shape_ps = compiled;
-
-    if (FAILED(hr = D3DCompile(effect_vs_code, sizeof(effect_vs_code) - 1, "effect_vs", NULL, NULL,
-            "main", "vs_4_0", 0, 0, &compiled, NULL)))
-    {
-        WARN("Failed to compile the effect vertex shader, hr %#lx.\n", hr);
-        return hr;
-    }
-    device->precompiled_effect_vs = compiled;
-
-    return S_OK;
+    return d2d_factory_get_precompiled_shaders(unsafe_impl_from_ID2D1Factory((ID2D1Factory *)factory), device);
 }
 
 HRESULT d2d_device_add_indexed_object(struct d2d_indexed_objects *objects,

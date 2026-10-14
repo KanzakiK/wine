@@ -1056,6 +1056,12 @@ struct d2d_factory
     struct list effects;
     INIT_ONCE init_builtins;
 
+    /* Compiled once and shared by the devices of the factory, see
+     * d2d_factory_get_precompiled_shaders(). */
+    ID3D10Blob *precompiled_shape_vs[D2D_SHAPE_TYPE_COUNT];
+    ID3D10Blob *precompiled_shape_ps;
+    ID3D10Blob *precompiled_effect_vs;
+
     CRITICAL_SECTION cs;
     D2D1_FACTORY_TYPE factory_type;
 };
