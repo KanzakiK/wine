@@ -152,6 +152,15 @@ static ULONG STDMETHODCALLTYPE d2d_factory_Release(ID2D1Factory7 *iface)
     {
         if (factory->device)
             ID3D10Device1_Release(factory->device);
+        for (unsigned int i = 0; i < D2D_SHAPE_TYPE_COUNT; ++i)
+        {
+            if (factory->precompiled_shape_vs[i])
+                ID3D10Blob_Release(factory->precompiled_shape_vs[i]);
+        }
+        if (factory->precompiled_shape_ps)
+            ID3D10Blob_Release(factory->precompiled_shape_ps);
+        if (factory->precompiled_effect_vs)
+            ID3D10Blob_Release(factory->precompiled_effect_vs);
         LIST_FOR_EACH_ENTRY_SAFE(reg, reg2, &factory->effects, struct d2d_effect_registration, entry)
         {
             d2d_effect_registration_cleanup(reg);
