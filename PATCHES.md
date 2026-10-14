@@ -76,6 +76,17 @@ This is the recommended branch. What it changes, by subsystem:
   transform (where the unit-based tolerance allowed one piece) had its stroke a twentieth of a
   pixel inside the ideal ring; the Bézier stroke distance is exact to second order now, which
   takes the width error off wide strokes (6 px: 0.019 → 0.014)
+- **D2D1 path closing**: `ID2D1GeometrySink::Close()` splits Bézier pieces where they cross
+  another piece of the path. The search subdivides both pieces down to 1/1024 of their range
+  and took every final pair whose bounding boxes still overlapped as a crossing, so two curves
+  running along each other were split all along the stretch they share. The round caps of
+  strokes that meet at one point lie on the same circle: the download arrow in Minimal Audio
+  Current's preset list (three strokes, 1 DIP wide) grew from 24 pieces to 2159, the pairwise
+  passes after the search took 70 ms per close, and the icon is rebuilt on every repaint, so
+  the list fell behind while its scrollbar was dragged. A crossing is reported only where the
+  chords of the final pieces cross now: 1.7 ms for that path, and the busiest thread of Reaper
+  spends 207–221 instead of 379–417 ticks on the same drag. Rendering is pixel-identical at
+  1x and 2x, and the d2d1 tests fail at the same places
 - **D2D1 stroke styles**: `DrawGeometry()` and `DrawLine()` took only the miter limit and the
   transform type from a stroke style; every join was mitered and every end flat, whatever the
   style asked for, and the mitered join fan was all but invisible under antialiasing, leaving
