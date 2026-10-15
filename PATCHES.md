@@ -219,7 +219,10 @@ This is the recommended branch. What it changes, by subsystem:
   `CheckFormatSupport()` reports `DISPLAY` for that format (see above): SynthEdit's tiled
   panel background came out at 2,8,86 instead of 25,50,157, its structure view at 105
   instead of 172. The present blit now encodes a floating-point back buffer to sRGB; a probe
-  writing 0.5 reads back 188 in the window (128 before), 8-bit swapchains are unchanged.
+  writing 0.5 reads back 188 in the window (128 before), 8-bit swapchains are unchanged. The
+  Vulkan renderer presents it through a `B8G8R8A8_SRGB` swapchain image for the same reason
+  (it fell back to `B8G8R8A8_UNORM` before, or took a float surface format in the non-linear
+  sRGB colour space where one was offered).
   `CheckColorSpaceSupport()` and `SetColorSpace1()` answer by the back buffer format, the
   rule DXVK applies as well: scRGB only for `R16G16B16A16_FLOAT`, sRGB for every other
   format (`SetColorSpace1()` accepted sRGB only, also for FP16, and the check was `E_NOTIMPL`)
