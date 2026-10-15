@@ -98,6 +98,7 @@ extern DWORD get_input_state(void);
 extern DWORD get_last_input_time(void);
 extern BOOL get_async_keyboard_state( BYTE state[256] );
 extern BOOL set_capture_window( HWND hwnd, UINT gui_flags, HWND *prev_ret );
+extern BOOL set_capture_window_grab( HWND hwnd, HWND grab_hwnd, UINT gui_flags, HWND *prev_ret );
 extern BOOL set_foreground_window( HWND hwnd, BOOL mouse, BOOL force );
 extern BOOL set_active_window( HWND hwnd, HWND *prev, BOOL mouse, BOOL focus, DWORD other_thread_id );
 extern BOOL set_ime_composition_rect( HWND hwnd, RECT rect );
