@@ -212,6 +212,17 @@ This is the recommended branch. What it changes, by subsystem:
   applies (tiled resources, logic ops and shared resources are not reported, consistent with
   the `D3D11_OPTIONS` the device returns). Two `todo_wine` in the d3d11 and d3d10core tests
   are gone; the tests pass on Windows 10 in both architectures
+- **FP16 swapchains**: DXGI presents an `R16G16B16A16_FLOAT` swapchain as scRGB — its
+  values are linear and are encoded for display, on SDR outputs too. wined3d copied them to
+  the window unencoded, so everything drawn into such a swapchain was too dark. GMPI, the
+  framework behind SynthEdit and its plug-ins, renders into one as soon as
+  `CheckFormatSupport()` reports `DISPLAY` for that format (see above): SynthEdit's tiled
+  panel background came out at 2,8,86 instead of 25,50,157, its structure view at 105
+  instead of 172. The present blit now encodes a floating-point back buffer to sRGB; a probe
+  writing 0.5 reads back 188 in the window (128 before), 8-bit swapchains are unchanged.
+  `CheckColorSpaceSupport()` and `SetColorSpace1()` answer by the back buffer format, the
+  rule DXVK applies as well: scRGB only for `R16G16B16A16_FLOAT`, sRGB for every other
+  format (`SetColorSpace1()` accepted sRGB only, also for FP16, and the check was `E_NOTIMPL`)
 - **WineD3D**: composition buffer with dirty rect accumulation, GL buffer recycling pool
   (70 % RSS reduction), and a `vs_out` initialisation that no longer trips NVIDIA's shader
   compiler warnings. Client threads that wait for the command-stream thread (a map that
