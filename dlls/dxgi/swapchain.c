@@ -958,23 +958,51 @@ static UINT STDMETHODCALLTYPE d3d11_swapchain_GetCurrentBackBufferIndex(IDXGISwa
     return 0;
 }
 
+/* The colour space a swapchain is presented in follows from its back buffer
+ * format: an R16G16B16A16_FLOAT swapchain is scRGB, on SDR outputs too, and
+ * plain sRGB is not available for it; every other format is sRGB. HDR10 is
+ * not supported. */
+static BOOL d3d11_swapchain_supports_colour_space(struct d3d11_swapchain *swapchain,
+        DXGI_COLOR_SPACE_TYPE colour_space)
+{
+    struct wined3d_swapchain_desc wined3d_desc;
+
+    wined3d_mutex_lock();
+    wined3d_swapchain_get_desc(swapchain->wined3d_swapchain, &wined3d_desc);
+    wined3d_mutex_unlock();
+
+    if (wined3d_desc.backbuffer_format == WINED3DFMT_R16G16B16A16_FLOAT)
+        return colour_space == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+    return colour_space == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+}
+
 static HRESULT STDMETHODCALLTYPE d3d11_swapchain_CheckColorSpaceSupport(IDXGISwapChain4 *iface,
         DXGI_COLOR_SPACE_TYPE colour_space, UINT *colour_space_support)
 {
-    FIXME("iface %p, colour_space %#x, colour_space_support %p stub!\n",
+    struct d3d11_swapchain *swapchain = d3d11_swapchain_from_IDXGISwapChain4(iface);
+
+    TRACE("iface %p, colour_space %#x, colour_space_support %p.\n",
             iface, colour_space, colour_space_support);
 
-    return E_NOTIMPL;
+    if (!colour_space_support)
+        return E_INVALIDARG;
+
+    *colour_space_support = d3d11_swapchain_supports_colour_space(swapchain, colour_space)
+            ? DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT : 0;
+
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE d3d11_swapchain_SetColorSpace1(IDXGISwapChain4 *iface,
         DXGI_COLOR_SPACE_TYPE colour_space)
 {
-    FIXME("iface %p, colour_space %#x semi-stub!\n", iface, colour_space);
+    struct d3d11_swapchain *swapchain = d3d11_swapchain_from_IDXGISwapChain4(iface);
 
-    if (colour_space != DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)
+    TRACE("iface %p, colour_space %#x.\n", iface, colour_space);
+
+    if (!d3d11_swapchain_supports_colour_space(swapchain, colour_space))
     {
-        WARN("Colour space %u not supported.\n", colour_space);
+        WARN("Colour space %#x not supported.\n", colour_space);
         return E_INVALIDARG;
     }
 
