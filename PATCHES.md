@@ -257,7 +257,11 @@ This is the recommended branch. What it changes, by subsystem:
   X round trips under the mutex, 6–82 ms each while the X server is busy with a resize
   (WPF creates a swapchain per resize step), and the restore also undid a night-light
   ramp set outside Wine whenever a windowed D3D application exited. A viewport update
-  that does not change the state emits no packet (d2d1 set it per primitive).
+  that does not change the state emits no packet (d2d1 set it per primitive). With the
+  Vulkan renderer a buffer the CPU does not access is no longer uploaded through a BO in
+  device-local memory, which the CPU cannot map: the initial data of a
+  `D3D11_USAGE_DEFAULT` buffer aborted the process on an assertion (SynthEdit 4 s after
+  start, `VK_ERROR_MEMORY_MAP_FAILED`). Such uploads go through system memory, as upstream.
 - **ntdll**: MADV_FREE for MEM_RESET (improved page reclaim behaviour)
 - **ntdll**: the heap enabled the LFH frontend only for size classes up to 1K; blocks between
   1K and 16K stayed in the backend heap, whose free path writes the free-list links over the
