@@ -1693,7 +1693,7 @@ BOOL X11DRV_EnterNotify( HWND hwnd, XEvent *xev )
 
     x11drv_thread_data()->keymapnotify_hwnd = hwnd;
 
-    if (hwnd == NtUserGetAncestor( get_capture_window(), GA_ROOT )) return FALSE;
+    if (is_capture_or_grab_window( hwnd )) return FALSE;
 
     if (is_old_motion_event( event->serial ))
     {
@@ -1741,7 +1741,7 @@ BOOL X11DRV_LeaveNotify( HWND hwnd, XEvent *xev )
     if (!hwnd) return FALSE;
     /* the pointer went into a child of ours, it did not leave the window */
     if (event->detail == NotifyInferior) return FALSE;
-    if (hwnd == NtUserGetAncestor( get_capture_window(), GA_ROOT )) return FALSE;
+    if (is_capture_or_grab_window( hwnd )) return FALSE;
 
     if (is_old_motion_event( event->serial ))
     {

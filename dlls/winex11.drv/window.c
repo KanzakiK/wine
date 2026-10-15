@@ -3849,6 +3849,7 @@ BOOL X11DRV_ScrollDC( HDC hdc, INT dx, INT dy, HRGN update )
  */
 void X11DRV_SetCapture( HWND hwnd, UINT flags, HWND previous )
 {
+    struct x11drv_thread_data *thread_data = x11drv_thread_data();
     struct x11drv_win_data *data;
 
     TRACE( "hwnd %p, flags %#x, previous %p\n", hwnd, flags, previous );
@@ -3864,11 +3865,13 @@ void X11DRV_SetCapture( HWND hwnd, UINT flags, HWND previous )
                           PointerMotionMask | ButtonPressMask | ButtonReleaseMask,
                           GrabModeAsync, GrabModeAsync, None, None, CurrentTime );
             XFlush( data->display );
+            thread_data->grab_hwnd = data->hwnd;
         }
         release_win_data( data );
     }
     else if (previous)  /* release capture */
     {
+        thread_data->grab_hwnd = NULL;
         if (!(data = get_win_data( previous ))) return;
         XUngrabPointer( data->display, CurrentTime );
         XFlush( data->display );

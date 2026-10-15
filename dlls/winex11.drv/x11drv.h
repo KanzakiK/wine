@@ -426,6 +426,8 @@ struct x11drv_thread_data
 {
     Display *display;
     XEvent  *current_event;        /* event currently being processed */
+    HWND     grab_hwnd;            /* window that grabs the pointer, the menu window of a popup menu
+                                      whose capture is on the owner */
     HWND     last_focus;           /* last window that had focus */
     HWND     keymapnotify_hwnd;    /* window that should receive modifier release events */
     XIM      xim;                  /* input method */
@@ -1037,6 +1039,13 @@ static inline HWND get_capture_window(void)
     GUITHREADINFO info;
     info.cbSize = sizeof(info);
     return NtUserGetGUIThreadInfo( GetCurrentThreadId(), &info ) ? info.hwndCapture : 0;
+}
+
+/* crossing events of the capture window or of the window that grabs the pointer are no motion */
+static inline BOOL is_capture_or_grab_window( HWND hwnd )
+{
+    return hwnd == NtUserGetAncestor( get_capture_window(), GA_ROOT ) ||
+           (hwnd && hwnd == x11drv_thread_data()->grab_hwnd);
 }
 
 static inline BOOL intersect_rect( RECT *dst, const RECT *src1, const RECT *src2 )
