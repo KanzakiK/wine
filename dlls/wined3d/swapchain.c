@@ -2148,9 +2148,9 @@ static VkFormat wined3d_swapchain_vk_select_vk_format(struct wined3d_swapchain_v
     struct wined3d_adapter_vk *adapter_vk;
     const struct wined3d_format *format;
     VkPhysicalDevice vk_physical_device;
+    VkFormat backbuffer_vk_format, vk_format;
     VkSurfaceFormatKHR *vk_formats;
     uint32_t format_count, i;
-    VkFormat vk_format;
     VkResult vr;
 
     adapter_vk = wined3d_adapter_vk(device_vk->d.adapter);
@@ -2158,9 +2158,18 @@ static VkFormat wined3d_swapchain_vk_select_vk_format(struct wined3d_swapchain_v
     vk_info = &adapter_vk->vk_info;
 
     if ((format = wined3d_get_format(&adapter_vk->a, desc->backbuffer_format, WINED3D_BIND_RENDER_TARGET)))
-        vk_format = wined3d_format_vk(format)->vk_format;
+        backbuffer_vk_format = wined3d_format_vk(format)->vk_format;
     else
-        vk_format = VK_FORMAT_B8G8R8A8_UNORM;
+        backbuffer_vk_format = VK_FORMAT_B8G8R8A8_UNORM;
+
+    /* DXGI presents an R16G16B16A16_FLOAT swapchain as scRGB, i.e. its values
+     * are linear and are encoded for display, on SDR outputs too. Present it
+     * through an sRGB image, which makes the blit into the swapchain image
+     * encode it; a float image in the non-linear sRGB colour space would show
+     * the linear values unencoded. */
+    vk_format = backbuffer_vk_format;
+    if (vk_format == VK_FORMAT_R16G16B16A16_SFLOAT)
+        vk_format = VK_FORMAT_B8G8R8A8_SRGB;
 
     vr = VK_CALL(vkGetPhysicalDeviceSurfaceFormatsKHR(vk_physical_device, vk_surface, &format_count, NULL));
     if (vr < 0 || !format_count)
@@ -2188,7 +2197,7 @@ static VkFormat wined3d_swapchain_vk_select_vk_format(struct wined3d_swapchain_v
     if (i == format_count)
     {
         /* Try to create a swapchain with format conversion. */
-        vk_format = get_swapchain_fallback_format(vk_format);
+        vk_format = get_swapchain_fallback_format(backbuffer_vk_format);
         WARN("Failed to find Vulkan swapchain format for %s.\n", debug_d3dformat(desc->backbuffer_format));
         for (i = 0; i < format_count; ++i)
         {
