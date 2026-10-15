@@ -2937,8 +2937,12 @@ void wined3d_device_context_emit_update_sub_resource(struct wined3d_device_conte
     if (resource->type == WINED3D_RTYPE_BUFFER && box->right - box->left == resource->size)
         invalidate_client_address(resource);
 
-    if (context->ops->map_upload_bo(context, resource, sub_resource_idx, &map_desc, box,
-            WINED3D_MAP_WRITE | ((resource->type == WINED3D_RTYPE_BUFFER) ? WINED3D_MAP_DISCARD : 0)))
+    /* A buffer goes through a fresh BO where the adapter can hand out a mapped
+     * one, otherwise through system memory like a texture; the Vulkan adapter
+     * cannot map the device-local memory of a buffer the CPU does not access. */
+    if ((resource->type == WINED3D_RTYPE_BUFFER && context->ops->map_upload_bo(context, resource,
+            sub_resource_idx, &map_desc, box, WINED3D_MAP_WRITE | WINED3D_MAP_DISCARD))
+            || context->ops->map_upload_bo(context, resource, sub_resource_idx, &map_desc, box, WINED3D_MAP_WRITE))
     {
         const struct wined3d_format *format = resource->format;
 
