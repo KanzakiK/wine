@@ -2040,6 +2040,12 @@ BOOL WINAPI NtUserTrackMouseEvent( TRACKMOUSEEVENT *info )
  */
 BOOL set_capture_window( HWND hwnd, UINT gui_flags, HWND *prev_ret )
 {
+    return set_capture_window_grab( hwnd, 0, gui_flags, prev_ret );
+}
+
+/* set the capture window, the driver grabs the pointer on grab_hwnd if it is set */
+BOOL set_capture_window_grab( HWND hwnd, HWND grab_hwnd, UINT gui_flags, HWND *prev_ret )
+{
     HWND previous = 0;
     UINT flags = 0;
     BOOL ret;
@@ -2061,7 +2067,8 @@ BOOL set_capture_window( HWND hwnd, UINT gui_flags, HWND *prev_ret )
 
     if (ret)
     {
-        user_driver->pSetCapture( NtUserGetAncestor( hwnd, GA_ROOT ), gui_flags, NtUserGetAncestor( previous, GA_ROOT ) );
+        user_driver->pSetCapture( NtUserGetAncestor( hwnd && grab_hwnd ? grab_hwnd : hwnd, GA_ROOT ), gui_flags,
+                                  NtUserGetAncestor( previous, GA_ROOT ) );
 
         if (previous)
             NtUserNotifyWinEvent( EVENT_SYSTEM_CAPTUREEND, previous, OBJID_WINDOW, 0 );

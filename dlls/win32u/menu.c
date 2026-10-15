@@ -694,8 +694,9 @@ BOOL set_window_menu( HWND hwnd, HMENU handle )
         return FALSE;
 
     hwnd = get_full_window_handle( hwnd );
-    if (get_capture() == hwnd)
-        set_capture_window( 0, GUI_INMENUMODE, NULL );  /* release the capture */
+    /* release the capture, unless it is held for a popup menu owned by the window */
+    if (get_capture() == hwnd && (!top_popup || top_popup == hwnd))
+        set_capture_window( 0, GUI_INMENUMODE, NULL );
 
     if (handle)
     {
@@ -4332,7 +4333,7 @@ static BOOL track_menu( HMENU hmenu, UINT flags, int x, int y, HWND hwnd, const 
     int executed_menu_id = -1;
     HWND capture_win;
     struct menu *menu;
-    BOOL remove;
+    BOOL remove, dispatch;
     MTRACKER mt;
     MSG msg;
 
@@ -4362,12 +4363,17 @@ static BOOL track_menu( HMENU hmenu, UINT flags, int x, int y, HWND hwnd, const 
 
     if (flags & TF_ENDMENU) exit_menu = TRUE;
 
-    /* owner may not be visible when tracking a popup, so use the menu itself */
-    capture_win = (flags & TPM_POPUPMENU) ? menu->hWnd : mt.hOwnerWnd;
-    set_capture_window( capture_win, GUI_INMENUMODE, NULL );
+    /* Windows keeps the capture on the owner. The owner of a popup may not be visible,
+     * so the driver grabs the pointer on the menu window instead. */
+    capture_win = (flags & TPM_POPUPMENU) ? menu->hWnd : 0;
+    if (!set_capture_window_grab( mt.hOwnerWnd, capture_win, GUI_INMENUMODE, NULL ) && capture_win)
+        set_capture_window( capture_win, GUI_INMENUMODE, NULL );
 
     if ((flags & TPM_POPUPMENU) && menu->nItems == 0)
+    {
+        set_capture_window( 0, GUI_INMENUMODE, NULL );
         return FALSE;
+    }
 
     while (!exit_menu)
     {
@@ -4407,7 +4413,7 @@ static BOOL track_menu( HMENU hmenu, UINT flags, int x, int y, HWND hwnd, const 
         mt.pt = msg.pt;
         if (msg.hwnd == menu->hWnd || msg.message != WM_TIMER) enter_idle_sent = FALSE;
 
-        remove = FALSE;
+        remove = dispatch = FALSE;
         if (msg.message >= WM_MOUSEFIRST && msg.message <= WM_MOUSELAST)
         {
             /*
@@ -4426,7 +4432,13 @@ static BOOL track_menu( HMENU hmenu, UINT flags, int x, int y, HWND hwnd, const 
                 /* no WM_NC... messages in captured state */
                 case WM_RBUTTONDBLCLK:
                 case WM_RBUTTONDOWN:
-                    if (!(flags & TPM_RIGHTBUTTON)) break;
+                    if (!(flags & TPM_RIGHTBUTTON))
+                    {
+                        /* a right click outside a popup ends it, unless the left button is held */
+                        if ((flags & TPM_POPUPMENU) && !hmenu && !(msg.wParam & MK_LBUTTON))
+                            exit_menu = TRUE;
+                        break;
+                    }
                     /* fall through */
                 case WM_LBUTTONDBLCLK:
                 case WM_LBUTTONDOWN:
@@ -4437,7 +4449,12 @@ static BOOL track_menu( HMENU hmenu, UINT flags, int x, int y, HWND hwnd, const 
                     break;
 
                 case WM_RBUTTONUP:
-                    if (!(flags & TPM_RIGHTBUTTON)) break;
+                    if (!(flags & TPM_RIGHTBUTTON))
+                    {
+                        /* the owner of a popup gets it, unless the left button is held */
+                        dispatch = (flags & TPM_POPUPMENU) && !(msg.wParam & MK_LBUTTON);
+                        break;
+                    }
                     /* fall through */
                 case WM_LBUTTONUP:
                     /* Check if a menu was selected by the mouse */
@@ -4461,6 +4478,13 @@ static BOOL track_menu( HMENU hmenu, UINT flags, int x, int y, HWND hwnd, const 
                     /* the selected menu item must be changed every time the mouse moves. */
                     if (hmenu) exit_menu |= !menu_mouse_move( &mt, hmenu, flags );
                     break;
+            }
+
+            if (dispatch)
+            {
+                NtUserPeekMessage( &msg, 0, msg.message, msg.message, PM_REMOVE );
+                NtUserDispatchMessage( &msg );
+                continue;
             }
         }
         else if (msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST)
@@ -4733,6 +4757,16 @@ track_menu:
     exit_tracking( hwnd, FALSE );
 }
 
+/* the menu loop of the current thread holds the capture */
+static BOOL is_tracking_menu(void)
+{
+    GUITHREADINFO info;
+
+    info.cbSize = sizeof(info);
+    return NtUserGetGUIThreadInfo( GetCurrentThreadId(), &info ) && (info.flags & GUI_INMENUMODE) &&
+           is_current_thread_window( info.hwndMenuOwner );
+}
+
 /**********************************************************************
  *           NtUserTrackPopupMenuEx   (win32u.@)
  */
@@ -4752,7 +4786,8 @@ BOOL WINAPI NtUserTrackPopupMenuEx( HMENU handle, UINT flags, INT x, INT y, HWND
         return FALSE;
     }
 
-    if (is_window(menu->hWnd))
+    /* only TPM_RECURSE opens a menu while the thread tracks another one */
+    if (is_window(menu->hWnd) || (!(flags & TPM_RECURSE) && is_tracking_menu()))
     {
         RtlSetLastWin32Error( ERROR_POPUP_ALREADY_ACTIVE );
         return FALSE;
