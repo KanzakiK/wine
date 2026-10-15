@@ -1914,7 +1914,8 @@ BOOL set_capture_window( HWND hwnd, UINT gui_flags, HWND *prev_ret )
     return set_capture_window_grab( hwnd, 0, gui_flags, prev_ret );
 }
 
-/* set the capture window, the driver grabs the pointer on grab_hwnd if it is set */
+/* set the capture window, the pointer grab of the driver is on grab_hwnd if it is set,
+ * also when the capture is released */
 BOOL set_capture_window_grab( HWND hwnd, HWND grab_hwnd, UINT gui_flags, HWND *prev_ret )
 {
     HWND previous = 0;

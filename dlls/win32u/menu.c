@@ -4362,7 +4362,7 @@ static BOOL track_menu( HMENU hmenu, UINT flags, int x, int y, HWND hwnd, const 
 
     if ((flags & TPM_POPUPMENU) && menu->nItems == 0)
     {
-        set_capture_window( 0, GUI_INMENUMODE, NULL );
+        set_capture_window_grab( 0, capture_win, GUI_INMENUMODE, NULL );
         return FALSE;
     }
 
@@ -4587,7 +4587,7 @@ static BOOL track_menu( HMENU hmenu, UINT flags, int x, int y, HWND hwnd, const 
         else mt.trackFlags &= ~TF_SKIPREMOVE;
     }
 
-    set_capture_window( 0, GUI_INMENUMODE, NULL );
+    set_capture_window_grab( 0, capture_win, GUI_INMENUMODE, NULL );
 
     /* If dropdown is still painted and the close box is clicked on
      * then the menu will be destroyed as part of the DispatchMessage above.
