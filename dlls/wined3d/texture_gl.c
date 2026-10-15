@@ -930,11 +930,19 @@ static void texture2d_blt_fbo(struct wined3d_device *device, struct wined3d_cont
     /* The window drawable holds display-ready bytes.  GL_FRAMEBUFFER_SRGB is
      * still enabled from a draw through an sRGB render target view, and on an
      * sRGB-capable drawable a blit would then encode the already encoded
-     * colours a second time (upstream MR 10567). */
+     * colours a second time (upstream MR 10567).
+     *
+     * A floating-point back buffer is the exception: DXGI presents an
+     * R16G16B16A16_FLOAT swapchain as scRGB, i.e. its values are linear and
+     * are encoded for display, on SDR outputs too. */
     if (gl_info->supported[ARB_FRAMEBUFFER_SRGB]
             && (dst_location == WINED3D_LOCATION_DRAWABLE || src_location == WINED3D_LOCATION_DRAWABLE))
     {
-        gl_info->gl_ops.gl.p_glDisable(GL_FRAMEBUFFER_SRGB);
+        if (dst_location == WINED3D_LOCATION_DRAWABLE && src_location != WINED3D_LOCATION_DRAWABLE
+                && (src_texture->resource.format_attrs & WINED3D_FORMAT_ATTR_FLOAT))
+            gl_info->gl_ops.gl.p_glEnable(GL_FRAMEBUFFER_SRGB);
+        else
+            gl_info->gl_ops.gl.p_glDisable(GL_FRAMEBUFFER_SRGB);
         context_invalidate_state(context, STATE_SHADER(WINED3D_SHADER_TYPE_PIXEL));
     }
 
