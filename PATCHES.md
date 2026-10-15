@@ -389,6 +389,24 @@ This is the recommended branch. What it changes, by subsystem:
   behind at its old screen position while the window was dragged away. Win32 drop-down
   lists lose their capture the same way but have no handler for it, so they still stay
   until the next click. WineHQ bug 12027.
+- **win32u**: `TrackPopupMenu()` keeps the mouse capture on the owner window, as Windows
+  does, instead of moving it to the menu window, and a popup menu that does not track the
+  right button (no `TPM_RIGHTBUTTON`) no longer swallows that button. Its `WM_RBUTTONUP`
+  goes to the owner in screen coordinates, where `DefWindowProc` turns it into
+  `WM_CONTEXTMENU`, and a right click outside the menu ends it and stays in the queue like
+  a left click; neither happens while the left button is held for the menu. During the
+  menu `GetCapture()` and `GUITHREADINFO.hwndMenuOwner` name the owner, the owner gets
+  `WM_CAPTURECHANGED` when the menu ends, and a second `TrackPopupMenu()` from one of its
+  handlers fails with `ERROR_POPUP_ALREADY_ACTIVE` unless it passes `TPM_RECURSE`. An
+  application that opens a context menu from `WM_RBUTTONDOWN` and finishes the press in
+  `WM_RBUTTONUP`, `WM_CONTEXTMENU` or `WM_CAPTURECHANGED` never saw those messages; Groove
+  Agent SE opens its menus with an invisible `SMTG MessageOnlyWindow` as the owner. The
+  pointer grab of the X11 driver stays on the menu window, since the owner need not be
+  mapped. Measured against Windows 10 19045 with a self-driving probe: the eleven gestures
+  of the first reference run now give the same messages. The new `test_menu_owner_input`
+  passes, and the two capture checks in the user32 message tests that were marked todo now
+  pass as well. Still different: the middle button, which Windows passes to the owner
+  during a menu, and `WM_MENURBUTTONUP`, which Wine does not send.
 - **winex11**: the driver reports the pointer position when the pointer leaves one of its
   windows (`LeaveNotify`), the way it already does when the pointer enters one. Without it
   the position the server holds stays where the pointer was last seen inside the window
