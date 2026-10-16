@@ -4560,6 +4560,48 @@ NTSTATUS ntdll_get_unix_file_name( const WCHAR *dos, char **unix_name, UINT disp
 }
 
 
+NTSTATUS ntdll_unmount_device( int fd, char *mount_point )
+{
+    NTSTATUS status;
+    struct stat st;
+#ifdef __APPLE__
+    static char diskutil[] = "diskutil";
+    static char unmount[] = "unmount";
+    char *argv[4] = {diskutil, unmount, mount_point, NULL};
+#else
+    static char umount[] = "umount";
+    char *argv[3] = {umount, mount_point, NULL};
+#endif
+
+    if (fstat( fd, &st ) == -1)
+        return STATUS_INVALID_PARAMETER;
+
+    SERVER_START_REQ( unmount_device )
+    {
+        req->dev = st.st_rdev;
+        status = wine_server_call( req );
+    }
+    SERVER_END_REQ;
+
+    if (!mount_point)
+        return status;
+
+    __wine_unix_spawnvp( argv, TRUE );
+
+#ifdef linux
+    /* umount will fail to release the loop device since we still have a
+     * handle to it, so we release it here */
+    if (major( st.st_rdev ) == LOOP_MAJOR)
+        ioctl( fd, 0x4c01 /* LOOP_CLR_FD */, 0 );
+#endif
+    /* Add in a small delay. Without this subsequent tasks like
+     * IOCTL_STORAGE_EJECT_MEDIA might fail. */
+    usleep( 100000 );
+
+    return status;
+}
+
+
 /***********************************************************************
  *           unmount_device
  *
@@ -4573,33 +4615,11 @@ static NTSTATUS unmount_device( HANDLE handle )
     if (!(status = server_get_unix_fd( handle, 0, &unix_fd, &needs_close, NULL, NULL )))
     {
         struct stat st;
-        char *mount_point = NULL;
 
         if (fstat( unix_fd, &st ) == -1 || !is_valid_mounted_device( &st ))
             status = STATUS_INVALID_PARAMETER;
         else
-        {
-            if ((mount_point = get_device_mount_point( st.st_rdev )))
-            {
-#ifdef __APPLE__
-                static char diskutil[] = "diskutil";
-                static char unmount[] = "unmount";
-                char *argv[4] = {diskutil, unmount, mount_point, NULL};
-#else
-                static char umount[] = "umount";
-                char *argv[3] = {umount, mount_point, NULL};
-#endif
-                __wine_unix_spawnvp( argv, TRUE );
-#ifdef linux
-                /* umount will fail to release the loop device since we still have
-                    a handle to it, so we release it here */
-                if (major(st.st_rdev) == LOOP_MAJOR) ioctl( unix_fd, 0x4c01 /*LOOP_CLR_FD*/, 0 );
-#endif
-                /* Add in a small delay. Without this subsequent tasks
-                    like IOCTL_STORAGE_EJECT_MEDIA might fail. */
-                usleep( 100000 );
-            }
-        }
+            status = ntdll_unmount_device( unix_fd, get_device_mount_point( st.st_rdev ));
         if (needs_close) close( unix_fd );
     }
     return status;
@@ -6777,10 +6797,7 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
     switch (code)
     {
     case FSCTL_DISMOUNT_VOLUME:
-        status = server_ioctl_file( handle, event, apc, apc_context, io, code,
-                                    in_buffer, in_size, out_buffer, out_size );
-        if (!status) status = unmount_device( handle );
-        return status;
+        return unmount_device( handle );
 
     case FSCTL_PIPE_IMPERSONATE:
         FIXME("FSCTL_PIPE_IMPERSONATE: impersonating self\n");
