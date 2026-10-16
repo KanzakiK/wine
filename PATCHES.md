@@ -262,6 +262,15 @@ This is the recommended branch. What it changes, by subsystem:
   device-local memory, which the CPU cannot map: the initial data of a
   `D3D11_USAGE_DEFAULT` buffer aborted the process on an assertion (SynthEdit 4 s after
   start, `VK_ERROR_MEMORY_MAP_FAILED`). Such uploads go through system memory, as upstream.
+- **Backports from Wine 11.20** (six upstream commits, cherry-picked with their origin):
+  the `cs_queue` fields are aligned to cache lines so the client and the CS thread no
+  longer share one, the queue pointers are published with `WriteRelease()` instead of a
+  full `InterlockedExchange()`, the GLSL program key compares the pixel shader ID first
+  and `parse_channel_desc()` no longer calls `strlen()` (wined3d); `media_source_start()`
+  no longer reads an uninitialised stream count (winegstreamer, Wine bug 60241); and a
+  `RtlWaitOnAddress()` entry is unlinked with release semantics and re-checked with acquire
+  semantics, so a waiter cannot see its address cleared before the unlink is visible
+  (ntdll, the queue the loader-lock wake above runs through)
 - **ntdll**: MADV_FREE for MEM_RESET (improved page reclaim behaviour)
 - **ntdll**: the heap enabled the LFH frontend only for size classes up to 1K; blocks between
   1K and 16K stayed in the backend heap, whose free path writes the free-list links over the
