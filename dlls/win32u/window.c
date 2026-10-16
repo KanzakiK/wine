@@ -1740,7 +1740,16 @@ BOOL set_window_pixel_format( HWND hwnd, int format, BOOL internal )
         return FALSE;
     }
     if (!internal) win->pixel_format = format;
-    if (format && !win->clip_clients) changed = win->clip_clients = TRUE;
+    if (format && !win->clip_clients)
+    {
+        changed = win->clip_clients = TRUE;
+        /* A DC of this window that already exists is bound to an ancestor's
+         * window surface, while from now on that surface's region excludes
+         * this window's client area (window_clips_clients()).  Everything
+         * painted through such a DC would land in surface bits the flush no
+         * longer copies.  Make those DCs recompute their visible region. */
+        invalidate_dce( win, NULL );
+    }
     release_win_ptr( win );
 
     if (changed) update_window_state( hwnd );
@@ -2328,6 +2337,7 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
     struct window_rects old_rects;
     RECT extra_rects[3];
     struct window_surface *old_surface;
+    RECT surface_rects[2], *surface_copy = NULL;
     HICON icon, icon_small;
     ICONINFO ii, ii_small;
 
@@ -2340,6 +2350,29 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
 
     get_window_rects( hwnd, COORDS_PARENT, &old_rects, dpi );
     if (IsRectEmpty( &valid_rects[0] ) || is_layered) valid_rects = NULL;
+
+    /* A window class that asks for a full redraw on resize (CS_HREDRAW/CS_VREDRAW)
+     * makes WM_NCCALCSIZE return WVR_REDRAW, which clears the valid rects.  That is
+     * the right answer for the application - it will repaint everything - but it
+     * also stops the pixels of the old window surface from being carried over when
+     * the surface object itself is replaced.  The successor then starts out as the
+     * plain fill colour, and the expose events the resize generates flush it before
+     * the repaint arrives: one frame of the whole window in that colour.  Keep a
+     * copy rectangle of our own for that case - stale pixels for one frame are
+     * better than none, and the pending repaint overwrites them anyway. */
+    if (!is_layered)
+    {
+        int cx, cy;
+        surface_rects[0] = new_rects->client;
+        surface_rects[1] = old_rects.client;
+        cx = min( surface_rects[0].right - surface_rects[0].left, surface_rects[1].right - surface_rects[1].left );
+        cy = min( surface_rects[0].bottom - surface_rects[0].top, surface_rects[1].bottom - surface_rects[1].top );
+        surface_rects[0].right = surface_rects[0].left + cx;
+        surface_rects[0].bottom = surface_rects[0].top + cy;
+        surface_rects[1].right = surface_rects[1].left + cx;
+        surface_rects[1].bottom = surface_rects[1].top + cy;
+        if (cx > 0 && cy > 0) surface_copy = surface_rects;
+    }
 
     if (!(win = get_win_ptr( hwnd )) || win == WND_DESKTOP || win == WND_OTHER_PROCESS) return FALSE;
     old_surface = win->surface;
@@ -2401,6 +2434,28 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
     if (ret)
     {
         update_surface_region( surface_win );
+        /* A child drawn by another process is subtracted from its top-level's
+         * surface region (server, clip_pixel_format_children), so the owner's
+         * flush keeps off the pixels the child paints into the shared drawable.
+         * That region is only recomputed by the owner, and update_surface_region()
+         * above cannot reach a surface window of another process -- so the owner
+         * never learns that a foreign child was shown, moved or resized after its
+         * surface region was taken.  Creation and destruction already prod the
+         * top-level (NtUserCreateWindowEx, destroy_window); do the same here.
+         * Seen in FL Studio 2026: the Browser window is open at start, Chromium's
+         * WebView2 child grows into it later, and FL's repaint storm after an
+         * activation change then flushed its untouched (black) surface over the
+         * page for ~0.5 s -- until the window was hidden and shown again, which
+         * made FL recompute the region with the child in it. */
+        if (is_child && surface_win && surface_win != hwnd
+            && ((swp_flags & (SWP_SHOWWINDOW | SWP_HIDEWINDOW))
+                || !EqualRect( &old_rects.client, &new_rects->client )))
+        {
+            WND *top = get_win_ptr( surface_win );
+
+            if (top == WND_OTHER_PROCESS) update_window_state( surface_win );
+            else if (top && top != WND_DESKTOP) release_win_ptr( top );
+        }
         if (((swp_flags & SWP_AGG_NOPOSCHANGE) != SWP_AGG_NOPOSCHANGE) ||
             (swp_flags & (SWP_HIDEWINDOW | SWP_SHOWWINDOW | SWP_STATECHANGED | SWP_FRAMECHANGED)))
             invalidate_dce( win, &old_rects.window );
@@ -2452,6 +2507,9 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
                     move_window_bits( hwnd, new_rects, valid_rects );
                 }
             }
+            else if (surface_copy && old_surface != new_surface && old_surface != &dummy_surface &&
+                     new_surface && new_surface != &dummy_surface)
+                inherit_window_surface_bits( hwnd, &new_rects->window, old_surface, &old_rects.visible, surface_copy );
             window_surface_release( old_surface );
         }
         else if (valid_rects)
@@ -2484,6 +2542,17 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
                 move_window_bits( hwnd, new_rects, valid_rects );
             }
         }
+
+        /* A window that was drawing straight to the driver window and now gets a
+         * window surface again starts out with a blank surface: the pixels it is
+         * supposed to own live on the driver window, and nothing copies them back
+         * (X11DRV_MoveWindowBits copies within the same window, source == target).
+         * The valid rects still claim the client area is intact, so no repaint is
+         * asked for either, and everything that does not redraw itself of its own
+         * accord stays at the surface fill colour.  Ask for one. */
+        if (!old_surface && new_surface && new_surface != &dummy_surface &&
+            (get_window_long( hwnd, GWL_STYLE ) & WS_VISIBLE))
+            NtUserRedrawWindow( hwnd, NULL, 0, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN );
 
         if (need_icons && (icon = get_window_icon_info( hwnd, ICON_BIG, icon, &ii )))
         {
@@ -2791,6 +2860,13 @@ BOOL WINAPI NtUserUpdateLayeredWindow( HWND hwnd, HDC hdc_dst, const POINT *pts_
         window_surface_unlock( surface );
 
         if (!(flags & ULW_COLORKEY)) key = CLR_INVALID;
+        /* Windows keys nothing with a PALETTEINDEX key here.  Measured on
+         * Windows 10 with an 8 bpp source whose logical palette and colour
+         * table both name the key colour, only one of them, or neither: the
+         * colour stays, and so do black pixels.  get_color_key() would turn the
+         * key into black and cut those away instead (issue 434; Microsoft
+         * Agent 2.0 passes PALETTEINDEX keys, WineHQ bug 60180). */
+        else if ((key & 0xff000000) == 0x01000000) key = CLR_INVALID;
         window_surface_set_layered( surface, key, -1, 0xff000000 );
 
         user_driver->pUpdateLayeredWindow( hwnd, source_alpha, flags );
@@ -4098,6 +4174,40 @@ done:
     return after;
 }
 
+/***********************************************************************
+ *           sync_zorder_after_wm_raise
+ *
+ * The window manager raised and activated a top-level window on its own (a
+ * click under X11).  Windows brings an activated window to the top of its
+ * band, so request that here, letting the application rewrite the insert
+ * position from WM_WINDOWPOSCHANGING as it would on Windows.  The flag tells
+ * the driver to re-apply whatever win32 Z-order results to the native
+ * stacking, since the native side moved without any win32 change.
+ */
+void sync_zorder_after_wm_raise( HWND hwnd, BOOL activated )
+{
+    HWND prev;
+
+    if (!hwnd || hwnd == get_desktop_window() || is_iconic( hwnd )) return;
+    if ((get_window_long( hwnd, GWL_STYLE ) & (WS_CHILD | WS_POPUP)) == WS_CHILD) return;
+    /* only for windows of this thread: a SetWindowPos on another thread's window sends
+     * WM_WINDOWPOSCHANGING synchronously to a thread that may not be pumping messages */
+    if (!is_current_thread_window( hwnd )) return;
+
+    prev = get_window_relative( hwnd, GW_HWNDPREV );
+    while (prev && !(get_window_long( prev, GWL_STYLE ) & WS_VISIBLE))
+        prev = get_window_relative( prev, GW_HWNDPREV );
+    if (!prev) return; /* already on top, nothing the native side could disagree with */
+
+    TRACE( "hwnd %p raised by the window manager, win32 predecessor %p, activated %u\n", hwnd, prev, activated );
+    if (activated) /* Windows brings an activated window to the top of its band */
+        NtUserSetWindowPos( hwnd, HWND_TOP, 0, 0, 0, 0,
+                            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_WINE_ZORDER_SYNC );
+    else /* an already active window keeps its win32 place: no-op for win32, the driver re-applies it */
+        NtUserSetWindowPos( hwnd, prev, 0, 0, 0, 0,
+                            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_WINE_ZORDER_SYNC );
+}
+
 /* NtUserSetWindowPos implementation */
 BOOL set_window_pos( WINDOWPOS *winpos, int parent_x, int parent_y )
 {
@@ -4173,6 +4283,53 @@ BOOL set_window_pos( WINDOWPOS *winpos, int parent_x, int parent_y )
         goto done;
     }
     if (surface) window_surface_release( surface );
+
+    /* After apply_window_pos, the window's content may have been BitBlt'd from the
+     * old position. During batch processing (EndDeferWindowPos), sibling expose_window
+     * calls can set update regions that cause DCX_EXCLUDERGN to skip parts of the
+     * BitBlt, leaving stale content. Force a full invalidation so WM_PAINT repaints
+     * everything correctly on top of the BitBlt'd content.
+     *
+     * Nothing was BitBlt'd when nothing moved, though, and SWP_AGG_NOGEOMETRYCHANGE
+     * does not cover the move bits: masking with SWP_AGG_STATUSFLAGS keeps
+     * SWP_NOMOVE|SWP_NOCLIENTMOVE in the result, so a SetWindowPos that changes
+     * nothing at all (flags 0x5917 -> masked 0x1807) never compares equal to
+     * SWP_AGG_NOGEOMETRYCHANGE (0x805) and invalidates the whole window with
+     * RDW_ERASE.  Applications that re-assert their layout on every mouse move get
+     * a full erase per motion event, and the erase reaches the screen on its own
+     * because window surfaces are flushed when the message loop goes idle - one
+     * flush shows the erased window, the next one the repainted one (issue 253:
+     * SynthEdit's canvas frames flickering while the mouse is over the menu bar).
+     *
+     * Skip that case, but compare against the *full* status mask rather than just
+     * the position bits: SWP_FRAMECHANGED asks for a non-client repaint and is a
+     * reason to invalidate even when nothing moved.  Dropping it as well leaves
+     * SynthEdit's canvas background unpainted at startup (blackcheck 18.6 %). */
+    /* SWP_AGG_NOGEOMETRYCHANGE must not be a second exemption here.  It covers size
+     * and z-order but not the move bits, so a window that moves without resizing
+     * masks to exactly SWP_AGG_NOGEOMETRYCHANGE (0x805) and gets skipped - which is
+     * precisely the case move_window_bits BitBlts, and therefore the one this
+     * invalidation was written for (issue 260: dragging SynthEdit's MDI canvas by
+     * its title bar leaves the MDI client stale until something else repaints it).
+     * Only "nothing changed at all" stays exempt.
+     *
+     * That plain-move case is a child's, though: only a child window has its bits
+     * inside an ancestor's surface for move_window_bits to BitBlt.  A top-level
+     * window that moves without resizing has its own X window, which carries its
+     * pixels along - there is nothing to repaint, but the erase this invalidation
+     * queues paints the MDI client over its children once per motion event, and a
+     * window-manager drag delivers one such SetWindowPos per motion event (issue
+     * 281: SynthEdit's canvas captions flicker while the main window is dragged;
+     * 40 moves -> 40 invalidations -> 8 frames showing the 0x404040 erase).  So a
+     * plain move invalidates child windows only. */
+    if (!(winpos->flags & (SWP_NOREDRAW | SWP_HIDEWINDOW | SWP_SHOWWINDOW)) &&
+        (winpos->flags & SWP_AGG_STATUSFLAGS) != SWP_AGG_NOPOSCHANGE &&
+        ((winpos->flags & SWP_AGG_STATUSFLAGS) != SWP_AGG_NOGEOMETRYCHANGE ||
+         (get_window_long( winpos->hwnd, GWL_STYLE ) & WS_CHILD)))
+    {
+        TRACE( "hwnd %p: post-move invalidation (flags %08x)\n", winpos->hwnd, (int)winpos->flags );
+        NtUserRedrawWindow( winpos->hwnd, NULL, 0, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN );
+    }
 
     if (winpos->flags & SWP_HIDEWINDOW)
     {
