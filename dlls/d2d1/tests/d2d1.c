@@ -19035,10 +19035,12 @@ static void test_geometry_realization(BOOL d3d11)
     ID2D1GeometryRealization *realization, *realization2;
     ID2D1RectangleGeometry *rectangle_geometry;
     ID2D1DeviceContext1 *device_context;
+    ID2D1SolidColorBrush *brush, *brush2;
     struct d2d1_test_context ctx;
-    ID2D1SolidColorBrush *brush;
+    struct resource_readback rb;
     D2D1_COLOR_F color;
     D2D1_RECT_F rect;
+    DWORD colour;
     HRESULT hr;
 
     if (!init_test_context(&ctx, d3d11))
@@ -19078,7 +19080,50 @@ static void test_geometry_realization(BOOL d3d11)
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ID2D1SolidColorBrush_Release(brush);
+    ID2D1GeometryRealization_Release(realization);
+    ID2D1GeometryRealization_Release(realization2);
 
+    /* A realization is drawn on a bitmap target, filled and stroked. */
+    set_rect(&rect, 100.0f, 100.0f, 200.0f, 200.0f);
+    hr = ID2D1Factory_CreateRectangleGeometry(ctx.factory, &rect, &rectangle_geometry);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    hr = ID2D1DeviceContext1_CreateFilledGeometryRealization(device_context,
+            (ID2D1Geometry *)rectangle_geometry, 0.25f, &realization);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    hr = ID2D1DeviceContext1_CreateStrokedGeometryRealization(device_context,
+            (ID2D1Geometry *)rectangle_geometry, 0.25f, 4.0f, NULL, &realization2);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    ID2D1RectangleGeometry_Release(rectangle_geometry);
+
+    set_color(&color, 1.0f, 0.0f, 0.0f, 1.0f);
+    hr = ID2D1DeviceContext1_CreateSolidColorBrush(device_context, &color, NULL, &brush);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    set_color(&color, 0.0f, 0.0f, 1.0f, 1.0f);
+    hr = ID2D1DeviceContext1_CreateSolidColorBrush(device_context, &color, NULL, &brush2);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID2D1DeviceContext1_BeginDraw(device_context);
+    set_color(&color, 0.0f, 0.0f, 0.0f, 1.0f);
+    ID2D1DeviceContext1_Clear(device_context, &color);
+    ID2D1DeviceContext1_DrawGeometryRealization(device_context, realization, (ID2D1Brush *)brush);
+    ID2D1DeviceContext1_DrawGeometryRealization(device_context, realization2, (ID2D1Brush *)brush2);
+    hr = ID2D1DeviceContext1_EndDraw(device_context, NULL, NULL);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    get_surface_readback(&ctx, &rb);
+    colour = get_readback_colour(&rb, 150, 150);
+    ok(compare_colour(colour, 0xffff0000, 1), "Got unexpected colour 0x%08lx.\n", colour);
+    colour = get_readback_colour(&rb, 100, 150);
+    ok(compare_colour(colour, 0xff0000ff, 1), "Got unexpected colour 0x%08lx.\n", colour);
+    colour = get_readback_colour(&rb, 150, 199);
+    ok(compare_colour(colour, 0xff0000ff, 1), "Got unexpected colour 0x%08lx.\n", colour);
+    colour = get_readback_colour(&rb, 50, 150);
+    ok(compare_colour(colour, 0xff000000, 1), "Got unexpected colour 0x%08lx.\n", colour);
+    release_resource_readback(&rb);
+
+    ID2D1SolidColorBrush_Release(brush2);
+    ID2D1SolidColorBrush_Release(brush);
     ID2D1GeometryRealization_Release(realization);
     ID2D1GeometryRealization_Release(realization2);
     ID2D1DeviceContext1_Release(device_context);
