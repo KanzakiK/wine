@@ -19,7 +19,7 @@ and run stable in production use.
 | Branch | Description |
 |--------|-------------|
 | `d2d1-dcomp-11.0` | **Recommended for stable users.** Full stack on Wine 11.0 stable: D2D1 + DComp + DWrite + WineD3D performance + winex11. Actively maintained. |
-| `d2d1-dcomp-11.<N>` (newest devel) | **Recommended for devel / rolling-release users** (e.g. `wine-tkg-dev`). The same full stack as `d2d1-dcomp-11.0`, rebased onto the latest WineHQ devel tag and rolled forward roughly every 2 weeks (currently `d2d1-dcomp-11.16`). **Use the highest-numbered `d2d1-dcomp-11.*` branch**: it is always the current rolling base; lower-numbered ones are previous snapshots, superseded. Plugin-tested by the maintainer before each push. |
+| `d2d1-dcomp-11.<N>` (newest devel) | **Recommended for devel / rolling-release users** (e.g. `wine-tkg-dev`). The same full stack as `d2d1-dcomp-11.0`, rebased onto the latest WineHQ devel tag and rolled forward roughly every 2 weeks. **Use the highest-numbered `d2d1-dcomp-11.*` branch**: it is always the current rolling base; lower-numbered ones are previous snapshots, superseded. Plugin-tested by the maintainer before each push. |
 | `d2d1-v6` | **Deprecated** (last update 2026-02-14). The original upstream-targeted D2D1-only series; superseded by the D2D1 work in `d2d1-dcomp-11.0`. Kept for reference. |
 
 ## Full Stack (Branch: `d2d1-dcomp-11.0`)
@@ -40,7 +40,7 @@ This is the recommended branch. What it changes, by subsystem:
   → about 80 ms). Bitmap brushes honour WRAP and MIRROR instead of degrading to CLAMP,
   so a tiled background is tiled rather than one tile with its edge texels stretched
   (SynthEdit panels). `SetTarget(NULL)` drops the render target bindings, so a swapchain
-  back buffer is not held across `ResizeBuffers()` The scratch vertex and index buffers are dynamic and written through a
+  back buffer is not held across `ResizeBuffers()`. The scratch vertex and index buffers are dynamic and written through a
   `WRITE_DISCARD` map instead of `UpdateSubresource()` — wined3d cannot rename a
   DEFAULT buffer from the client thread and drained the command stream once per
   primitive (1 090–1 940 synchronisations per 20 px resize step of the SynthEdit canvas,
@@ -244,7 +244,7 @@ This is the recommended branch. What it changes, by subsystem:
   `wined3d_cs_emit_present()` counts its waiters and a woken waiter passes the signal on:
   with one flag and one auto-reset event, the second of two threads presenting
   swapchains of the same device was never woken (two threads at 20000 presents each hung
-  in 3 of 3 runs, 10 of 10 complete now) A client thread that waits for the command stream in a finish or a
+  in 3 of 3 runs, 10 of 10 complete now). A client thread that waits for the command stream in a finish or a
   resource-idle wait releases the global wined3d mutex for the wait and takes it back
   afterwards, so threads of different devices no longer serialise on each other's CS
   thread — SynthEdit's WPF chrome (D3D9) and its GMPI canvas (D3D11) at every resize
@@ -485,7 +485,7 @@ This is the recommended branch. What it changes, by subsystem:
   window DC draws over the attached client window, and the copy landed on top of a frame
   the application had already presented; Dorico 6's Qt toolbar popups (top levels drawn
   through a composition swapchain) came up black in one of four openings when the first
-  GL swap won that race. Upstream has the same copy;
+  GL swap won that race. Upstream (11.20) makes the same copy.
 - **win32u**: the menu bar of a captioned window is measured and drawn through the
   undocumented non-client theming messages, as on Windows: `WM_UAHMEASUREMENUITEM`
   (0x0094) per item with an item size of 0x16, `WM_UAHINITMENU` (0x0093) before measuring
