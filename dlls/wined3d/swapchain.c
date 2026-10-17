@@ -375,8 +375,23 @@ void CDECL wined3d_swapchain_set_premultiplied_alpha(struct wined3d_swapchain *s
 void CDECL wined3d_swapchain_set_dirty_rects(struct wined3d_swapchain *swapchain,
         const RECT *rects, unsigned int count)
 {
-    if (count > ARRAY_SIZE(swapchain->present_dirty_rects))
-        count = ARRAY_SIZE(swapchain->present_dirty_rects);
+    unsigned int max = ARRAY_SIZE(swapchain->present_dirty_rects), i;
+
+    /* More rects than slots: fold the excess into the last slot instead of
+     * dropping it.  JUCE 8 reports 18 per frame for an animated UI, and a
+     * dropped rect reached the composition buffer only when a later present
+     * happened to list it among the first 16 (issue 465).  A superset is
+     * never wrong: the Windows compositor shows the whole back buffer, the
+     * dirty rects are only a hint. */
+    if (rects && count > max)
+    {
+        memcpy(swapchain->present_dirty_rects, rects, max * sizeof(*rects));
+        for (i = max; i < count; ++i)
+            UnionRect(&swapchain->present_dirty_rects[max - 1],
+                    &swapchain->present_dirty_rects[max - 1], &rects[i]);
+        swapchain->present_dirty_rect_count = max;
+        return;
+    }
 
     if (rects && count)
         memcpy(swapchain->present_dirty_rects, rects, count * sizeof(*rects));
