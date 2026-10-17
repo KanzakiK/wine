@@ -65,6 +65,20 @@ This is the recommended branch. What it changes, by subsystem:
   at the outer edge 0.061 before, 0.012 after, Windows 10 0.031; the d2d1 tests fail at
   the same places as before. Visible on the Steinberg logo of HALion 7's Writing Room Synths
   macro page
+- **D2D1 straight edges stored as curves**: SVG exports often store a straight edge as a
+  cubic Bézier with both control points on the chord. Filled, such a piece became a curve
+  triangle of next to no area, and the skirt that carries its antialiasing ramp past the curve
+  extrapolated the triangle's texture coordinates 0.75 px further: the ramp came out wide and
+  uneven, and the edge looked stepped. Where the control point lay exactly on the chord and
+  counted as inside the filled area, it was inserted into the outline, the triangulation made
+  a triangle of zero area there, and that side lost its antialiasing. A piece whose control
+  point lies within 1e-4 of the chord's length of the chord is filled along the chord now, and
+  one within 1/16 px of it on the render target is drawn as a straight boundary edge, the
+  threshold the stroke shader uses. RMS error against box-filter coverage: the Minimal Audio
+  logo in Current's update popup (24 cubics, 12 of them straight edges) 0.304 → 0.048,
+  Windows 10 0.046; a square of cubics with control points on its edges 0.251 and 0.100 →
+  0.017, Windows 0.034. Curve fills change by at most 4/255 on 5 pixels of 158 400, and the
+  d2d1 tests fail at the same places as before
 - **D2D1 stroked curves**: `DrawGeometry()` and `DrawEllipse()` draw a curve's stroke as a
   strip of triangles that ended exactly at the stroke edge, so the half of the antialiasing
   ramp outside the edge had no pixels to run on and a stroked circle lost 3 % of its area;

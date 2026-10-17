@@ -1902,6 +1902,43 @@ static float d2d_fill_aa_line_distance(const D2D1_POINT_2F *p, const D2D1_POINT_
     return fabsf(dx * (p->y - a->y) - dy * (p->x - a->x)) / l;
 }
 
+/* The linear part of the mapping from geometry space to render target pixels,
+ * as the vertex shader applies it: pixel = dpi * world * geometry * p. Stored
+ * row major for column vectors, px = m[0] * x + m[1] * y, py = m[2] * x + m[3] * y. */
+static void d2d_device_context_get_pixel_matrix(const struct d2d_device_context *context,
+        const D2D1_MATRIX_3X2_F *g, float *m)
+{
+    const D2D1_MATRIX_3X2_F *w = &context->drawing_state.transform;
+    float sx = context->desc.dpiX / 96.0f, sy = context->desc.dpiY / 96.0f;
+
+    m[0] = sx * (w->_11 * g->_11 + w->_21 * g->_12);
+    m[1] = sx * (w->_11 * g->_21 + w->_21 * g->_22);
+    m[2] = sy * (w->_12 * g->_11 + w->_22 * g->_12);
+    m[3] = sy * (w->_12 * g->_21 + w->_22 * g->_22);
+}
+
+/* Whether the control point of the quadratic Bézier triangle v lies within 1/16 px
+ * of its chord, m being the pixel matrix. Such a triangle is filled as that chord:
+ * it is thinner than the precision of its own texture coordinates, and the skirt
+ * that carries its antialiasing ramp past the curve extrapolates them another
+ * 0.75 px, so the ramp came out wide and uneven. Straight edges that are added
+ * as Béziers, which is how SVG exports often store them, end up here. The stroke
+ * shader draws such pieces as their chord below the same threshold. */
+static BOOL d2d_curve_is_flat(const struct d2d_curve_vertex *v, const float *m)
+{
+    float cx = v[1].position.x - v[0].position.x, cy = v[1].position.y - v[0].position.y;
+    float ex = v[2].position.x - v[0].position.x, ey = v[2].position.y - v[0].position.y;
+    float px, py, qx, qy, l;
+
+    px = m[0] * cx + m[1] * cy;
+    py = m[2] * cx + m[3] * cy;
+    qx = m[0] * ex + m[1] * ey;
+    qy = m[2] * ex + m[3] * ey;
+    if (!((l = sqrtf(qx * qx + qy * qy)) > 0.0f))
+        return FALSE;
+    return fabsf(qx * py - qy * px) / l < 0.0625f;
+}
+
 /* Mark the mesh edges that run along a curve segment.
  *
  * The tessellation puts the corners of every curve triangle on figure vertices,
@@ -1913,7 +1950,9 @@ static float d2d_fill_aa_line_distance(const D2D1_POINT_2F *p, const D2D1_POINT_
  * skirt would cover the same pixels a second time.
  *
  * Only edges that are actually in the mesh are marked; a chord that ended up as
- * an interior diagonal is simply not found.
+ * an interior diagonal is simply not found. Flat Bézier triangles are not drawn
+ * (see d2d_curve_is_flat()), so their edges are left to be straight boundary
+ * edges with a skirt of their own.
  *
  * For each seam, seams also records where the curve runs off the edge, which the
  * fill ramps towards. A quadratic Bézier runs half way between its chord and its control
@@ -1926,7 +1965,8 @@ static float d2d_fill_aa_line_distance(const D2D1_POINT_2F *p, const D2D1_POINT_
  * worse than none — an unmarked seam would get a skirt and be drawn twice — so
  * the caller falls back to the plain fill in that case. */
 static BOOL d2d_fill_aa_mark_curve_edges(const struct d2d_geometry *geometry,
-        const UINT32 *edge_keys, BYTE *edge_curve, struct d2d_fill_aa_seam *seams, size_t map_size)
+        const UINT32 *edge_keys, BYTE *edge_curve, struct d2d_fill_aa_seam *seams, size_t map_size,
+        const float *m)
 {
     const struct d2d_curve_vertex *curves[2];
     size_t counts[2], vertex_map_size, i, c;
@@ -1969,6 +2009,9 @@ static BOOL d2d_fill_aa_mark_curve_edges(const struct d2d_geometry *geometry,
             const D2D1_POINT_2F *p0, *p1, *p2;
             size_t idx[3], missing = 0;
             int a, b;
+
+            if (!c && d2d_curve_is_flat(&curves[c][i], m))
+                continue;
 
             for (a = 0; a < 3; ++a)
             {
@@ -2121,7 +2164,10 @@ static BOOL d2d_device_context_fill_triangles_aa(struct d2d_device_context *rend
     UINT32 *edge_keys;
     BYTE *edge_cnt, *edge_processed, *edge_curve;
     ID3D11Buffer *vb;
+    float m[4];
     HRESULT hr;
+
+    d2d_device_context_get_pixel_matrix(render_target, &geometry->transform, m);
 
     /* Use 6x multiplier to keep load factor ≤ 50%, preventing open-addressing loops
      * from running unbounded even in worst-case all-boundary-edge meshes. */
@@ -2172,7 +2218,7 @@ static BOOL d2d_device_context_fill_triangles_aa(struct d2d_device_context *rend
      * which is where the inner half of the ramp has to come from wherever the
      * curve triangle is thinner than half a pixel. */
     if ((geometry->fill.bezier_vertex_count || geometry->fill.arc_vertex_count)
-            && !d2d_fill_aa_mark_curve_edges(geometry, edge_keys, edge_curve, seams, map_size))
+            && !d2d_fill_aa_mark_curve_edges(geometry, edge_keys, edge_curve, seams, map_size, m))
     {
         free(edge_keys); free(edge_cnt); free(edge_processed); free(edge_curve); free(seams);
         return FALSE;
@@ -2389,21 +2435,6 @@ static BOOL d2d_device_context_fill_triangles_aa(struct d2d_device_context *rend
     return TRUE;
 }
 
-/* The linear part of the mapping from geometry space to render target pixels,
- * as the vertex shader applies it: pixel = dpi * world * geometry * p. Stored
- * row major for column vectors, px = m[0] * x + m[1] * y, py = m[2] * x + m[3] * y. */
-static void d2d_device_context_get_pixel_matrix(const struct d2d_device_context *context,
-        const D2D1_MATRIX_3X2_F *g, float *m)
-{
-    const D2D1_MATRIX_3X2_F *w = &context->drawing_state.transform;
-    float sx = context->desc.dpiX / 96.0f, sy = context->desc.dpiY / 96.0f;
-
-    m[0] = sx * (w->_11 * g->_11 + w->_21 * g->_12);
-    m[1] = sx * (w->_11 * g->_21 + w->_21 * g->_22);
-    m[2] = sy * (w->_12 * g->_11 + w->_22 * g->_12);
-    m[3] = sy * (w->_12 * g->_21 + w->_22 * g->_22);
-}
-
 /* Append a skirt across the edge i0-i1 of the curve triangle v, on the side away
  * from its corner io: a quad reaching CURVE_SKIRT_PIXELS outward in screen space.
  * The texture coordinates of the outer corners continue the affine mapping of the
@@ -2478,11 +2509,13 @@ static unsigned int d2d_curve_add_skirt(struct d2d_curve_vertex *out, const stru
  * would get hard edges. Give every curve triangle a skirt on the side that is not
  * filled: across its two control edges when the control point lies outside the
  * filled area (the triangle fills towards the chord), across the chord when it
- * lies inside (the triangle fills towards the control point).
+ * lies inside (the triangle fills towards the control point). Flat Bézier
+ * triangles are left out altogether, the fill draws their chord.
  *
  * Returns a newly allocated vertex array, or NULL to draw the triangles as they are. */
 static struct d2d_curve_vertex *d2d_device_context_curve_skirts(const struct d2d_device_context *context,
-        const struct d2d_geometry *geometry, const struct d2d_curve_vertex *v, size_t count, size_t *out_count)
+        const struct d2d_geometry *geometry, const struct d2d_curve_vertex *v, size_t count, size_t *out_count,
+        BOOL beziers)
 {
     struct d2d_curve_vertex *out;
     float m[4], inv[4], det;
@@ -2502,6 +2535,8 @@ static struct d2d_curve_vertex *d2d_device_context_curve_skirts(const struct d2d
 
     for (i = 0; i + 2 < count; i += 3)
     {
+        if (beziers && d2d_curve_is_flat(&v[i], m))
+            continue;
         memcpy(&out[n], &v[i], 3 * sizeof(*out));
         n += 3;
         /* Corner 1 is the control point. */
@@ -2522,15 +2557,20 @@ static struct d2d_curve_vertex *d2d_device_context_curve_skirts(const struct d2d
 
 static void d2d_device_context_draw_curves(struct d2d_device_context *render_target,
         const struct d2d_geometry *geometry, const struct d2d_curve_vertex *vertices, size_t count,
-        struct d2d_brush *brush, struct d2d_brush *opacity_brush)
+        struct d2d_brush *brush, struct d2d_brush *opacity_brush, BOOL beziers)
 {
     struct d2d_curve_vertex *expanded = NULL;
     ID3D11Buffer *vb;
     HRESULT hr;
 
     if (render_target->drawing_state.antialiasMode == D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
-            && (expanded = d2d_device_context_curve_skirts(render_target, geometry, vertices, count, &count)))
+            && (expanded = d2d_device_context_curve_skirts(render_target, geometry, vertices, count, &count, beziers)))
         vertices = expanded;
+    if (!count)
+    {
+        free(expanded);
+        return;
+    }
 
     if (FAILED(hr = d2d_device_context_get_scratch_buffer(render_target, D3D11_BIND_VERTEX_BUFFER,
             count * sizeof(*vertices), &render_target->scratch_vb[D2D_SHAPE_TYPE_CURVE], vertices, &vb)))
@@ -2582,12 +2622,12 @@ static void d2d_device_context_fill_geometry(struct d2d_device_context *render_t
 
     if (geometry->fill.bezier_vertex_count)
         d2d_device_context_draw_curves(render_target, geometry, geometry->fill.bezier_vertices,
-                geometry->fill.bezier_vertex_count, brush, opacity_brush);
+                geometry->fill.bezier_vertex_count, brush, opacity_brush, TRUE);
 
     if (geometry->fill.arc_vertex_count
             && SUCCEEDED(d2d_device_context_update_ps_cb(render_target, brush, opacity_brush, FALSE, TRUE)))
         d2d_device_context_draw_curves(render_target, geometry, geometry->fill.arc_vertices,
-                geometry->fill.arc_vertex_count, brush, opacity_brush);
+                geometry->fill.arc_vertex_count, brush, opacity_brush, FALSE);
 }
 
 static void STDMETHODCALLTYPE d2d_device_context_FillGeometry(ID2D1DeviceContext6 *iface,
