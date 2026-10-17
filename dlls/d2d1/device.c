@@ -7110,24 +7110,17 @@ static HRESULT STDMETHODCALLTYPE d2d_device_context_CreateStrokedGeometryRealiza
 static void STDMETHODCALLTYPE d2d_device_context_DrawGeometryRealization(ID2D1DeviceContext6 *iface,
         ID2D1GeometryRealization *realization, ID2D1Brush *brush)
 {
-    struct d2d_device_context *context = impl_from_ID2D1DeviceContext(iface);
     struct d2d_geometry_realization *r = unsafe_impl_from_ID2D1GeometryRealization(realization);
 
-    FIXME("iface %p, realization %p, brush %p semi-stub!\n", iface, realization, brush);
+    TRACE("iface %p, realization %p, brush %p.\n", iface, realization, brush);
 
-    if (context->target.type == D2D_TARGET_COMMAND_LIST)
-    {
-        if (r->filled)
-        {
-            d2d_command_list_fill_geometry(context->target.command_list, context, r->geometry, brush, NULL);
-        }
-        else
-        {
-            d2d_command_list_draw_geometry(context->target.command_list, context, r->geometry, brush,
-                    r->stroke_width, r->stroke_style);
-        }
-        return;
-    }
+    /* The realization keeps the geometry it was created from rather than a
+     * flattened copy, so it is drawn like that geometry on every target; the
+     * flattening tolerance given at creation is not applied. */
+    if (r->filled)
+        d2d_device_context_FillGeometry(iface, r->geometry, brush, NULL);
+    else
+        d2d_device_context_DrawGeometry(iface, r->geometry, brush, r->stroke_width, r->stroke_style);
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_device_context_CreateInk(ID2D1DeviceContext6 *iface,

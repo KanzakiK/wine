@@ -119,6 +119,14 @@ This is the recommended branch. What it changes, by subsystem:
   the round-joined stroke went from RMS 0.098 to 0.007 against the ideal coverage (Windows 10
   0.015), miter and bevel to 0.021 and 0.024 against Windows; 28 stroke figure checks in the
   d2d1 suite pass that did not before (56 → 28 failures). Dashes are still ignored
+- **D2D1 geometry realizations**: `DrawGeometryRealization()` drew only into a command list;
+  on a bitmap, DXGI surface or swap chain target it returned without drawing, so an application
+  that uses `CreateFilledGeometryRealization()` / `CreateStrokedGeometryRealization()` lost the
+  shape entirely. Upstream has the same stub. A realization keeps the geometry it was created
+  from, and it is now drawn like `FillGeometry()` / `DrawGeometry()` on every target, with its
+  stroke width and stroke style; the flattening tolerance given at creation is not applied.
+  `test_geometry_realization()` checks the pixels now (6 failures before, 0 after). No affected
+  application is known — JUCE 8.0.0 to 8.0.15 never call the API
 - **D2D1 layers on an opaque target**: a layer bitmap inherited the target's alpha mode,
   so on a render target created as `ALPHA_MODE_IGNORE` the layer's own coverage was thrown
   away and everything drawn inside it turned the background colour, usually black. All
