@@ -681,6 +681,20 @@ This is the recommended branch. What it changes, by subsystem:
   the new source at its current time, as Windows does (measured on Windows 10): Studio
   Pro installs its own time source right after each session start, and the video stayed
   black from the clip start on and after a loop wrap because that source was never started
+- **Source reader row order (mfreadwrite)**: with advanced video processing enabled, the
+  source reader converts through the video processor MFT, which emits bottom-up RGB
+  whenever its output type leaves `MF_MT_DEFAULT_STRIDE` open — correct for the standalone
+  MFT, measured on Windows — while the reader's caller gets top-down samples from native
+  and a media type without the stride, so it cannot learn otherwise. Fender Studio Pro 8's
+  timeline thumbnails came out upside down. The reader now hands the processor a copy of
+  the output type with the stride pinned, which the processor keeps for every later
+  re-creation of its conversion pipeline (a stream change upstream, a new input type set
+  through the exposed transform), and strips the stride again from the type it reports.
+  The earlier form of this fix pinned the stride only for the duration of the
+  `SetOutputType()` call, so the first re-negotiation fell back to bottom-up; a test now
+  drives both re-negotiations through a decoder-plus-processor chain and checks the row
+  order of the delivered samples (4 failures before, 0 after; the suite is otherwise
+  unchanged at 3062 tests, 219 todo)
 - **Video players that drive the H.264 decoder themselves (wined3d, d3d11, d2d1,
   winegstreamer)**: Cubase 15 does not render video through the EVR. It drives the H.264
   decoder MFT directly: it enumerates it, hands it a DXGI device manager, receives NV12
