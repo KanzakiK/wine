@@ -4581,6 +4581,16 @@ static BOOL d2d_geometry_shared_bezier_caps(struct d2d_geometry *geometry, BOOL 
     return TRUE;
 }
 
+/* Whether the control point of a quadratic piece lies on its chord to within 1e-4
+ * of the chord's length. */
+static BOOL d2d_quadratic_is_degenerate(const D2D1_POINT_2F *p0, const D2D1_POINT_2F *c, const D2D1_POINT_2F *p2)
+{
+    float ex = p2->x - p0->x, ey = p2->y - p0->y, l2 = ex * ex + ey * ey;
+    float cross = (c->x - p0->x) * ey - (c->y - p0->y) * ex;
+
+    return cross * cross <= 1e-8f * l2 * l2;
+}
+
 static HRESULT d2d_geometry_resolve_beziers(struct d2d_geometry *geometry)
 {
     struct d2d_segment_idx idx_p, idx_q;
@@ -4647,7 +4657,16 @@ static HRESULT d2d_geometry_resolve_beziers(struct d2d_geometry *geometry)
         p[0] = &figure->vertices[idx_p.vertex_idx];
         p[1] = &figure->bezier_controls[idx_p.control_idx];
 
+        /* A piece whose control point lies on its chord, as on a straight edge
+         * that was added as a Bézier, encloses nothing worth a curve triangle:
+         * at the threshold a chord of 1000 px is 0.05 px off the curve. Fill
+         * along the chord instead. Inserting the control point into the outline,
+         * as for one inside the filled area, would put three collinear points on
+         * it, and the triangulation makes a triangle of no area there that leaves
+         * the outline beside it without antialiasing. */
         i = idx_p.vertex_idx + 1;
+        if (d2d_quadratic_is_degenerate(p[0], p[1], &figure->vertices[i == figure->vertex_count ? 0 : i]))
+            continue;
         if (d2d_path_geometry_point_inside(geometry, p[1], FALSE))
         {
             sign = 1.0f;
@@ -4667,6 +4686,7 @@ static HRESULT d2d_geometry_resolve_beziers(struct d2d_geometry *geometry)
         d2d_curve_vertex_set(&b[2], p[2], 1.0f, 1.0f, sign);
     } while (d2d_geometry_get_next_bezier_segment_idx(geometry, &idx_p));
 
+    geometry->fill.bezier_vertex_count = bezier_idx * 3;
     free(emit);
     return S_OK;
 }
