@@ -1511,8 +1511,14 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
             wined3d_texture_invalidate_location(back_buffer, 0, WINED3D_LOCATION_SYSMEM);
     }
 
-    /* Suppress spurious WM_PAINT after writing to the window surface. */
-    ValidateRect(swapchain->win_handle, NULL);
+    /* No ValidateRect() on the window here.  A present never validates the
+     * window's update region on Windows, and this one runs on the CS thread,
+     * after the application has moved on: an InvalidateRect() issued between
+     * the application's Present() and the execution of that present lost its
+     * WM_PAINT.  JUCE 8 repaints only from that WM_PAINT, so a closed overlay
+     * stayed on screen and an opened one appeared in part (issue 465).  The
+     * dxgi subclass validates after forwarding WM_PAINT to the application,
+     * which is the repaint-cycle protection this call was added for. */
 
 done:
     destroy_desc.hDc = src_dc;
