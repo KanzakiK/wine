@@ -391,8 +391,9 @@ static inline struct d3d11_swapchain *d3d11_swapchain_from_IDXGISwapChain4(IDXGI
 
 /* Re-blit composition content from persistent buffer to window.
  * Called on WM_PAINT, focus changes, timer tick, and other events
- * that may cause the window surface to be overwritten. */
-static void dcomp_reblit_comp_buffer(HWND hwnd, const char *reason)
+ * that may cause the window surface to be overwritten.  A non-NULL clip
+ * (client coordinates) limits the blit to that region. */
+static void dcomp_reblit_comp_buffer_clipped(HWND hwnd, const char *reason, HRGN clip)
 {
     HDC comp_dc = (HDC)GetPropW(hwnd, L"__wine_dcomp_comp_dc");
     LPARAM dims = (LPARAM)GetPropW(hwnd, L"__wine_dcomp_comp_size");
@@ -407,9 +408,13 @@ static void dcomp_reblit_comp_buffer(HWND hwnd, const char *reason)
             static unsigned int reblit_count;
             ++reblit_count;
             if (reblit_count <= 5 || !(reblit_count % 200))
-                FIXME("Re-blit #%u: hwnd %p %ux%u reason=%s.\n",
-                        reblit_count, hwnd, w, h, reason);
+                FIXME("Re-blit #%u: hwnd %p %ux%u reason=%s%s.\n",
+                        reblit_count, hwnd, w, h, reason, clip ? " (clipped)" : "");
+            if (clip)
+                SelectClipRgn(hdc, clip);
             BitBlt(hdc, 0, 0, w, h, comp_dc, 0, 0, SRCCOPY);
+            if (clip)
+                SelectClipRgn(hdc, NULL);
             ReleaseDC(hwnd, hdc);
         }
         else
@@ -435,6 +440,11 @@ static void dcomp_reblit_comp_buffer(HWND hwnd, const char *reason)
             FIXME("Re-blit skipped #%u: hwnd %p comp_dc=%p dims=%#Ix reason=%s.\n",
                     null_count, hwnd, comp_dc, (ULONG_PTR)dims, reason);
     }
+}
+
+static void dcomp_reblit_comp_buffer(HWND hwnd, const char *reason)
+{
+    dcomp_reblit_comp_buffer_clipped(hwnd, reason, NULL);
 }
 
 /* Count of currently subclassed DComp target windows.  Used to distinguish
@@ -686,7 +696,17 @@ static LRESULT CALLBACK dcomp_target_wndproc(HWND hwnd, UINT msg, WPARAM wparam,
              * the app's EndPaint already validated the update region, so a
              * second BeginPaint would return an empty clip region and eat
              * our blit) so the swapchain content stays on top of whatever
-             * the app painted. */
+             * the app painted.
+             *
+             * The re-blit is limited to the update region the message
+             * arrived with: BeginPaint() clips the app's drawing to it, so
+             * nothing outside can have been overwritten.  JUCE 8.0.13 and
+             * later invalidate once per animation frame and draw nothing
+             * here; a full-window blit cost ~360 us per WM_PAINT at 50 per
+             * second on Xvfb (issue 466). */
+            HRGN update_rgn = CreateRectRgn(0, 0, 0, 0);
+            int update_type = update_rgn ? GetUpdateRgn(hwnd, update_rgn, FALSE) : ERROR;
+
             if (orig)
                 CallWindowProcW(orig, hwnd, msg, wparam, lparam);
             else
@@ -700,7 +720,12 @@ static LRESULT CALLBACK dcomp_target_wndproc(HWND hwnd, UINT msg, WPARAM wparam,
                             paint_count, hwnd,
                             (HDC)GetPropW(hwnd, L"__wine_dcomp_comp_dc"));
             }
-            dcomp_reblit_comp_buffer(hwnd, "paint");
+            if (update_type == ERROR)
+                dcomp_reblit_comp_buffer(hwnd, "paint");
+            else if (update_type != NULLREGION)
+                dcomp_reblit_comp_buffer_clipped(hwnd, "paint", update_rgn);
+            if (update_rgn)
+                DeleteObject(update_rgn);
             ValidateRect(hwnd, NULL);
             return 0;
         }
