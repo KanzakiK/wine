@@ -23,5 +23,5 @@ cmake --build "$output/$triple" --target "$module" -j"${JOBS:-8}"
 install -m755 "$output/$triple/Bin/lib$module.dll" "$output/lib$module.dll"
 done
 git -C "$source" rev-parse HEAD > "$output/source-commit"
-tar -czf "$output/fex-source.tar.gz" --exclude=.git -C "$repo/arlinux/components/FEX" FEX
+tar -czf "$output/fex-source.tar.gz" --exclude=.git -C "$repo/arlinux/components" FEX
 sha256sum "$output/"lib*fex.dll "$output/fex-source.tar.gz"
