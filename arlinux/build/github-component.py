@@ -236,6 +236,24 @@ def build(data, framework):
         for name in ('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf'):
             shutil.copyfile(Path(os.environ['WINDIR'])/'Fonts'/name, output/name)
         return
+    if stage == 'wine-diagnostics':
+        tools = toolchains(root, framework)
+        from pipeline_cache import Cache, inventory
+        cache = Cache(framework/'build/pipeline')
+        inputs = {str(path.relative_to(framework)): inventory(path) for path in (
+            framework/'arlinux/build/windows-debug.sh', framework/'arlinux/windows-debug.py',
+            framework/'arlinux/components/FEX/tests/arlinux/exception-observer.c',
+            framework/'arlinux/components/FEX/tests/arlinux/exception-observer-probe.c')}
+        inputs['toolchainLock'] = sha(framework/'arlinux/build/github-inputs.json')
+        inputs['compiler'] = inventory(Path(tools['mingw'])/'aarch64-w64-mingw32-clang')
+        def compile(output):
+            run('bash', framework/'arlinux/build/windows-debug.sh', tools['mingw'], output)
+            shutil.copyfile(framework/'arlinux/windows-debug.py', output/'windows-debug.py')
+        output = cache.stage(stage, inputs, compile)
+        descriptor = framework/'build/artifacts/components'/f'{stage}.json'
+        descriptor.parent.mkdir(parents=True, exist_ok=True)
+        descriptor.write_text(json.dumps(dict(output=str(output), records=cache.records))+'\n')
+        return
     visited = set()
     if data.get('cacheSeed'):
         # Restore a complete prior build cache, never an installed application
@@ -271,9 +289,9 @@ def publish(data, framework):
             raise ValueError('Component output differs from its build-cache receipt')
         paths = [path.parent, path.parent.parent/'receipt.json',
                  *(Path(name) for name in state['references'])]
-        if stage == 'wine-product':
+        if stage in ('wine-product', 'wine-diagnostics'):
             # Consumers need distributable archives, not the native compiler work tree.
-            final = framework/'build/artifacts/wine'
+            final = framework/('build/artifacts/'+('diagnostics' if stage == 'wine-diagnostics' else 'wine'))
             final.mkdir(parents=True, exist_ok=True)
             for source in path.iterdir():
                 if source.is_file():

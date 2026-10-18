@@ -202,7 +202,7 @@ def fetch_product(reference, output):
             if hashlib.file_digest(source,'sha256').hexdigest()!=record['archiveSha256']:
                 raise ValueError('Product capsule SHA-256 mismatch')
         audio=record['stage']=='wine-pulse'
-        product='audio' if audio else 'wine'
+        product='audio' if audio else 'diagnostics' if record['stage']=='wine-diagnostics' else 'wine'
         prefix='framework/build/artifacts/'+product+'/'
         output.mkdir(parents=True,exist_ok=True)
         with archive.open('rb') as source,zstandard.ZstdDecompressor().stream_reader(source) as decoded:
@@ -231,7 +231,7 @@ def fetch_product(reference, output):
             files={str(p.relative_to(output)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest()
                    for folder in ('jni','assets') for p in (output/folder).rglob('*') if p.is_file()}
             (output/'build-receipt.json').write_text(json.dumps(dict(format=1,component=reference,files=files),indent=2)+'\n')
-        else:
+        elif product=='wine':
             archive=output/'arlinux-wine-bionic.tar.gz'
             with archive.open('rb') as source:
                 digest=hashlib.file_digest(source,'sha256').hexdigest()
@@ -246,7 +246,7 @@ def fetch_product(reference, output):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--framework-ref',default='arlinux')
-    parser.add_argument('--product',choices=('wine','audio','all'),default='all')
+    parser.add_argument('--product',choices=('wine','audio','diagnostics','all'),default='all')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--parallel',type=int,default=8)
     parser.add_argument('--plan',action='store_true')

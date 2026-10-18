@@ -24,6 +24,7 @@ From a clean clone of the intended pushed commit, with Python, zstandard and gh:
 python arlinux/build/install-github-workflows.py
 ./arlinux/build.sh github --framework-ref COMMIT --product wine --output build/products
 ./arlinux/build.sh github --framework-ref COMMIT --product audio --output build/products
+./arlinux/build.sh github --framework-ref COMMIT --product diagnostics --output build/products
 ./arlinux/build.sh publish-wine build/products/wine/arlinux-wine-bionic.tar.gz --check
 ./arlinux/build.sh publish-wine build/products/wine/arlinux-wine-bionic.tar.gz
 ```
@@ -34,3 +35,7 @@ it does not rebuild or modify a rootfs checkout. `--manifest` is an optional
 consumer-side download pin output. Capsule prereleases are build inputs, not
 acceptance results. Missing direct inputs and actual command errors fail builds;
 do not add parallel feature/file/version presence lists.
+
+The optional diagnostics product builds the FEX exception observer and probe on
+its own x64 runner and carries the Wine-owned guest capture helper. The Windows
+host diagnostic command downloads this product; it never invokes WSL.

@@ -5,7 +5,8 @@
   "cacheLimitGiB": 10,
   "products": {
     "wine": "wine-product",
-    "audio": "wine-pulse"
+    "audio": "wine-pulse",
+    "diagnostics": "wine-diagnostics"
   },
   "stages": {
     "bionic-deps": {
@@ -176,6 +177,13 @@
       "dependencies": [],
       "product": "wine",
       "compilerCacheMiB": 512
+    },
+    "wine-diagnostics": {
+      "repository": "taowen/FEX",
+      "runner": "ubuntu-24.04",
+      "dependencies": [],
+      "product": "diagnostics",
+      "compilerCacheMiB": 256
     }
   }
 }
