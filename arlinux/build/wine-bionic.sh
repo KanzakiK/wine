@@ -126,12 +126,18 @@ python3 "$repo/arlinux/package-wine-bionic.py" --core "$stage/core" --fex "$stag
     --graphics-prefix "$graphics" --ndk "$ndk" --pe-runtime "$pe_runtime" --output "$output" \
     --wine-source-archive "$stage/wine-source.tar.gz" \
     "${vulkan_args[@]}"
-# Local build metadata is written after archive creation; private source/build
-# paths never enter the redistributable runtime archive.
+# Export the actual Steamworks ABI inputs, not the compiler's object tree.
+# Private paths never enter the redistributable runtime archive.
 python3 - "$stage" "$output" <<'BUILD_STATE'
-import json, sys
+import json, shutil, sys
 from pathlib import Path
 stage, output = map(Path, sys.argv[1:])
-(output/'build-state.json').write_text(json.dumps({'source': str(stage/'source'), 'core': str(stage/'core')}) + '\n')
+abi = stage/'abi'
+shutil.copytree(stage/'source/include', abi/'source/include')
+shutil.copytree(stage/'core/include', abi/'core/include')
+library = abi/'core/dlls/ntdll/ntdll.so'
+library.parent.mkdir(parents=True)
+shutil.copy2(stage/'core/dlls/ntdll/ntdll.so', library)
+(output/'build-state.json').write_text(json.dumps({'source': str(abi/'source'), 'core': str(abi/'core')}) + '\n')
 BUILD_STATE
 echo "Built experimental Bionic runtime: $output"
