@@ -232,7 +232,7 @@ def main():
         if path.is_file() and not path.is_symlink():
             with path.open('rb') as stream:
                 hashes[path.relative_to(args.output).as_posix()] = hashlib.file_digest(stream, 'sha256').hexdigest()
-    metadata = dict(protocol=1, libc='bionic', experimental=True, wine='11.19',
+    metadata = dict(protocol=1, taskProtocol=1, libc='bionic', experimental=True, wine='11.19',
                     wineCommit=wine_commit,
                     wineSource=dict(repository='https://github.com/taowen/wine',
                                     commit=wine_commit, archiveURL=source_url,
