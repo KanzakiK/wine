@@ -39,7 +39,9 @@ stage="$(mktemp -d "$repo/build/wine-bionic/build.XXXXXXXX")"
 echo "Build directory: $stage"
 mkdir "$stage/core" "$stage/fex"
 mkdir "$stage/source"
-tar -C "$source_dir" --exclude=.git --exclude=autom4te.cache -cf - . | tar -xf - -C "$stage/source"
+# The integration now lives in this Wine checkout. Copy only tracked source:
+# walking the checkout would recursively copy build/ into its own destination.
+git -C "$source_dir" archive HEAD | tar -xf - -C "$stage/source"
 source_dir="$stage/source"
 python3 "$repo/arlinux/build/refresh-wine-vkd3d.py" "$source_dir"
 bash "$repo/arlinux/build/prepare-wine-dcomp.sh" "$source_dir"
