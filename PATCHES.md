@@ -52,7 +52,12 @@ This is the recommended branch. What it changes, by subsystem:
   the quad `Clear()` draws are created once per device instead of once per device context:
   JUCE 8 creates about 3 400 device contexts while the preset list of Minimal Audio Current
   is scrolled for 4.6 s, and the two buffers of each cost two drains of the command stream
-  (11 806 synchronisations in such a drag before, 4 399 now).
+  (11 806 synchronisations in such a drag before, 4 399 now). `FillOpacityMask()` is
+  implemented: the mask becomes the opacity brush of a rectangle fill, sampled from the
+  source rectangle with linear filtering and clamped half a texel inside it, so a mask
+  cut from an atlas does not bleed its neighbours — vatSys pre-renders every map label
+  and symbol into 4096×4096 atlases and composites them this way, and the radar map had no
+  text and no waypoint symbols at all while the method was a stub.
 - **D2D1 curve edges**: a filled curve is drawn as a polygon plus one triangle per curve
   piece, and the antialiasing ramp of that triangle reaches half a pixel to either side of
   the curve. Next to a short piece the triangle is thinner than that, so both halves of the
