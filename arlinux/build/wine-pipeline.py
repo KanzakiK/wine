@@ -107,15 +107,14 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
                    BIONIC_VULKAN_DRIVER='system', BIONIC_OPENGL='zink')
     def native(out):
         out.mkdir()
-        env['BIONIC_ARCHIVE'] = str(out / 'arlinux-wine-bionic.tar.gz')
-        try:
-            invoke('bash', 'arlinux/build/wine-bionic.sh', paths['wineSource'], tools,
-                   paths['mingw'], paths['ndk'], paths['bionicPrefix'],
-                   framework / 'arlinux/components/FEX', pe, out / 'runtime')
-            for source in pe.parent.glob('pe-*-source.tar.gz'):
-                shutil.copyfile(source, out / source.name)
-        finally:
-            env.pop('BIONIC_ARCHIVE', None)
+        # Only the final wine-product creates a distributable runtime archive.
+        # Shipping both this directory and a compressed copy through every
+        # downstream capsule wastes compression time, bandwidth and disk space.
+        invoke('bash', 'arlinux/build/wine-bionic.sh', paths['wineSource'], tools,
+               paths['mingw'], paths['ndk'], paths['bionicPrefix'],
+               framework / 'arlinux/components/FEX', pe, out / 'runtime')
+        for source in pe.parent.glob('pe-*-source.tar.gz'):
+            shutil.copyfile(source, out / source.name)
     native = stage('wine-bionic', native, ('wine-pe', 'wine-pe-package', 'wine-tls', 'wine-pulse', 'wine-graphics', 'wine-vulkan'))
     if native is None:
         return None
@@ -123,7 +122,7 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
     paths.update(wineSource=Path(native_state['source']), wineBuild=Path(native_state['core']),
                  wineTools=tools, wineImportLibs=wine / 'files/lib/wine')
     env['WINE_IMPORT_LIBS'] = str(paths['wineImportLibs'])
-    return native / 'arlinux-wine-bionic.tar.gz'
+    return native
 
 
 
@@ -182,7 +181,7 @@ def main():
             android / 'arlinux/components/pulseaudio-android/arlinux/build.sh', android / 'tools/build/ndk-env.sh',
             android / 'toolchain.json', android / 'arlinux/components/pulseaudio-android')} if cache.selected('wine-pulse') else {}
         invoke = lambda *command: run(*command, cwd=framework, env=env)
-        archive = build_wine(cache, framework, android, paths, common, invoke, env)
+        base = build_wine(cache, framework, android, paths, common, invoke, env)
         def helper_inputs(*sources, **dependencies):
             inputs = {name: value for name, value in common.items()
                       if name not in ('sources', 'wineSources', 'pulseRecipe')}
@@ -224,7 +223,7 @@ def main():
             import hashlib
             out.mkdir()
             runtime = out / 'runtime'
-            shutil.copytree(archive.parent / 'runtime', runtime)
+            shutil.copytree(base / 'runtime', runtime)
             (runtime / 'build-state.json').unlink(missing_ok=True)
             helpers = runtime / 'files/lib/arlinux'
             helpers.mkdir(parents=True, exist_ok=True)
@@ -243,9 +242,8 @@ def main():
                                  for p in sorted(runtime.rglob('*')) if p.is_file()
                                  and p.name != 'bionic-runtime.json'}
             (runtime / 'bionic-runtime.json').write_text(json.dumps(metadata, indent=2)+'\n')
-            for source in archive.parent.glob('*.tar.gz'):
-                if source != archive:
-                    shutil.copyfile(source, out / source.name)
+            for source in base.glob('*.tar.gz'):
+                shutil.copyfile(source, out / source.name)
             spec = importlib.util.spec_from_file_location('wine_packager', framework / 'arlinux/package-wine-bionic.py')
             module = importlib.util.module_from_spec(spec)
             sys.path.insert(0, str(framework / 'arlinux'))
