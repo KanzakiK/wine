@@ -10,15 +10,13 @@ FILES = ('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf')
 
 
 def source_directory():
-    return Path(os.environ.get('ARLINUX_WINDOWS_FONTS',
-        'C:/Windows/Fonts' if os.name == 'nt' else '/mnt/c/Windows/Fonts'))
+    if os.name == 'nt':
+        return Path(os.environ.get('ARLINUX_WINDOWS_FONTS', os.environ.get('WINDIR', 'C:/Windows') + '/Fonts'))
+    return Path(os.environ['ARLINUX_WINDOWS_FONTS'])
 
 
 def install(destination):
     source = source_directory()
-    missing = [name for name in FILES if not (source/name).is_file()]
-    if missing:
-        raise RuntimeError('Set ARLINUX_WINDOWS_FONTS to the Windows font directory; missing: '+', '.join(missing))
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     hashes = {}

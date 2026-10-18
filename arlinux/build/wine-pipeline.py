@@ -162,8 +162,6 @@ def main():
     config = json.loads(args.config.read_text())
     framework = Path(config['framework']).resolve(strict=True)
     paths = {name: Path(config[name]).resolve(strict=True) for name in ('wineSource', 'mingw', 'ndk', 'addons')}
-    if any(str(path).startswith('/mnt/') for path in paths.values()):
-        raise ValueError('Wine build tools, vendor inputs and build trees must reside on the Linux filesystem')
     android = framework
     dirty = subprocess.check_output(['git', '-C', str(paths['wineSource']), 'status', '--porcelain', '--untracked-files=normal'])
     if dirty:

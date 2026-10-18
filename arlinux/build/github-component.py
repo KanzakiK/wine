@@ -88,6 +88,7 @@ def prepare(data, framework):
         cross.write_text('#!/bin/sh\nexport PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig\nexec pkg-config "$@"\n')
         cross.chmod(0o755)
         run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1')
+        run('git', '-C', framework/'arlinux/components/FEX', 'submodule', 'update', '--init', '--recursive', '--depth', '1')
         for marker in [framework/'.git', *framework.glob('arlinux/components/*/.git')]:
             if marker.exists():
                 run('git', 'config', '--global', '--add', 'safe.directory', marker.parent)
@@ -226,6 +227,9 @@ def import_dependency(root, dependency, visited=None):
 def build(data, framework):
     root = Path(os.environ['ARLINUX_WORKSPACE'])
     stage = data['stage']
+    if stage == 'wine-pe-aarch64':
+        for test in sorted((framework/'arlinux/tests').glob('test-*.py')):
+            run(sys.executable, test)
     if stage == 'windows-fonts':
         output = root / 'vendor/fonts'
         output.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,6 @@ base="$(realpath "$1")"
 ndk="$(realpath "$2")/toolchains/llvm/prebuilt/linux-x86_64"
 x11="$(realpath "$3")"
 output="$(realpath -m "$4")"
-[[ "$output" != /mnt/* && ! -e "$output" ]] || { echo 'Require fresh Linux output.' >&2; exit 2; }
 prefix="$output/prefix"
 mkdir -p "$output/work"
 cp -a "$base" "$prefix"

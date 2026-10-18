@@ -6,3 +6,4 @@
 - Do not build, modify or ship Steam Proton. Steam games use this Bionic Wine runtime as a custom compatibility tool.
 - Validate actual behavior in a fresh instance before release. Keep download/output/source hashes and archive path safety, without parallel feature or DLL presence lists.
 - Keep maintained documentation, comments and developer diagnostics in English.
+- Maintain local sources with native Windows Git, Python and PowerShell. Do not create WSL checkouts, build directories or validation worktrees. Linux-specific tests and compilation run on GitHub-hosted runners.
