@@ -16,14 +16,27 @@
      HICON          image;    /* the image to render */
      HWND           owner;    /* the HWND passed in to the Shell_NotifyIcon call */
      HWND           window;   /* the adaptor window */
-@@ -106,6 +108,7 @@
+@@ -106,6 +108,8 @@
  static struct list taskbar_buttons = LIST_INIT( taskbar_buttons );
  
  static HWND tray_window;
 +static ULONGLONG tray_sequence;
++static BOOL arlinux_tray_requested;
  
  static unsigned int nb_displayed;
  
+@@ -364,6 +368,11 @@
+     rect.top = 0;
+     rect.right = icon_cx * max( nb_displayed, MIN_DISPLAYED );
+     rect.bottom = icon_cy;
++    if (arlinux_tray_requested)
++    {
++        rect.right = max( rect.right, 320 );
++        rect.bottom = max( rect.bottom, 96 );
++    }
+     AdjustWindowRect( &rect, WS_CAPTION, FALSE );
+     size.cx = rect.right - rect.left;
+     size.cy = rect.bottom - rect.top;
 @@ -762,6 +765,7 @@
      }
  
@@ -36,12 +49,12 @@
  
  static void do_show_systray(void)
  {
-+    /* ARLinux presents registered icons in Tasks; never map a fallback window. */
-+    if (!enable_taskbar) return;
++    /* Map the native icon host only after an explicit user request. */
++    if (!enable_taskbar && !arlinux_tray_requested) return;
      SIZE size;
      NONCLIENTMETRICSW ncm;
      HFONT font;
-@@ -1097,11 +1103,132 @@
+@@ -1097,11 +1103,143 @@
      sync_taskbar_buttons();
  }
  
@@ -98,7 +111,7 @@
 +        !GetClassNameW( client, cls, ARRAY_SIZE(cls) ) || lstrcmpW( cls, ARLINUX_TRAY_CLIENT )) return FALSE;
 +    memcpy( &request, copy->lpData, sizeof(request) );
 +    if (request.version != ARLINUX_TRAY_PROTOCOL || request.reserved ||
-+        request.operation < ARLINUX_TRAY_LIST || request.operation > ARLINUX_TRAY_MENU) return FALSE;
++        request.operation < ARLINUX_TRAY_LIST || request.operation > ARLINUX_TRAY_WINDOW) return FALSE;
 +    if (request.operation == ARLINUX_TRAY_LIST)
 +        LIST_FOR_EACH_ENTRY( icon, &icon_list, struct icon, entry )
 +            if (!(icon->state & NIS_HIDDEN) && IsWindow( icon->owner )) ++count;
@@ -118,6 +131,17 @@
 +            tray_pixels( icon->image, items[reply->count].pixels );
 +            ++reply->count;
 +        }
++        reply->success = TRUE;
++    }
++    else if (request.operation == ARLINUX_TRAY_WINDOW)
++    {
++        arlinux_tray_requested = TRUE;
++        show_systray = TRUE;
++        SetWindowTextW( tray_window, L"Windows Tray" );
++        SetWindowLongW( tray_window, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN );
++        do_show_systray();
++        ShowWindow( tray_window, SW_RESTORE );
++        SetForegroundWindow( tray_window );
 +        reply->success = TRUE;
 +    }
 +    else if (request.process == GetCurrentProcessId())
@@ -174,6 +198,15 @@
          return handle_incoming((HWND)wparam, (COPYDATASTRUCT *)lparam);
  
      case WM_DISPLAYCHANGE:
+@@ -1115,7 +1254,7 @@
+         WINDOWPOS *p = (WINDOWPOS *)lparam;
+ 
+-        if (p->flags & SWP_SHOWWINDOW && (!show_systray || !nb_displayed) && !enable_taskbar)
++        if (p->flags & SWP_SHOWWINDOW && (!show_systray || !nb_displayed) && !enable_taskbar && !arlinux_tray_requested)
+         {
+             TRACE( "WM_WINDOWPOSCHANGING clearing SWP_SHOWWINDOW.\n" );
+             p->flags &= ~SWP_SHOWWINDOW;
+         }
 @@ -1233,6 +1360,8 @@
      }
  
