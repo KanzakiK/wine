@@ -16,15 +16,6 @@
       "product": "wine",
       "compilerCacheMiB": 256
     },
-    "bionic-x11": {
-      "repository": "taowen/libX11",
-      "runner": "ubuntu-24.04",
-      "dependencies": [
-        "bionic-deps"
-      ],
-      "product": "wine",
-      "compilerCacheMiB": 2048
-    },
     "wine-pulse": {
       "repository": "taowen/pulseaudio-android",
       "runner": "ubuntu-24.04",
@@ -79,7 +70,7 @@
       "repository": "taowen/mesa",
       "runner": "ubuntu-24.04",
       "dependencies": [
-        "bionic-x11"
+        "bionic-deps"
       ],
       "product": "wine",
       "compilerCacheMiB": 2048

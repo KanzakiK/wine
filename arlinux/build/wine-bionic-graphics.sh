@@ -124,14 +124,6 @@ cpp_link_args = ['-static-libstdc++', '-L{native}/lib', '-Wl,-z,max-page-size=16
 ''')
 PY
 export PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig"
-build_xlib libXfixes-6.0.1 b695f93cd2499421ab02d22744458e650ccc88c1d4c8130d60200213abc02d58
-# Raw mouse input in Windows games requires both XInput headers and libXi.
-build_xlib libXi-1.8.2 d0e0555e53d6e2114eabfa44226ba162d2708501a25e18d99cfb35c094c6c104
-build_xlib libXrender-0.9.12 b832128da48b39c8d608224481743403ad1691bf4e554e4be9c174df171d1b97
-build_xlib libXcomposite-0.4.6 fe40bcf0ae1a09070eba24088a5eb9810efe57453779ec1e20a55080c6dc2c87
-build_xlib libXxf86vm-1.1.6 96af414c73ce1d5449ad04be7f9f27fa8330f844b6dda843ef22e3e1befb3ee3
-# Mesa GLX/DRI synchronization is also an explicit Android prerequisite.
-build_xlib libxshmfence-arlinux fork
 cmake -S "$base/Vulkan-Loader-1.4.357" -B "$base/loader-build-1.4.357" -G Ninja \
     -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
     -DCMAKE_C_COMPILER="$ndk/bin/aarch64-linux-android29-clang" \
@@ -142,8 +134,8 @@ cmake -S "$base/Vulkan-Loader-1.4.357" -B "$base/loader-build-1.4.357" -G Ninja 
     -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
     -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_BUILD_TYPE=Release \
     -DVULKAN_HEADERS_INSTALL_DIR="$prefix" -DBUILD_TESTS=OFF \
-    -DBUILD_WSI_XCB_SUPPORT=ON -DBUILD_WSI_XLIB_SUPPORT=ON \
-    -DBUILD_WSI_XLIB_XRANDR_SUPPORT=OFF -DBUILD_WSI_WAYLAND_SUPPORT=OFF
+    -DBUILD_WSI_XCB_SUPPORT=OFF -DBUILD_WSI_XLIB_SUPPORT=OFF \
+    -DBUILD_WSI_XLIB_XRANDR_SUPPORT=OFF -DBUILD_WSI_WAYLAND_SUPPORT=ON
 cmake --build "$base/loader-build-1.4.357" -j"${JOBS:-8}"
 cmake --install "$base/loader-build-1.4.357"
 unset PKG_CONFIG_LIBDIR
@@ -156,9 +148,9 @@ if [[ "$opengl" == zink ]]; then
     [[ "$driver" == none ]] || vulkan_drivers=freedreno
     if [[ ! -d "$base/build-zink-$driver" ]]; then
         meson setup "$base/build-zink-$driver" "$base/mesa" --cross-file "$base/cross.ini" \
-            --prefix="$prefix" -Dplatforms=x11,wayland -Darlinux-wsi=true \
+            --prefix="$prefix" -Dplatforms=wayland -Darlinux-wsi=true \
             -Dxlib-lease=disabled -Dvulkan-drivers="$vulkan_drivers" -Dfreedreno-kmds=kgsl \
-            -Dgallium-drivers=zink -Dllvm=disabled -Degl=enabled -Dglx=dri \
+            -Dgallium-drivers=zink -Dllvm=disabled -Degl=enabled -Dglx=disabled \
             -Dgbm=disabled -Dgles1=disabled -Dgles2=enabled -Dopengl=true \
             -Dxmlconfig=enabled -Dzstd=disabled -Dlibunwind=disabled \
             -Dvideo-codecs=[] -Dtools=[] --wrap-mode=nofallback
@@ -186,7 +178,7 @@ PY
 fi
 if [[ ! -d "$base/build-native" ]]; then
     meson setup "$base/build-native" "$base/mesa" --cross-file "$base/cross.ini" \
-        --prefix="$prefix" -Dplatforms=x11,wayland -Darlinux-wsi=true \
+        --prefix="$prefix" -Dplatforms=wayland -Darlinux-wsi=true \
         -Dxlib-lease=disabled -Dvulkan-drivers=freedreno -Dfreedreno-kmds=kgsl \
         -Dgallium-drivers=[] -Dllvm=disabled -Degl=disabled -Dglx=disabled \
         -Dgbm=disabled -Dgles1=disabled -Dgles2=disabled -Dopengl=false \

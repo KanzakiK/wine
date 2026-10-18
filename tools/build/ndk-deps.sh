@@ -155,11 +155,22 @@ if [[ ! -f "$PREFIX/lib/pkgconfig/libxml-2.0.pc" ]]; then
     rm -rf build
     meson_cross -Dpython=false -Diconv=disabled -Dhttp=false
     meson compile -C build xml2 -j"$JOBS"
-    mkdir -p "$PREFIX/include/libxml" "$PREFIX/lib/pkgconfig"
-    cp -a include/libxml/*.h "$PREFIX/include/libxml/"
-    cp -a build/include/libxml/xmlversion.h "$PREFIX/include/libxml/"
-    cp -a build/libxml2.so "$PREFIX/lib/"
-    cp build/meson-private/libxml-2.0.pc "$PREFIX/lib/pkgconfig/"
+    meson install -C build
+    popd >/dev/null
+fi
+
+# Wine's native Wayland keyboard enumerates layouts through libxkbregistry.
+# Build it after libxml2 rather than enabling a missing dependency in the
+# bootstrap Wayland pass. The source version is shared with ndk-wayland.sh.
+if [[ ! -f "$PREFIX/lib/pkgconfig/xkbregistry.pc" ]]; then
+    pushd libxkbcommon-xkbcommon-1.7.0 >/dev/null
+    meson setup build-registry --cross-file "$PREFIX/android-cross-export.ini" \
+        --native-file "$PREFIX/native.ini" --prefix="$PREFIX" --libdir=lib \
+        --buildtype=release --default-library=shared \
+        -Denable-x11=false -Denable-wayland=false -Denable-docs=false \
+        -Denable-tools=false -Denable-xkbregistry=true
+    meson compile -C build-registry -j"$JOBS"
+    meson install -C build-registry
     popd >/dev/null
 fi
 

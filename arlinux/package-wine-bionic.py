@@ -81,7 +81,7 @@ def main():
     config_header = (args.core / 'include/config.h').read_text()
     if args.vulkan_driver != 'none' and not re.search(r'^#define SONAME_LIBVULKAN ', config_header, re.MULTILINE):
         parser.error('Selected Vulkan backend requires a Wine build with SONAME_LIBVULKAN enabled')
-    opengl = bool(re.search(r'^#define SONAME_LIBGL ', config_header, re.MULTILINE))
+    opengl = bool(re.search(r'^#define SONAME_LIBEGL ', config_header, re.MULTILINE))
     graphics_record = None
     if opengl:
         if not args.graphics_prefix:

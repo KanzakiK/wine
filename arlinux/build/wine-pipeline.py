@@ -92,7 +92,7 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
     tls = stage('wine-tls', lambda out: invoke('bash', 'arlinux/components/bionic-deps/build-tls.sh', paths['ndk'], out))
     graphics = stage('wine-graphics', lambda out: invoke('bash', 'arlinux/build/wine-bionic-graphics.sh',
                      framework / 'arlinux/components/mesa', paths['ndk'], paths['bionicPrefix'],
-                     framework / 'arlinux/components/libhybris/arlinux/graphics-protocols', framework / 'arlinux/components/libxshmfence', out), ('bionic-x11',))
+                     framework / 'arlinux/components/libhybris/arlinux/graphics-protocols', framework / 'arlinux/components/libxshmfence', out), ('bionic-deps',))
     adapter = stage('wine-vulkan', lambda out: invoke('python3', 'arlinux/components/libhybris/arlinux/build-bionic-vulkan.py',
                     '--framework', framework, '--source', framework / 'arlinux/components/libhybris', '--headers', framework / 'arlinux/components/android-headers',
                     '--ndk', paths['ndk'], '--native-prefix', paths['bionicPrefix'],
@@ -138,20 +138,6 @@ def build_bionic_deps(cache, framework, android, ndk):
     return out / 'prefix'
 
 
-def build_bionic_x11(cache, framework, ndk, base):
-    source = framework / 'arlinux/components/libX11'
-    dirty = subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'])
-    if dirty:
-        raise ValueError('libX11 must be a clean pinned fork checkout')
-    inputs = dict(recipe=inventory(framework / 'arlinux/build/bionic-x11.sh'),
-                  source=source_state(source), base=cache.records['bionic-deps'],
-                  ndk=inventory(ndk / 'source.properties'))
-    out = cache.stage('bionic-x11', inputs, lambda out: run(
-        'bash', framework / 'arlinux/build/bionic-x11.sh', base, ndk, source, out,
-        cwd=framework, env=os.environ.copy()))
-    return out / 'prefix'
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, type=Path)
@@ -173,8 +159,7 @@ def main():
         cache = ComponentCache(root, args.rebuild, args.target, args.require_dependencies)
         if cache.selected('bionic-deps'):
             base = build_bionic_deps(cache, framework, android, paths['ndk'])
-        if cache.selected('bionic-x11'):
-            paths['bionicPrefix'] = build_bionic_x11(cache, framework, paths['ndk'], base)
+            paths['bionicPrefix'] = base
         env = {name: value for name, value in os.environ.items() if name in (
             'PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
             'http_proxy', 'https_proxy', 'no_proxy', 'ARLINUX_WINDOWS_FONTS',
