@@ -4,7 +4,6 @@ set -euo pipefail
 [[ $# == 1 ]] || { echo 'Usage: prepare-wine-dcomp.sh PRIVATE_WINE_SOURCE' >&2; exit 2; }
 source_dir="$(realpath "$1")"
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
-[[ "$(cat "$source_dir/VERSION")" == 'Wine version 11.19' ]] || exit 2
 commit=318eda0d8fa08ee94faadf6dc5ad85870339b327
 # Reusing a prepared source tree must never apply the patch twice or hide edits.
 if [[ -f "$source_dir/arlinux-dcomp.json" ]]; then

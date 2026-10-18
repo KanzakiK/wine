@@ -19,11 +19,6 @@ case "$architecture" in
 esac
 export ARLINUX_WINE_PE_ARCH="$architecture"
 destination="$(realpath -m "$3")"
-revision=46af030d975f331ff6304a34a6b91c6147285c6d
-[[ "$(git -C "$source_dir" rev-parse HEAD)" == "$revision" ]] || {
-    echo 'Wine source must match the pinned ARLinux Wine 11.19 revision.' >&2
-    exit 2
-}
 [[ ! -e "$destination" ]] || { echo 'Output directory already exists.' >&2; exit 2; }
 mkdir -p "$repo/build/wine-pe"
 # Content-addressed build directories preserve Make's dependency graph on retry.

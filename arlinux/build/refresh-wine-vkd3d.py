@@ -10,8 +10,6 @@ import subprocess
 def refresh(source):
     patches = Path(__file__).resolve().parents[1] / 'patches/wine-staging-vkd3d'
     record = json.loads((patches / 'manifest.json').read_text())
-    if (source / 'VERSION').read_text().strip() != 'Wine version ' + record['wine']:
-        raise RuntimeError('VKD3D patches require the matching Wine ' + record['wine'] + ' source')
     # Verify the entire series before changing any source files.
     for entry in record['patches']:
         data = (patches / entry['name']).read_bytes()

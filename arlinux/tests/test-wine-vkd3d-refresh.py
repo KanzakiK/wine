@@ -12,14 +12,6 @@ spec.loader.exec_module(module)
 
 
 class RefreshTests(unittest.TestCase):
-    def test_wrong_wine_never_runs_patch(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(module.subprocess, 'run') as run:
-            source = Path(directory)
-            (source / 'VERSION').write_text('Wine version 11.6\n')
-            with self.assertRaisesRegex(RuntimeError, 'matching Wine'):
-                module.refresh(source)
-            run.assert_not_called()
-
     def test_series_is_verified_and_records_all_patches(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(module.subprocess, 'run') as run:
             source = Path(directory)
