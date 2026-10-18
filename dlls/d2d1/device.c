@@ -2676,13 +2676,121 @@ static void STDMETHODCALLTYPE d2d_device_context_FillMesh(ID2D1DeviceContext6 *i
         d2d_command_list_fill_mesh(context->target.command_list, context, mesh, brush);
 }
 
+/* Fill dst_rect with the brush, modulated per pixel by the alpha channel of the
+ * mask bitmap, sampled from src_rect. The mask becomes the opacity brush of the
+ * ordinary rectangle fill: the shader already multiplies the colour brush by the
+ * opacity brush's alpha, so this is the same path FillGeometry() takes with an
+ * opacity brush, only with the brush transform derived from the two rectangles
+ * the way DrawBitmap() derives it. */
+static void d2d_device_context_fill_opacity_mask(struct d2d_device_context *context,
+        ID2D1Bitmap *mask, ID2D1Brush *brush, const D2D1_RECT_F *dst_rect, const D2D1_RECT_F *src_rect)
+{
+    D2D1_IMAGE_BRUSH_PROPERTIES image_brush_desc;
+    D2D1_BRUSH_PROPERTIES brush_desc;
+    float dpi_x, dpi_y, px, py, sx, sy;
+    struct d2d_geometry *geometry;
+    struct d2d_brush *mask_brush;
+    ID2D1Image *image;
+    D2D1_SIZE_F size;
+    D2D1_RECT_F s, d;
+    HRESULT hr;
+
+    if (context->target.type == D2D_TARGET_UNKNOWN)
+    {
+        d2d_device_context_set_error(context, D2DERR_WRONG_STATE);
+        return;
+    }
+
+    if (!mask || !brush)
+    {
+        d2d_device_context_set_error(context, E_INVALIDARG);
+        return;
+    }
+
+    size = ID2D1Bitmap_GetSize(mask);
+    d2d_rect_set(&s, 0.0f, 0.0f, size.width, size.height);
+    if (src_rect && src_rect->left <= src_rect->right
+            && src_rect->top <= src_rect->bottom)
+    {
+        d2d_rect_intersect(&s, src_rect);
+    }
+
+    if (s.left == s.right || s.top == s.bottom)
+        return;
+
+    if (dst_rect)
+    {
+        d = *dst_rect;
+    }
+    else
+    {
+        d.left = 0.0f;
+        d.top = 0.0f;
+        d.right = s.right - s.left;
+        d.bottom = s.bottom - s.top;
+    }
+
+    if (d.left == d.right || d.top == d.bottom)
+        return;
+
+    if (FAILED(hr = ID2D1Bitmap_QueryInterface(mask, &IID_ID2D1Image, (void **)&image)))
+    {
+        d2d_device_context_set_error(context, E_INVALIDARG);
+        return;
+    }
+
+    /* An image brush rather than a bitmap brush, because only the image brush
+     * confines sampling to a source rectangle. The masks are typically atlas
+     * cells (one glyph or label per cell), and the rectangle is inset by half
+     * a texel so that linear filtering at the cell edges never reaches the
+     * neighbouring cell. The brush's source rectangle is in mask pixels. */
+    ID2D1Bitmap_GetDpi(mask, &dpi_x, &dpi_y);
+    px = dpi_x > 0.0f ? dpi_x / 96.0f : 1.0f;
+    py = dpi_y > 0.0f ? dpi_y / 96.0f : 1.0f;
+    image_brush_desc.sourceRectangle.left = s.left * px + 0.5f;
+    image_brush_desc.sourceRectangle.top = s.top * py + 0.5f;
+    image_brush_desc.sourceRectangle.right = max(s.right * px - 0.5f, image_brush_desc.sourceRectangle.left);
+    image_brush_desc.sourceRectangle.bottom = max(s.bottom * py - 0.5f, image_brush_desc.sourceRectangle.top);
+    image_brush_desc.extendModeX = D2D1_EXTEND_MODE_CLAMP;
+    image_brush_desc.extendModeY = D2D1_EXTEND_MODE_CLAMP;
+    image_brush_desc.interpolationMode = D2D1_INTERPOLATION_MODE_LINEAR;
+
+    /* The brush origin is the source rectangle's top-left corner, half a mask
+     * pixel inside the requested source rectangle; place it accordingly. */
+    sx = fabsf((d.right - d.left) / (s.right - s.left));
+    sy = fabsf((d.bottom - d.top) / (s.bottom - s.top));
+    brush_desc.opacity = 1.0f;
+    brush_desc.transform._11 = sx;
+    brush_desc.transform._21 = 0.0f;
+    brush_desc.transform._31 = min(d.left, d.right) + 0.5f / px * sx;
+    brush_desc.transform._12 = 0.0f;
+    brush_desc.transform._22 = sy;
+    brush_desc.transform._32 = min(d.top, d.bottom) + 0.5f / py * sy;
+
+    hr = d2d_image_brush_create(context->factory, image, &image_brush_desc, &brush_desc, &mask_brush);
+    ID2D1Image_Release(image);
+    if (FAILED(hr))
+    {
+        ERR("Failed to create mask brush, hr %#lx.\n", hr);
+        return;
+    }
+
+    if ((geometry = d2d_device_context_get_rect_geometry(context, &d)))
+    {
+        d2d_device_context_fill_geometry(context, geometry, unsafe_impl_from_ID2D1Brush(brush), mask_brush);
+        d2d_device_context_put_rect_geometry(context, geometry);
+    }
+
+    ID2D1Brush_Release(&mask_brush->ID2D1Brush_iface);
+}
+
 static void STDMETHODCALLTYPE d2d_device_context_FillOpacityMask(ID2D1DeviceContext6 *iface,
         ID2D1Bitmap *mask, ID2D1Brush *brush, D2D1_OPACITY_MASK_CONTENT content,
         const D2D1_RECT_F *dst_rect, const D2D1_RECT_F *src_rect)
 {
     struct d2d_device_context *context = impl_from_ID2D1DeviceContext(iface);
 
-    FIXME("iface %p, mask %p, brush %p, content %#x, dst_rect %s, src_rect %s stub!\n",
+    TRACE("iface %p, mask %p, brush %p, content %#x, dst_rect %s, src_rect %s.\n",
             iface, mask, brush, content, debug_d2d_rect_f(dst_rect), debug_d2d_rect_f(src_rect));
 
     d2d_device_context_flush_lines(context);
@@ -2703,7 +2811,12 @@ static void STDMETHODCALLTYPE d2d_device_context_FillOpacityMask(ID2D1DeviceCont
     }
 
     if (context->target.type == D2D_TARGET_COMMAND_LIST)
+    {
         d2d_command_list_fill_opacity_mask(context->target.command_list, context, mask, brush, dst_rect, src_rect);
+        return;
+    }
+
+    d2d_device_context_fill_opacity_mask(context, mask, brush, dst_rect, src_rect);
 }
 
 static void d2d_device_context_draw_bitmap(struct d2d_device_context *context, ID2D1Bitmap *bitmap,
@@ -7031,7 +7144,7 @@ static void STDMETHODCALLTYPE d2d_device_context_ID2D1DeviceContext_FillOpacityM
 {
     struct d2d_device_context *context = impl_from_ID2D1DeviceContext(iface);
 
-    FIXME("iface %p, mask %p, brush %p, dst_rect %s, src_rect %s stub!\n",
+    TRACE("iface %p, mask %p, brush %p, dst_rect %s, src_rect %s.\n",
             iface, mask, brush, debug_d2d_rect_f(dst_rect), debug_d2d_rect_f(src_rect));
 
     d2d_device_context_flush_lines(context);
@@ -7046,7 +7159,12 @@ static void STDMETHODCALLTYPE d2d_device_context_ID2D1DeviceContext_FillOpacityM
     }
 
     if (context->target.type == D2D_TARGET_COMMAND_LIST)
+    {
         d2d_command_list_fill_opacity_mask(context->target.command_list, context, mask, brush, dst_rect, src_rect);
+        return;
+    }
+
+    d2d_device_context_fill_opacity_mask(context, mask, brush, dst_rect, src_rect);
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_device_context_CreateFilledGeometryRealization(ID2D1DeviceContext6 *iface,
