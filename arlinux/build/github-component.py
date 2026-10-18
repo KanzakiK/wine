@@ -256,9 +256,6 @@ def restore_seed(root, framework, data, visited):
 def build(data, framework):
     root = Path(os.environ['ARLINUX_WORKSPACE'])
     stage = data['stage']
-    if stage == 'wine-pe-aarch64':
-        for test in sorted((framework/'arlinux/tests').glob('test-*.py')):
-            run(sys.executable, test)
     if stage == 'windows-fonts':
         output = root / 'vendor/fonts'
         output.mkdir(parents=True, exist_ok=True)

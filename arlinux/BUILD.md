@@ -8,8 +8,10 @@ Rootfs distributions have no Wine source or build dependency. Their application
 launchers download the published runtime on demand.
 
 Local development uses Windows Git, Python and PowerShell exclusively. Linux
-compilation and recipe tests run on GitHub-hosted runners; do not create WSL
-source, build or verification trees. The ARM64 PE job runs the Wine recipe tests.
+compilation runs on GitHub-hosted runners; do not create WSL source, build or
+verification trees. Hosted builds compile the actual product; acceptance uses
+the complete user journey on fresh device instances. Do not gate ARM64 PE on
+mock implementations of other graph stages.
 
 `arlinux/build/github-components.json` is the single Wine component graph.
 Each component uses an independent workflow_dispatch in its owning repository;
