@@ -81,7 +81,7 @@ def prepare(data, framework):
             'libxcb-xfixes0-dev', 'libxcb-randr0-dev', 'libxdamage-dev', 'libxext-dev',
             'libelf-dev', 'libudev-dev', 'libgbm-dev', 'gperf', 'libglib2.0-dev', 'libglib2.0-dev-bin',
             'ccache', 'gettext', 'libgettextpo-dev', 'libssl-dev', 'unzip', 'autopoint', 'intltool', 'python-is-python3']
-        if data['stage'] in ('wine-diagnostics', 'windows-accessibility', 'windows-tray',
+        if data['stage'] in ('wine-diagnostics', 'windows-accessibility', 'windows-tray', 'runtime-support', 'wine-product',
                              'wine-pe', 'wine-pe-package', 'wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386'):
             packages = ['build-essential', 'bison', 'flex', 'ccache', 'gettext', 'libfreetype-dev',
                         'cmake', 'ninja-build', 'pkg-config', 'git', 'curl', 'unzip',
