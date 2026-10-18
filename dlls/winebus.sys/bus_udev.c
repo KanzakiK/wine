@@ -1897,6 +1897,10 @@ NTSTATUS udev_bus_stop(void *args)
     return STATUS_SUCCESS;
 }
 
+#elif defined(__ANDROID__)
+
+#include "bus_arlinux.h"
+
 #else
 
 NTSTATUS udev_bus_init(void *args)
