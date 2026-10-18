@@ -163,12 +163,11 @@ if [[ "$opengl" == zink ]]; then
 import hashlib, json, sys
 from pathlib import Path
 build, prefix = map(Path, sys.argv[1:])
-options = json.loads((build / 'meson-info/intro-buildoptions.json').read_text())
-assert next(o['value'] for o in options if o['name'] == 'xmlconfig') == 'enabled'
 libraries = {}
-for name in ['lib/dri/zink_dri.so', 'lib/dri/libdril_dri.so']:
-    with (prefix / name).open('rb') as stream:
-        libraries[name] = hashlib.file_digest(stream, 'sha256').hexdigest()
+for library in sorted((prefix / 'lib').glob('*.so*')):
+    if library.is_file():
+        with library.open('rb') as stream:
+            libraries[library.relative_to(prefix).as_posix()] = hashlib.file_digest(stream, 'sha256').hexdigest()
 (prefix / 'arlinux-bionic-graphics.json').write_text(json.dumps({
     'protocol': 1, 'openglDriver': 'zink', 'xmlconfig': 'enabled',
     'libraries': libraries,

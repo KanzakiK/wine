@@ -182,12 +182,6 @@ def main():
     if args.vulkan_driver == 'system':
         install(args.system_vulkan_adapter, unix / 'libvulkan_android_desktop.so')
         install(compat_layer, unix / compat_layer.name)
-    if opengl:
-        dri = destination / 'lib/dri'
-        dri.mkdir(parents=True, exist_ok=True)
-        for name in ['zink_dri.so', 'libdril_dri.so']:
-            src = args.graphics_prefix / 'lib/dri' / name
-            install(src.resolve(), dri / name)
     while pending:
         name = pending.pop()
         if name in SYSTEM_LIBS or (unix / name).exists():
