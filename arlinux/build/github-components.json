@@ -179,7 +179,7 @@
       "compilerCacheMiB": 512
     },
     "wine-diagnostics": {
-      "repository": "taowen/FEX",
+      "repository": "taowen/arlinux-windows-integration",
       "runner": "ubuntu-24.04",
       "dependencies": [],
       "product": "diagnostics",

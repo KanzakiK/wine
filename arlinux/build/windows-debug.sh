@@ -10,9 +10,9 @@ compiler="$(realpath "$1")/aarch64-w64-mingw32-clang"
 output="$(realpath -m "$2")"
 mkdir -p "$output"
 "$compiler" -Wall -Wextra -Werror -municode \
-    "$repo/arlinux/components/FEX/tests/arlinux/exception-observer.c" -ldbghelp -Wl,--no-insert-timestamp \
+    "$repo/arlinux/components/windows-integration/diagnostics/exception-observer.c" -ldbghelp -Wl,--no-insert-timestamp \
     -o "$output/exception-observer.exe"
 "$compiler" -Wall -Wextra -Werror \
-    "$repo/arlinux/components/FEX/tests/arlinux/exception-observer-probe.c" -Wl,--no-insert-timestamp \
+    "$repo/arlinux/components/windows-integration/diagnostics/exception-observer-probe.c" -Wl,--no-insert-timestamp \
     -o "$output/exception-observer-probe.exe"
 sha256sum "$output/"*.exe

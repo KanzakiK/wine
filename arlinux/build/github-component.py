@@ -87,8 +87,12 @@ def prepare(data, framework):
         cross = bin_dir / 'aarch64-linux-gnu-pkg-config'
         cross.write_text('#!/bin/sh\nexport PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig\nexec pkg-config "$@"\n')
         cross.chmod(0o755)
-        run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1')
-        run('git', '-C', framework/'arlinux/components/FEX', 'submodule', 'update', '--init', '--recursive', '--depth', '1')
+        if data['stage'] == 'wine-diagnostics':
+            run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1',
+                'arlinux/components/windows-integration')
+        else:
+            run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1')
+            run('git', '-C', framework/'arlinux/components/FEX', 'submodule', 'update', '--init', '--recursive', '--depth', '1')
         for marker in [framework/'.git', *framework.glob('arlinux/components/*/.git')]:
             if marker.exists():
                 run('git', 'config', '--global', '--add', 'safe.directory', marker.parent)
@@ -113,10 +117,11 @@ def prepare(data, framework):
 
 def toolchains(root, framework):
     lock = json.loads((framework / 'arlinux/build/github-inputs.json').read_text())
+    stage = json.loads(os.environ['ARLINUX_COMPONENT_REQUEST'])['stage']
     cache = root / 'cache/downloads'
     tools = root / 'toolchains'
     tools.mkdir(exist_ok=True)
-    for name in ('mingw', 'ndk'):
+    for name in (('mingw',) if stage == 'wine-diagnostics' else ('mingw', 'ndk')):
         item = lock[name]
         archive = download(item['url'], cache / item['file'], item['sha256'])
         destination = tools / name
@@ -134,7 +139,7 @@ def toolchains(root, framework):
             entries[0].rename(destination)
             temporary.rmdir()
     addons = root / 'vendor/addons'
-    for item in lock['addons']:
+    for item in ([] if stage == 'wine-diagnostics' else lock['addons']):
         archive = download(item['url'], cache / item['file'], item['sha256'])
         destination = addons / item['directory']
         destination.mkdir(parents=True, exist_ok=True)
@@ -142,7 +147,7 @@ def toolchains(root, framework):
             source.extractall(destination, filter='data')
     mono = addons / 'mono'
     alias = mono / 'wine-mono'
-    if not alias.exists():
+    if stage != 'wine-diagnostics' and not alias.exists():
         alias.symlink_to('wine-mono-11.3.0')
     launcher = tools / 'mingw-ccache/bin'
     launcher.mkdir(parents=True, exist_ok=True)
@@ -161,7 +166,6 @@ def toolchains(root, framework):
             target.chmod(0o755)
         else:
             target.symlink_to(compiler)
-    stage=json.loads(os.environ['ARLINUX_COMPONENT_REQUEST'])['stage']
     plan=json.loads((framework/'arlinux/build/github-components.json').read_text())
     run('ccache', '--max-size', str(plan['stages'][stage]['compilerCacheMiB'])+'M',
         env=dict(os.environ,CCACHE_DIR=str(root/'cache/ccache')))
@@ -242,9 +246,10 @@ def build(data, framework):
         cache = Cache(framework/'build/pipeline')
         inputs = {str(path.relative_to(framework)): inventory(path) for path in (
             framework/'arlinux/build/windows-debug.sh', framework/'arlinux/windows-debug.py',
-            framework/'arlinux/components/FEX/tests/arlinux/exception-observer.c',
-            framework/'arlinux/components/FEX/tests/arlinux/exception-observer-probe.c')}
+            framework/'arlinux/components/windows-integration/diagnostics/exception-observer.c',
+            framework/'arlinux/components/windows-integration/diagnostics/exception-observer-probe.c')}
         inputs['toolchainLock'] = sha(framework/'arlinux/build/github-inputs.json')
+        inputs['engine'] = sha(__file__)
         inputs['compiler'] = inventory(Path(tools['mingw'])/'aarch64-w64-mingw32-clang')
         def compile(output):
             run('bash', framework/'arlinux/build/windows-debug.sh', tools['mingw'], output)

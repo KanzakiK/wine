@@ -22,7 +22,7 @@ def main():
     parser.add_argument('--prefix', type=Path, required=True, help='Existing Wine data directory (contains pfx)')
     parser.add_argument('--output', type=Path, required=True, help='New private report directory')
     parser.add_argument('--seconds', type=int, default=60)
-    parser.add_argument('--observer', type=Path, required=True, help='ARM64 exception-observer.exe built from the GE fork')
+    parser.add_argument('--observer', type=Path, required=True, help='ARM64 exception-observer.exe from the hosted diagnostic product')
     parser.add_argument('--env', action='append', default=[], help='Diagnostic NAME=VALUE override (recorded; do not pass secrets)')
     parser.add_argument('--runtime', help='Installed runtime SHA-256; defaults to the active runtime')
     parser.add_argument('executable', type=Path)

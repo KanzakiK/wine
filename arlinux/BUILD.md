@@ -36,6 +36,6 @@ consumer-side download pin output. Capsule prereleases are build inputs, not
 acceptance results. Missing direct inputs and actual command errors fail builds;
 do not add parallel feature/file/version presence lists.
 
-The optional diagnostics product builds the FEX exception observer and probe on
+The optional diagnostics product builds the standalone Windows observer and probe on
 its own x64 runner and carries the Wine-owned guest capture helper. The Windows
 host diagnostic command downloads this product; it never invokes WSL.
