@@ -11,13 +11,15 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from wine_graph import ComponentCache, ComponentComplete, required_stages
 from pipeline_cache import Cache, digest, inventory, key, run, source_state, support_sources
+from component_inputs import core_path, RESOURCES
 
 def build_wine(cache, framework, android, paths, common, invoke, env):
     """Build the complete standalone Wine chain, including the Steamworks ABI inputs."""
     recipes = {
         'wine-pulse': (),
         'wine-pe': ('arlinux/build/wine-pe.sh', 'arlinux/build/refresh-wine-vkd3d.py',
-                    'arlinux/build/prepare-wine-dcomp.sh', 'arlinux/patches'),
+                    'arlinux/build/prepare-wine-dcomp.sh', 'arlinux/patches',
+                    'arlinux/components/windows-integration/tray/protocol.h'),
         'fex': ('arlinux/build/fex-windows.sh', 'arlinux/components/FEX'),
         'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/patches/dxvk-optional-pipeline-library.patch'),
         'wine-pe-package': ('arlinux/package-wine-pe.py', 'arlinux/wine_pe_debug.py'),
@@ -32,14 +34,15 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
         if not cache.selected(name):
             return None
         inputs = {k: v for k, v in common.items() if k not in ('sources', 'wineSources', 'pulseRecipe')}
-        inputs['sources'] = {k: v for k, v in common['sources'].items()
-                             if any(k == p or k.startswith(p + '/') for p in recipes.get(name, recipes['wine-pe']))}
+        inputs['toolchain'] = {n: common['toolchain'][n] for n in RESOURCES[name]}
+        inputs['sources'] = {p: source_state(framework/p) if (framework/p).is_dir() else inventory(framework/p)
+                             for p in recipes.get(name, recipes['wine-pe'])}
         if name == 'wine-bionic':
             import sys
             sys.path.insert(0, str(framework / 'arlinux'))
             from wine_fonts import FILES, source_directory
             inputs['windowsFonts'] = {n: inventory(source_directory()/n) for n in FILES}
-        if name.startswith('wine-pe') or name == 'wine-bionic':
+        if name in ('wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386', 'wine-bionic'):
             inputs['wineSources'] = common['wineSources']
         if name == 'wine-pulse':
             inputs['pulseRecipe'] = common['pulseRecipe']
@@ -147,7 +150,7 @@ def main():
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     framework = Path(config['framework']).resolve(strict=True)
-    paths = {name: Path(config[name]).resolve(strict=True) for name in ('wineSource', 'mingw', 'ndk', 'addons')}
+    paths = {name: Path(config[name]).resolve() for name in ('wineSource', 'mingw', 'ndk', 'addons')}
     android = framework
     dirty = subprocess.check_output(['git', '-C', str(paths['wineSource']), 'status', '--porcelain', '--untracked-files=normal'])
     if dirty:
@@ -167,17 +170,17 @@ def main():
         env.update(ANDROID_NDK_HOME=str(paths['ndk']), BIONIC_VULKAN_DRIVER='system', BIONIC_OPENGL='zink')
         if 'bionicPrefix' in paths:
             env['BIONIC_INCLUDE'] = str(paths['bionicPrefix'] / 'include')
-        toolchain = {str(p): inventory(p) for p in (
-            paths['ndk'] / 'source.properties', paths['mingw'],
-            paths['ndk'] / 'toolchains/llvm/prebuilt/linux-x86_64', paths['addons'])}
-        common = dict(engine=digest(__file__), config=config, sources=source_state(framework),
-                      wineSources=source_state(paths['wineSource']), toolchain=toolchain)
+        resources = {r for name in cache.required for r in RESOURCES[name]}
+        toolchain = {name: inventory(paths[name]) for name in resources}
+        sources = source_state(framework)
+        common = dict(engine=digest(__file__), config=config, sources=sources,
+                      wineSources={n: v for n, v in sources.items() if core_path(n)}, toolchain=toolchain)
         common['hostTools'] = {name: subprocess.check_output([name, '--version'], text=True)
                                for name in ('gcc', 'g++', 'make', 'cmake', 'ninja', 'meson', 'pkg-config')}
         common['hostFreeType'] = subprocess.check_output(['pkg-config', '--modversion', 'freetype2'], text=True).strip()
         common['pulseRecipe'] = {str(p.relative_to(android)): inventory(p) for p in (
             android / 'arlinux/components/pulseaudio-android/arlinux/build.sh', android / 'tools/build/ndk-env.sh',
-            android / 'toolchain.json', android / 'arlinux/components/pulseaudio-android')}
+            android / 'toolchain.json', android / 'arlinux/components/pulseaudio-android')} if cache.selected('wine-pulse') else {}
         invoke = lambda *command: run(*command, cwd=framework, env=env)
         archive = build_wine(cache, framework, android, paths, common, invoke, env)
         def helper_inputs(*sources, **dependencies):
@@ -185,6 +188,7 @@ def main():
                       if name not in ('sources', 'wineSources', 'pulseRecipe')}
             inputs['sources'] = {name: inventory(framework / name) for name in sources}
             inputs['dependencies'] = dependencies
+            inputs['toolchain'] = {'mingw': common['toolchain']['mingw']}
             return inputs
         bridge = observer = tray = None
         if cache.selected('steamworks'):

@@ -29,7 +29,10 @@ import hashlib,subprocess,sys,os
 repo,source,compiler=map(Path,sys.argv[1:])
 h=hashlib.sha256()
 h.update(os.environ["ARLINUX_WINE_PE_ARCH"].encode())
-h.update(subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD']))
+sys.path.insert(0,str(repo/'arlinux/build'))
+from component_inputs import core_path,tree_entries
+import json
+h.update(json.dumps({n:v for n,v in tree_entries(source,'HEAD').items() if core_path(n)},sort_keys=True).encode())
 inputs=[repo/'arlinux/build/wine-pe.sh',repo/'arlinux/build/refresh-wine-vkd3d.py',
         repo/'arlinux/build/prepare-wine-dcomp.sh',source/'dlls/combase/parameterized.c']
 inputs+=sorted((repo/'arlinux/patches/wine-staging-vkd3d').glob('*'))

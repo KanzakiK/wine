@@ -22,6 +22,7 @@ class RetryTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin)+os.pathsep+os.environ['PATH'],
                         FIXTURE_ROOT=str(self.root), FIXTURE_SOURCE=str(self.source))
         self.write('repo/arlinux/build/wine-pe.sh', SCRIPT.read_text())
+        self.write('repo/arlinux/build/component_inputs.py', (SCRIPT.parent/'component_inputs.py').read_text())
         self.write('source/dlls/combase/parameterized.c', 'fixture')
         self.write('source/dlls/dwrite/font.c',
                    (SCRIPT.parents[2]/'dlls/dwrite/font.c').read_text())
@@ -64,6 +65,7 @@ printf '{}' > "$1/arlinux-dcomp.json"
 case "$*" in
   *rev-parse*) echo {REVISION} ;;
   *archive*) tar -cf - -C "$FIXTURE_SOURCE" . ;;
+  *ls-tree*) printf '100644 blob fixture\\tdlls/combase/parameterized.c\\0' ;;
   *) exit 1 ;;
 esac
 ''', executable=True)

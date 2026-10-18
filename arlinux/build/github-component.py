@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 import urllib.request
 from artifact_download import download
+from component_inputs import requirements, request_identity, source_inputs
 
 
 
@@ -37,9 +38,11 @@ def request():
         if not re.fullmatch('[0-9a-f]{40}', data.get(name, '')):
             raise ValueError('Expected a pinned ' + name + ' commit')
     identity = data['identity']
-    actual = hashlib.sha256(json.dumps({k:v for k,v in data.items() if k not in ('identity','cacheSeed')}, sort_keys=True).encode()).hexdigest()
+    actual = request_identity(data)
     if identity != actual:
         raise ValueError('Component request identity differs from its inputs')
+    if data.get('format') == 2 and data['sourceInputs'] != source_inputs(framework, data['framework'], data['stage'], plan):
+        raise ValueError('Pinned checkout differs from the declared component sources')
     expected_arch = 'arm64' if stage['runner'].endswith('-arm') else 'x64'
     if os.environ.get('RUNNER_ARCH', '').lower() != expected_arch:
         raise ValueError('Unexpected hosted runner architecture')
@@ -61,8 +64,9 @@ def prepare(data, framework):
         framework = root / 'framework'
         # Only remove optional software on the ephemeral GitHub runner.
         # Never run this cleanup in a workstation or self-hosted environment.
-        run('sudo', 'rm', '-rf', '/usr/share/dotnet', '/usr/local/lib/android',
-            '/opt/ghc', '/usr/local/share/boost', '/opt/hostedtoolcache/CodeQL')
+        if data['stage'] in ('wine-bionic', 'wine-graphics', 'fex') or data['stage'].startswith('wine-pe-'):
+            run('sudo', 'rm', '-rf', '/usr/share/dotnet', '/usr/local/lib/android',
+                '/opt/ghc', '/usr/local/share/boost', '/opt/hostedtoolcache/CodeQL')
         packages = ['autoconf', 'automake', 'libtool', 'build-essential', 'bison', 'flex',
             'curl', 'git', 'cmake', 'ninja-build', 'patchelf', 'pkg-config', 'python3',
             'python3-venv', 'python3-pip', 'python3-mako', 'python3-zstandard',
@@ -77,6 +81,11 @@ def prepare(data, framework):
             'libxcb-xfixes0-dev', 'libxcb-randr0-dev', 'libxdamage-dev', 'libxext-dev',
             'libelf-dev', 'libudev-dev', 'libgbm-dev', 'gperf', 'libglib2.0-dev', 'libglib2.0-dev-bin',
             'ccache', 'gettext', 'libgettextpo-dev', 'libssl-dev', 'unzip', 'autopoint', 'intltool', 'python-is-python3']
+        if data['stage'] in ('wine-diagnostics', 'windows-accessibility', 'windows-tray',
+                             'wine-pe', 'wine-pe-package', 'wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386'):
+            packages = ['build-essential', 'bison', 'flex', 'ccache', 'gettext', 'libfreetype-dev',
+                        'cmake', 'ninja-build', 'pkg-config', 'git', 'curl', 'unzip',
+                        'python3', 'python3-venv', 'python3-pip', 'zstd']
         run('sudo', 'apt-get', 'update')
         run('sudo', 'apt-get', 'install', '-y', '--no-install-recommends', *packages,
             env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'))
@@ -87,11 +96,11 @@ def prepare(data, framework):
         cross = bin_dir / 'aarch64-linux-gnu-pkg-config'
         cross.write_text('#!/bin/sh\nexport PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig\nexec pkg-config "$@"\n')
         cross.chmod(0o755)
-        if data['stage'] == 'wine-diagnostics':
-            run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1',
-                'arlinux/components/windows-integration')
-        else:
-            run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1')
+        plan = json.loads((framework/'arlinux/build/github-components.json').read_text())
+        modules, _ = requirements(data['stage'], plan)
+        if modules:
+            run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1', '--', *modules)
+        if 'arlinux/components/FEX' in modules:
             run('git', '-C', framework/'arlinux/components/FEX', 'submodule', 'update', '--init', '--recursive', '--depth', '1')
         for marker in [framework/'.git', *framework.glob('arlinux/components/*/.git')]:
             if marker.exists():
@@ -110,6 +119,8 @@ def prepare(data, framework):
         if data['stage'].startswith('wine-pe-'):
             paths.append(str(framework/'build/wine-pe/*/tools'))
             paths.append(str(framework/'build/wine-pe/*/source'))
+        if data['stage'] in ('wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386'):
+            paths.append(str(framework/'build/pipeline'/data['stage']))
         with Path(os.environ['GITHUB_OUTPUT']).open('a') as out:
             out.write('cache-paths<<ARLINUX_CACHE_PATHS\n'+'\n'.join(paths)+'\nARLINUX_CACHE_PATHS\n')
             out.write('vendor-key='+sha(framework/'arlinux/build/github-inputs.json')+'\n')
@@ -118,10 +129,12 @@ def prepare(data, framework):
 def toolchains(root, framework):
     lock = json.loads((framework / 'arlinux/build/github-inputs.json').read_text())
     stage = json.loads(os.environ['ARLINUX_COMPONENT_REQUEST'])['stage']
+    plan = json.loads((framework/'arlinux/build/github-components.json').read_text())
+    _, resources = requirements(stage, plan)
     cache = root / 'cache/downloads'
     tools = root / 'toolchains'
     tools.mkdir(exist_ok=True)
-    for name in (('mingw',) if stage == 'wine-diagnostics' else ('mingw', 'ndk')):
+    for name in sorted(resources - {'addons'}):
         item = lock[name]
         archive = download(item['url'], cache / item['file'], item['sha256'])
         destination = tools / name
@@ -139,7 +152,8 @@ def toolchains(root, framework):
             entries[0].rename(destination)
             temporary.rmdir()
     addons = root / 'vendor/addons'
-    for item in ([] if stage == 'wine-diagnostics' else lock['addons']):
+    addons.mkdir(parents=True, exist_ok=True)
+    for item in (lock['addons'] if 'addons' in resources else []):
         archive = download(item['url'], cache / item['file'], item['sha256'])
         destination = addons / item['directory']
         destination.mkdir(parents=True, exist_ok=True)
@@ -147,17 +161,17 @@ def toolchains(root, framework):
             source.extractall(destination, filter='data')
     mono = addons / 'mono'
     alias = mono / 'wine-mono'
-    if stage != 'wine-diagnostics' and not alias.exists():
+    if 'addons' in resources and not alias.exists():
         alias.symlink_to('wine-mono-11.3.0')
     launcher = tools / 'mingw-ccache/bin'
     launcher.mkdir(parents=True, exist_ok=True)
     # clang-scan-deps constructs a driver from the compiler path without
     # executing its wrapper, so the complete MinGW sysroot must remain visible.
-    for entry in (tools/'mingw').iterdir():
+    for entry in ((tools/'mingw').iterdir() if 'mingw' in resources else []):
         target=launcher.parent/entry.name
         if entry.name!='bin' and not target.exists():
             target.symlink_to(entry,target_is_directory=entry.is_dir())
-    for compiler in (tools/'mingw/bin').iterdir():
+    for compiler in ((tools/'mingw/bin').iterdir() if 'mingw' in resources else []):
         target = launcher/compiler.name
         if target.exists() or target.is_symlink():
             continue
@@ -302,6 +316,26 @@ def publish(data, framework):
                 if source.is_file():
                     shutil.copyfile(source, final/source.name)
             paths = [final]
+    # A forced hosted rerun must verify the rebuilt/cached bytes, but need not
+    # recompress or upload the same immutable capsule a second time.
+    from pipeline_cache import inventory
+    contents = ({'outputs': state['outputs'], 'references': state['references']}
+                if stage not in ('windows-fonts',) else {str(p.relative_to(root)): inventory(p) for p in paths})
+    record['outputIdentity'] = hashlib.sha256(json.dumps(contents, sort_keys=True).encode()).hexdigest()
+    tag = 'arlinux-'+stage+'-'+data['identity'][:24]
+    repository = os.environ['GITHUB_REPOSITORY']
+    previous = subprocess.run(['gh','api',f'repos/{repository}/releases/tags/{tag}'], capture_output=True, text=True)
+    if not previous.returncode:
+        assets = json.loads(previous.stdout)['assets']
+        completed = next((a for a in assets if a['name'] == 'component.json'), None)
+        if completed:
+            expected = completed['digest'].removeprefix('sha256:')
+            saved = download(completed['browser_download_url'], output/'previous.json', expected)
+            prior = json.loads(saved.read_text())
+            if prior['identity'] != data['identity'] or prior.get('outputIdentity') != record['outputIdentity']:
+                raise ValueError('Published component differs from the verified rerun outputs')
+            print('OK identical published component '+stage, flush=True)
+            return
     archive = output / 'capsule.tar'
     # Compiler tools can point at generated source/header trees outside the
     # output directory. Preserve those references at the same absolute path.

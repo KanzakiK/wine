@@ -14,6 +14,11 @@ source, build or verification trees. The ARM64 PE job runs the Wine recipe tests
 `arlinux/build/github-components.json` is the single Wine component graph.
 Each component uses an independent workflow_dispatch in its owning repository;
 compiler/download caches belong to that repository's standard free runners.
+Component requests hash the declared source trees, recipes, toolchain locks and
+dependency identities; the producing commit remains provenance, not a blanket
+invalidation key. Unrelated integration documentation or FEX changes do not
+rebuild PE. Each runner initializes only its dependency closure's source modules
+and toolchains. A forced rerun verifies outputs before reusing a published capsule.
 Sources are fixed Git submodules. Steamworks owns its committed frontend fixes,
 Windows integration owns accessibility/tray, and the audio fork pins its patched
 PulseAudio fork. No Steam Proton distribution is built or patched.
