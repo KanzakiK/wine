@@ -24,7 +24,22 @@ class WineGraphTest(unittest.TestCase):
             env, calls = {}, []
             paths = {name: root / name for name in ('wineSource', 'mingw', 'ndk', 'bionicPrefix', 'addons')}
             paths['bionicPrefix'] = cache.stage('bionic-deps', {'fixture':'matching headers'}, lambda output: output.mkdir(parents=True))
-            common = dict(sources={}, wineSources={'commit': 'pinned'}, pulseRecipe={})
+            common = dict(sources={}, wineSources={'commit': 'pinned'}, pulseRecipe={},
+                          toolchain={name: 'compiler fixture' for name in ('mingw', 'ndk', 'addons')})
+            from component_inputs import SOURCES
+            recipes = {p for values in SOURCES.values() for p in values if p != '@wine'}
+            recipes.update(('arlinux/components/libhybris/arlinux/build-bionic-vulkan.py',
+                            'arlinux/components/libhybris/arlinux/graphics-protocols',
+                            'arlinux/components/bionic-deps/build-tls.sh', 'dlls/winebus.sys',
+                            'arlinux/components/windows-integration/tray/protocol.h'))
+            for name in sorted(recipes):
+                path = root/name
+                if path.suffix in ('.sh', '.py', '.patch', '.h', '.json'):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    if not path.exists():
+                        path.write_text('recipe fixture')
+                else:
+                    path.mkdir(parents=True, exist_ok=True)
             def invoke(*command):
                 calls.append(command)
                 recipe = Path(command[1]).name
