@@ -60,6 +60,28 @@ needs direct artifact contracts and component-specific engine identities before
 changing the shared pipeline engine; otherwise an assembly-only change can
 invalidate unrelated compiler caches. Keep assembly in the single product graph.
 
+The next optimization recipes remove intermediate PE gzip creation/extraction:
+`package-wine-pe.py` produces the declared runtime directory directly; the
+component capsule remains responsible for transport compression and verification.
+Only `wine-product` creates the downloadable Bionic runtime archive. The native
+component exports Steamworks headers and ntdll ABI inputs instead of its complete
+object/source work tree. License source archives are retained. x64/i386 PE jobs
+export their Windows modules; common data and host tools come from ARM64.
+
+Final support/product assembly implementation lives in `build/runtime_assembly.py`
+and is a direct input of those two stages. Subsequent assembly-only edits do not
+change the shared compiler engine. Initial migration still changes shared inputs.
+These recipe changes require hosted builds and fresh-instance acceptance; they
+are not yet measured speedup or compatibility results.
+
+The remaining critical path is ARM64 PE -> PE merge/package -> native Wine ->
+Steamworks -> support/product assembly. Native compilation can eventually start
+from ARM64 host tools before other PE architectures finish, but this requires a
+separate native compile artifact and a later runtime assembly stage in this same
+graph. Do not remove the dependency while the native recipe also packages PE.
+ARM64/ARM64EC cross-linked modules must stay together. FEX, DXVK, TLS, Pulse and
+Windows integration helpers already run independently where dependencies allow.
+
 From a clean clone of the intended pushed commit, with Python, zstandard and gh:
 
 ```sh

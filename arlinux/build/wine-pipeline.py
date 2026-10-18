@@ -81,15 +81,9 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
     dxvk = stage('dxvk', lambda out: invoke('bash', 'arlinux/build/dxvk-windows.sh', paths['mingw'], out))
 
     def package_pe(out):
-        import tarfile
         out.mkdir()
-        archive = out / 'pe.tar.gz'
         invoke('python3', 'arlinux/package-wine-pe.py', '--wine', wine, '--fex', fex,
-               '--dxvk', dxvk, '--addons', paths['addons'], '--output', archive)
-        runtime = out / 'runtime'
-        runtime.mkdir()
-        with tarfile.open(archive) as bundle:
-            bundle.extractall(runtime, filter='data')
+               '--dxvk', dxvk, '--addons', paths['addons'], '--output', out / 'runtime')
     pe_stage = stage('wine-pe-package', package_pe, ('wine-pe', 'fex', 'dxvk'))
     pe = pe_stage / 'runtime' if pe_stage else None
     tls = stage('wine-tls', lambda out: invoke('bash', 'arlinux/components/bionic-deps/build-tls.sh', paths['ndk'], out))
@@ -202,55 +196,15 @@ def main():
             tray = cache.stage('windows-tray', helper_inputs('arlinux/components/windows-integration/tray',
                 'arlinux/components/windows-integration/build-tray.sh'), lambda out: invoke(
                 'bash', 'arlinux/components/windows-integration/build-tray.sh', paths['mingw'], out))
-        def support(out):
-            out.mkdir()
-            for name in ('lsteambridge-server', 'aarch64-windows/steam.exe',
-                         'aarch64-windows/lsteamclient.dll', 'aarch64-unix/lsteamclient.so',
-                         'aarch64-unix/steamclient.so', 'aarch64-unix/steamclient64.so',
-                         'i386-windows/lsteamclient.dll', 'x86_64-windows/lsteamclient.dll',
-                         'LICENSE.bridge', 'LICENSE.lsteamclient', 'upstream-revision'):
-                destination = out / 'steamworks' / name
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(bridge / name, destination)
-            shutil.copyfile(bridge / 'steamworks-source.tar.gz', out / 'steamworks-source.tar.gz')
-            shutil.copyfile(observer / 'windows-accessibility.exe', out / 'windows-accessibility.exe')
-            if tray is not None:
-                shutil.copyfile(tray / 'windows-tray.exe', out / 'windows-tray.exe')
-        support = cache.stage('runtime-support', dict(sources=support_sources(framework),
-            dependencies={name: cache.records[name] for name in ('steamworks', 'windows-accessibility', 'windows-tray') if name in cache.records}), support)
-        def product(out):
-            import importlib.util
-            import hashlib
-            out.mkdir()
-            runtime = out / 'runtime'
-            shutil.copytree(base / 'runtime', runtime)
-            (runtime / 'build-state.json').unlink(missing_ok=True)
-            helpers = runtime / 'files/lib/arlinux'
-            helpers.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(support / 'steamworks', helpers / 'steamworks')
-            for name in ('windows-accessibility.exe', 'windows-tray.exe'):
-                shutil.copyfile(support / name, helpers / name)
-            invoke('tar', '--exclude=.git', '-czf', out / 'arlinux-support-source.tar.gz',
-                   'arlinux/components/steamworks', 'arlinux/components/windows-integration/accessibility', 'arlinux/components/windows-integration/tray',
-                   'arlinux/components/steamworks/build.sh', 'arlinux/components/windows-integration/build-accessibility.sh',
-                   'arlinux/components/windows-integration/build-tray.sh', '-C', support, 'steamworks-source.tar.gz')
-            metadata = json.loads((runtime / 'bionic-runtime.json').read_text())
-            metadata['support'] = {'protocol': 1, 'directory': 'files/lib/arlinux'}
-            metadata['originalSources']['support'] = dict(asset='arlinux-support-source.tar.gz',
-                sha256=digest(out / 'arlinux-support-source.tar.gz'))
-            metadata['files'] = {p.relative_to(runtime).as_posix(): digest(p)
-                                 for p in sorted(runtime.rglob('*')) if p.is_file()
-                                 and p.name != 'bionic-runtime.json'}
-            (runtime / 'bionic-runtime.json').write_text(json.dumps(metadata, indent=2)+'\n')
-            for source in base.glob('*.tar.gz'):
-                shutil.copyfile(source, out / source.name)
-            spec = importlib.util.spec_from_file_location('wine_packager', framework / 'arlinux/package-wine-bionic.py')
-            module = importlib.util.module_from_spec(spec)
-            sys.path.insert(0, str(framework / 'arlinux'))
-            spec.loader.exec_module(module)
-            module.archive_runtime(runtime, out / 'arlinux-wine-bionic.tar.gz')
-        final = cache.stage('wine-product', dict(engine=digest(__file__),
-            dependencies=cache.records.copy()), product)
+        import runtime_assembly as assembly
+        support = cache.stage('runtime-support', dict(engine=digest(assembly.__file__),
+            sources=support_sources(framework),
+            dependencies={name: cache.records[name] for name in ('steamworks', 'windows-accessibility', 'windows-tray') if name in cache.records}),
+            lambda out: assembly.assemble_support(out, bridge, observer, tray))
+        final = cache.stage('wine-product', dict(engine=digest(assembly.__file__),
+            packager=inventory(framework/'arlinux/package-wine-bionic.py'),
+            dependencies=cache.records.copy()),
+            lambda out: assembly.assemble_product(out, framework, base, support, invoke))
         output = framework / 'build/artifacts/wine'
         output.mkdir(parents=True, exist_ok=True)
         for source in final.iterdir():

@@ -27,8 +27,9 @@ SOURCES = {
     'windows-tray': ('arlinux/components/windows-integration',),
     'wine-diagnostics': ('arlinux/build/windows-debug.sh', 'arlinux/windows-debug.py',
                          'arlinux/components/windows-integration'),
-    'runtime-support': ('arlinux/components/steamworks', 'arlinux/components/windows-integration'),
-    'wine-product': ('arlinux/package-wine-bionic.py',),
+    'runtime-support': ('arlinux/components/steamworks', 'arlinux/components/windows-integration',
+                        'arlinux/build/runtime_assembly.py'),
+    'wine-product': ('arlinux/package-wine-bionic.py', 'arlinux/build/runtime_assembly.py'),
     'windows-fonts': (),
 }
 RESOURCES = {name: ('mingw',) for name in SOURCES}
