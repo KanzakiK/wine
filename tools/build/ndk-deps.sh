@@ -163,6 +163,8 @@ fi
 # Build it after libxml2 rather than enabling a missing dependency in the
 # bootstrap Wayland pass. The source version is shared with ndk-wayland.sh.
 if [[ ! -f "$PREFIX/lib/pkgconfig/xkbregistry.pc" ]]; then
+    fetch https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-1.7.0.tar.gz xkbcommon-1.7.0.tar.gz
+    extract xkbcommon-1.7.0.tar.gz libxkbcommon-xkbcommon-1.7.0
     pushd libxkbcommon-xkbcommon-1.7.0 >/dev/null
     meson setup build-registry --cross-file "$PREFIX/android-cross-export.ini" \
         --native-file "$PREFIX/native.ini" --prefix="$PREFIX" --libdir=lib \
