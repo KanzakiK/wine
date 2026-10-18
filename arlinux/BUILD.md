@@ -74,13 +74,16 @@ change the shared compiler engine. Initial migration still changes shared inputs
 These recipe changes require hosted builds and fresh-instance acceptance; they
 are not yet measured speedup or compatibility results.
 
-The remaining critical path is ARM64 PE -> PE merge/package -> native Wine ->
-Steamworks -> support/product assembly. Native compilation can eventually start
-from ARM64 host tools before other PE architectures finish, but this requires a
-separate native compile artifact and a later runtime assembly stage in this same
-graph. Do not remove the dependency while the native recipe also packages PE.
-ARM64/ARM64EC cross-linked modules must stay together. FEX, DXVK, TLS, Pulse and
-Windows integration helpers already run independently where dependencies allow.
+Native compilation is now the `wine-bionic-compile` component. It depends on
+ARM64 PE host tools, native dependencies, TLS, Pulse and graphics, without waiting
+for x64/i386 PE, FEX/DXVK packaging, fonts or the Vulkan adapter. `wine-bionic`
+consumes the compiled payload and completed PE/runtime inputs to assemble the
+runtime. Steamworks depends on the compiled ABI and merged PE import libraries,
+so it can build alongside runtime assembly. ARM64/ARM64EC cross-linked modules
+remain in the same PE job. The compiled payload carries headers and actual
+binaries, not compiler objects or references to a private native build tree.
+All tasks remain independent dispatches in their owning repositories and are
+scheduled by the same product graph. Hosted validation of this split is pending.
 
 From a clean clone of the intended pushed commit, with Python, zstandard and gh:
 

@@ -20,8 +20,9 @@ SOURCES = {
     'wine-graphics': ('arlinux/build/wine-bionic-graphics.sh', 'arlinux/components/mesa',
                       'arlinux/components/libxshmfence', 'arlinux/components/libhybris'),
     'wine-vulkan': ('arlinux/components/libhybris', 'arlinux/components/android-headers', 'arlinux/patches'),
-    'wine-bionic': ('@wine', *PE, 'arlinux/build/wine-bionic.sh', 'arlinux/package-wine-bionic.py',
-                    'arlinux/wine_pe_debug.py', 'arlinux/wine_fonts.py', 'arlinux/components/FEX'),
+    'wine-bionic-compile': ('@wine', *PE, 'arlinux/build/wine-bionic.sh', 'arlinux/components/FEX'),
+    'wine-bionic': ('arlinux/package-wine-bionic.py', 'arlinux/wine_pe_debug.py',
+                    'arlinux/wine_fonts.py', 'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB'),
     'steamworks': ('arlinux/components/steamworks',),
     'windows-accessibility': ('arlinux/components/windows-integration',),
     'windows-tray': ('arlinux/components/windows-integration',),
@@ -35,7 +36,7 @@ SOURCES = {
 RESOURCES = {name: ('mingw',) for name in SOURCES}
 for name in ('bionic-deps', 'bionic-x11', 'wine-pulse', 'wine-tls', 'wine-graphics', 'wine-vulkan'):
     RESOURCES[name] = ('ndk',)
-RESOURCES.update({'wine-pe-package': ('addons',), 'wine-bionic': ('mingw', 'ndk'),
+RESOURCES.update({'wine-pe-package': ('addons',), 'wine-bionic-compile': ('mingw', 'ndk'), 'wine-bionic': ('ndk',),
                   'runtime-support': (), 'wine-product': (), 'windows-fonts': ()})
 SHARED = ('arlinux/build/component_inputs.py', 'arlinux/build/github-component.py',
           'arlinux/build/wine-pipeline.py', 'arlinux/build/pipeline_cache.py',

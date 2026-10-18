@@ -64,7 +64,7 @@ def prepare(data, framework):
         framework = root / 'framework'
         # Only remove optional software on the ephemeral GitHub runner.
         # Never run this cleanup in a workstation or self-hosted environment.
-        if data['stage'] in ('wine-bionic', 'wine-graphics', 'fex'):
+        if data['stage'] in ('wine-bionic-compile', 'wine-graphics', 'fex'):
             run('sudo', 'rm', '-rf', '/usr/share/dotnet', '/usr/local/lib/android',
                 '/opt/ghc', '/usr/local/share/boost', '/opt/hostedtoolcache/CodeQL')
         packages = ['autoconf', 'automake', 'libtool', 'build-essential', 'bison', 'flex',
@@ -81,7 +81,7 @@ def prepare(data, framework):
             'libxcb-xfixes0-dev', 'libxcb-randr0-dev', 'libxdamage-dev', 'libxext-dev',
             'libelf-dev', 'libudev-dev', 'libgbm-dev', 'gperf', 'libglib2.0-dev', 'libglib2.0-dev-bin',
             'ccache', 'gettext', 'libgettextpo-dev', 'libssl-dev', 'unzip', 'autopoint', 'intltool', 'python-is-python3']
-        if data['stage'] in ('wine-diagnostics', 'windows-accessibility', 'windows-tray', 'runtime-support', 'wine-product',
+        if data['stage'] in ('wine-diagnostics', 'windows-accessibility', 'windows-tray', 'runtime-support', 'wine-product', 'wine-bionic',
                              'wine-pe', 'wine-pe-package', 'wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386'):
             packages = ['build-essential', 'bison', 'flex', 'ccache', 'gettext', 'libfreetype-dev',
                         'cmake', 'ninja-build', 'pkg-config', 'git', 'curl', 'unzip',
@@ -114,7 +114,7 @@ def prepare(data, framework):
         paths = [str(root/'cache/ccache')]
         # Complete compiler trees travel in verified capsules; Actions caches
         # hold bounded compiler results and small component outputs.
-        if not data['stage'].startswith('wine-pe') and data['stage'] not in ('wine-bionic','wine-product'):
+        if not data['stage'].startswith('wine-pe') and data['stage'] not in ('wine-bionic-compile','wine-bionic','wine-product'):
             paths.append(str(framework/'build/pipeline'/data['stage']))
         if data['stage'].startswith('wine-pe-'):
             paths.append(str(framework/'build/wine-pe/*/tools'))

@@ -26,9 +26,11 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
         'wine-tls': ('arlinux/components/bionic-deps/build-tls.sh',),
         'wine-graphics': ('arlinux/build/wine-bionic-graphics.sh', 'arlinux/components/mesa', 'arlinux/components/libxshmfence', 'arlinux/components/libhybris/arlinux/graphics-protocols'),
         'wine-vulkan': ('arlinux/components/libhybris/arlinux/build-bionic-vulkan.py', 'arlinux/components/libhybris', 'arlinux/components/android-headers', 'arlinux/patches'),
-        'wine-bionic': ('arlinux/build/wine-bionic.sh', 'arlinux/package-wine-bionic.py', 'arlinux/build/refresh-wine-vkd3d.py',
-                        'arlinux/build/prepare-wine-dcomp.sh',
-                        'dlls/winebus.sys', 'arlinux/patches', 'arlinux/wine_pe_debug.py', 'arlinux/wine_fonts.py'),
+        'wine-bionic-compile': ('arlinux/build/wine-bionic.sh', 'arlinux/build/refresh-wine-vkd3d.py',
+                        'arlinux/build/prepare-wine-dcomp.sh', 'arlinux/components/FEX',
+                        'arlinux/components/windows-integration/tray/protocol.h', 'arlinux/patches'),
+        'wine-bionic': ('arlinux/package-wine-bionic.py', 'arlinux/wine_pe_debug.py',
+                        'arlinux/wine_fonts.py', 'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB'),
     }
     def stage(name, command, dependencies=()):
         if not cache.selected(name):
@@ -42,7 +44,7 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
             sys.path.insert(0, str(framework / 'arlinux'))
             from wine_fonts import FILES, source_directory
             inputs['windowsFonts'] = {n: inventory(source_directory()/n) for n in FILES}
-        if name in ('wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386', 'wine-bionic'):
+        if name in ('wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386', 'wine-bionic-compile'):
             inputs['wineSources'] = common['wineSources']
         if name == 'wine-pulse':
             inputs['pulseRecipe'] = common['pulseRecipe']
@@ -76,7 +78,8 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
             relative = Path('files/lib/wine') / (arch + '-windows')
             shutil.copytree(pe_parts[arch] / relative, out / relative, symlinks=True)
     wine = stage('wine-pe', merge_pe, tuple('wine-pe-'+a for a in pe_parts))
-    tools = Path(json.loads((wine / 'build-state.json').read_text())['tools']) if wine else None
+    arm = pe_parts['aarch64']
+    tools = Path(json.loads((arm / 'build-state.json').read_text())['tools']) if arm else None
     fex = stage('fex', lambda out: invoke('bash', 'arlinux/build/fex-windows.sh', paths['mingw'], out))
     dxvk = stage('dxvk', lambda out: invoke('bash', 'arlinux/build/dxvk-windows.sh', paths['mingw'], out))
 
@@ -94,28 +97,32 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
                     '--framework', framework, '--source', framework / 'arlinux/components/libhybris', '--headers', framework / 'arlinux/components/android-headers',
                     '--ndk', paths['ndk'], '--native-prefix', paths['bionicPrefix'],
                     '--graphics-prefix', graphics / 'prefix', '--output', out), ('wine-graphics',))
-    if cache.selected('wine-bionic'):
+    if cache.selected('wine-bionic-compile'):
         env.update(BIONIC_TLS_PREFIX=str(tls / 'prefix'), BIONIC_PULSE_PREFIX=str(pulse / 'work/prefix'),
-                   BIONIC_GRAPHICS_PREFIX=str(graphics / 'prefix'), BIONIC_DXVK_RUNTIME=str(dxvk),
-                   BIONIC_SYSTEM_VULKAN_ADAPTER=str(adapter / 'libvulkan_android_desktop.so'),
-                   BIONIC_VULKAN_DRIVER='system', BIONIC_OPENGL='zink')
+                   BIONIC_GRAPHICS_PREFIX=str(graphics / 'prefix'), BIONIC_OPENGL='zink')
+    compiled = stage('wine-bionic-compile', lambda out: invoke(
+        'bash', 'arlinux/build/wine-bionic.sh', paths['wineSource'], tools,
+        paths['mingw'], paths['ndk'], paths['bionicPrefix'], framework / 'arlinux/components/FEX', out),
+        ('wine-pe-aarch64', 'bionic-deps', 'wine-tls', 'wine-pulse', 'wine-graphics'))
+
     def native(out):
         out.mkdir()
-        # Only the final wine-product creates a distributable runtime archive.
-        # Shipping both this directory and a compressed copy through every
-        # downstream capsule wastes compression time, bandwidth and disk space.
-        invoke('bash', 'arlinux/build/wine-bionic.sh', paths['wineSource'], tools,
-               paths['mingw'], paths['ndk'], paths['bionicPrefix'],
-               framework / 'arlinux/components/FEX', pe, out / 'runtime')
+        invoke('python3', 'arlinux/package-wine-bionic.py', '--core', compiled / 'core',
+               '--fex', compiled / 'fex', '--native-prefix', paths['bionicPrefix'],
+               '--dependency-prefix', tls / 'prefix', '--dependency-prefix', pulse / 'work/prefix',
+               '--graphics-prefix', graphics / 'prefix',
+               '--ndk', paths['ndk'] / 'toolchains/llvm/prebuilt/linux-x86_64',
+               '--pe-runtime', pe, '--output', out / 'runtime',
+               '--wine-source-archive', compiled / 'wine-source.tar.gz',
+               '--vulkan-driver', 'system', '--dxvk-runtime', dxvk,
+               '--system-vulkan-adapter', adapter / 'libvulkan_android_desktop.so')
         for source in pe.parent.glob('pe-*-source.tar.gz'):
             shutil.copyfile(source, out / source.name)
-    native = stage('wine-bionic', native, ('wine-pe', 'wine-pe-package', 'wine-tls', 'wine-pulse', 'wine-graphics', 'wine-vulkan'))
-    if native is None:
-        return None
-    native_state = json.loads((native / 'runtime/build-state.json').read_text())
-    paths.update(wineSource=Path(native_state['source']), wineBuild=Path(native_state['core']),
-                 wineTools=tools, wineImportLibs=wine / 'files/lib/wine')
-    env['WINE_IMPORT_LIBS'] = str(paths['wineImportLibs'])
+    native = stage('wine-bionic', native, ('wine-bionic-compile', 'wine-pe-package', 'wine-vulkan'))
+    if compiled is not None and wine is not None:
+        paths.update(wineSource=compiled / 'source', wineBuild=compiled / 'core',
+                     wineTools=tools, wineImportLibs=wine / 'files/lib/wine')
+        env['WINE_IMPORT_LIBS'] = str(paths['wineImportLibs'])
     return native
 
 
@@ -186,7 +193,7 @@ def main():
         bridge = observer = tray = None
         if cache.selected('steamworks'):
             bridge = cache.stage('steamworks', helper_inputs('arlinux/components/steamworks', 'arlinux/components/steamworks/build.sh',
-                wine=cache.records['wine-bionic'], imports=cache.records['wine-pe']), lambda out: invoke('bash', 'arlinux/components/steamworks/build.sh',
+                wine=cache.records['wine-bionic-compile'], imports=cache.records['wine-pe']), lambda out: invoke('bash', 'arlinux/components/steamworks/build.sh',
                     paths['wineSource'], paths['wineBuild'], paths['wineTools'], paths['mingw'], out))
         if cache.selected('windows-accessibility'):
             observer = cache.stage('windows-accessibility', helper_inputs('arlinux/components/windows-integration/accessibility',

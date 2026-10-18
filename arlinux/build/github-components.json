@@ -88,20 +88,20 @@
       "repository": "taowen/wine",
       "runner": "ubuntu-24.04",
       "dependencies": [
+        "wine-bionic-compile",
         "wine-pe-package",
-        "wine-tls",
-        "wine-pulse",
         "wine-vulkan",
         "windows-fonts"
       ],
       "product": "wine",
-      "compilerCacheMiB": 1024
+      "compilerCacheMiB": 256
     },
     "steamworks": {
       "repository": "taowen/arlinux-steamworks",
       "runner": "ubuntu-24.04",
       "dependencies": [
-        "wine-bionic"
+        "wine-bionic-compile",
+        "wine-pe"
       ],
       "product": "wine",
       "compilerCacheMiB": 256
@@ -175,6 +175,19 @@
       "dependencies": [],
       "product": "diagnostics",
       "compilerCacheMiB": 256
+    },
+    "wine-bionic-compile": {
+      "repository": "taowen/wine",
+      "runner": "ubuntu-24.04",
+      "dependencies": [
+        "wine-pe-aarch64",
+        "bionic-deps",
+        "wine-tls",
+        "wine-pulse",
+        "wine-graphics"
+      ],
+      "product": "wine",
+      "compilerCacheMiB": 1024
     }
   }
 }

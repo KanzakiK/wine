@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Experimental native Wine backend; reuse version-matched Windows PE modules.
+# Compile the native Wine backend and export its packaging/Steamworks ABI inputs.
 set -euo pipefail
-if [[ $# != 8 ]]; then
-    echo 'Usage: wine-bionic.sh WINE_SOURCE WINE_TOOLS LLVM_MINGW_BIN NDK_ROOT NATIVE_PREFIX FEX_SOURCE PE_RUNTIME OUTPUT' >&2
+if [[ $# != 7 ]]; then
+    echo 'Usage: wine-bionic.sh WINE_SOURCE WINE_TOOLS LLVM_MINGW_BIN NDK_ROOT NATIVE_PREFIX FEX_SOURCE OUTPUT' >&2
     exit 2
 fi
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -14,25 +14,13 @@ prefix="$(realpath "$5")"
 tls="$(realpath "${BIONIC_TLS_PREFIX:-$prefix}")"
 pulse="$(realpath "${BIONIC_PULSE_PREFIX:-$prefix}")"
 graphics="$(realpath "${BIONIC_GRAPHICS_PREFIX:-$prefix}")"
-vulkan_driver="${BIONIC_VULKAN_DRIVER:-system}"
 case "${BIONIC_OPENGL:-zink}" in
     zink) opengl_arg=--with-opengl ;;
     none) opengl_arg=--without-opengl ;;
     *) echo 'Unknown BIONIC_OPENGL.' >&2; exit 2 ;;
 esac
-vulkan_args=(--vulkan-driver "$vulkan_driver")
-if [[ -n "${BIONIC_ARCHIVE:-}" ]]; then
-    vulkan_args+=(--archive "$(realpath -m "$BIONIC_ARCHIVE")")
-fi
-if [[ -n "${BIONIC_DXVK_RUNTIME:-}" ]]; then
-    vulkan_args+=(--dxvk-runtime "$BIONIC_DXVK_RUNTIME")
-fi
-if [[ "$vulkan_driver" == system ]]; then
-    vulkan_args+=(--system-vulkan-adapter "$BIONIC_SYSTEM_VULKAN_ADAPTER")
-fi
 fex_source="$(realpath "$6")"
-pe_runtime="$(realpath "$7")"
-output="$(realpath -m "$8")"
+output="$(realpath -m "$7")"
 [[ ! -e "$output" ]] || { echo 'Output already exists.' >&2; exit 2; }
 mkdir -p "$repo/build/wine-bionic"
 stage="$(mktemp -d "$repo/build/wine-bionic/build.XXXXXXXX")"
@@ -120,24 +108,25 @@ ccache "$ndk/bin/aarch64-linux-android29-clang++" -std=c++17 -fPIC -O2 \
 "$ndk/bin/aarch64-linux-android29-clang++" -shared -static-libstdc++ -Wl,-z,defs \
     -Wl,-z,max-page-size=16384 "$stage/fex/FEXUnixLib.o" -o "$stage/fex/libarm64ecfex.so"
 cp "$stage/fex/libarm64ecfex.so" "$stage/fex/libwow64fex.so"
-tar -czf "$stage/wine-source.tar.gz" -C "$stage" source
-python3 "$repo/arlinux/package-wine-bionic.py" --core "$stage/core" --fex "$stage/fex" \
-    --native-prefix "$prefix" --dependency-prefix "$tls" --dependency-prefix "$pulse" \
-    --graphics-prefix "$graphics" --ndk "$ndk" --pe-runtime "$pe_runtime" --output "$output" \
-    --wine-source-archive "$stage/wine-source.tar.gz" \
-    "${vulkan_args[@]}"
-# Export the actual Steamworks ABI inputs, not the compiler's object tree.
-# Private paths never enter the redistributable runtime archive.
-python3 - "$stage" "$output" <<'BUILD_STATE'
-import json, shutil, sys
+# Export only compiler outputs consumed by packaging and Steamworks. Keep the
+# private object tree in this runner; it is never a downstream artifact.
+python3 - "$stage" "$output" <<'COMPILE_OUTPUT'
+import shutil, sys
 from pathlib import Path
 stage, output = map(Path, sys.argv[1:])
-abi = stage/'abi'
-shutil.copytree(stage/'source/include', abi/'source/include')
-shutil.copytree(stage/'core/include', abi/'core/include')
-library = abi/'core/dlls/ntdll/ntdll.so'
-library.parent.mkdir(parents=True)
-shutil.copy2(stage/'core/dlls/ntdll/ntdll.so', library)
-(output/'build-state.json').write_text(json.dumps({'source': str(abi/'source'), 'core': str(abi/'core')}) + '\n')
-BUILD_STATE
-echo "Built experimental Bionic runtime: $output"
+output.mkdir()
+shutil.copytree(stage/'source/include', output/'source/include')
+shutil.copytree(stage/'core/include', output/'core/include')
+files = [stage/'core/loader/wine', stage/'core/server/wineserver']
+files.extend((stage/'core/dlls').glob('*/*.so'))
+for arch in ('aarch64', 'i386', 'x86_64'):
+    files.extend((stage/'core/dlls/winebus.sys'/f'{arch}-windows/winebus.sys',
+                  stage/'core/programs/explorer'/f'{arch}-windows/explorer.exe'))
+for source in files:
+    target = output/'core'/source.relative_to(stage/'core')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+shutil.copytree(stage/'fex', output/'fex', ignore=shutil.ignore_patterns('*.cpp', '*.h', '*.o'))
+COMPILE_OUTPUT
+tar -czf "$output/wine-source.tar.gz" -C "$stage" source
+echo "Compiled Bionic Wine: $output"
