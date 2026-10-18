@@ -87,6 +87,13 @@ binaries, not compiler objects or references to a private native build tree.
 All tasks remain independent dispatches in their owning repositories and are
 scheduled by the same product graph. Hosted validation of this split is pending.
 
+The first incremental PE measurement is complete: the i386 build step changed
+from 535 seconds ([cache population](https://github.com/taowen/wine/actions/runs/39174752412))
+to 55 seconds ([incremental build](https://github.com/taowen/wine/actions/runs/39177295805)).
+The restored ccache counters increased from 598 to 5,529 hits while misses stayed
+at 4,495: this invocation added 4,931 hits and zero cacheable compilation misses.
+These are build-step measurements, not end-to-end runtime or device acceptance.
+
 From a clean clone of the intended pushed commit, with Python, zstandard and gh:
 
 ```sh
