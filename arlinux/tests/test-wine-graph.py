@@ -23,7 +23,7 @@ class WineGraphTest(unittest.TestCase):
                 "def source_directory(): return Path(__file__).resolve().parents[1]\n")
             env, calls = {}, []
             paths = {name: root / name for name in ('wineSource', 'mingw', 'ndk', 'bionicPrefix', 'addons')}
-            paths['bionicPrefix'] = cache.stage('bionic-x11', {'fixture':'matching headers'}, lambda output: output.mkdir(parents=True))
+            paths['bionicPrefix'] = cache.stage('bionic-deps', {'fixture':'matching headers'}, lambda output: output.mkdir(parents=True))
             common = dict(sources={}, wineSources={'commit': 'pinned'}, pulseRecipe={})
             def invoke(*command):
                 calls.append(command)
