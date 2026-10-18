@@ -39,6 +39,27 @@ The saved cache decreased from 634,982,115 to 367,580,990 bytes; both attempts
 verified the same published component. Runner preparation still accounts for
 most of the warm job's duration.
 
+PE and assembly jobs skip deletion of unrelated preinstalled runner SDKs;
+runtime-support and final-product assembly use the smaller host package group.
+The [subsequent x64 PE check](https://github.com/taowen/wine/actions/runs/39148239130/attempts/2)
+passed in 107 and 55 seconds, with host preparation taking 18 and 17 seconds
+and the build step taking 11 seconds each time.
+
+Capsule imports stream Zstandard into tar extraction, retaining the declared
+checksum, path-safety, mode and link handling without a temporary full tar.
+Hosted tests exercise repeated extraction of read-only files and hardlinks,
+executable modes, internal symlinks, corruption and escaping paths.
+When Actions has restored stage receipts, older release seeds cannot overwrite
+those output generations. The pipeline still verifies current inputs and output
+hashes before reuse; a receipt alone does not authorize a cache hit.
+
+Runtime-support assembly still imports transitive compiler and toolchain inputs.
+The [current check](https://github.com/taowen/wine/actions/runs/39150836195)
+took 354 seconds overall, including a 265-second build step. Further reduction
+needs direct artifact contracts and component-specific engine identities before
+changing the shared pipeline engine; otherwise an assembly-only change can
+invalidate unrelated compiler caches. Keep assembly in the single product graph.
+
 From a clean clone of the intended pushed commit, with Python, zstandard and gh:
 
 ```sh
