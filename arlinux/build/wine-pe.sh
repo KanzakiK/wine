@@ -52,6 +52,9 @@ KEY
 )"
 stage="$repo/build/wine-pe/$identity"
 mkdir -p "$stage"
+export CCACHE_BASEDIR="$stage"
+export CFLAGS="-g -O2 -ffile-prefix-map=$stage=/usr/src/arlinux/wine-pe/$architecture -fdebug-prefix-map=$stage=/usr/src/arlinux/wine-pe/$architecture"
+export CROSSCFLAGS="$CFLAGS"
 exec 9>"$stage/build.lock"
 flock -n 9 || { echo "Build already running: $stage" >&2; exit 2; }
 echo "Build directory: $stage"
@@ -88,7 +91,7 @@ export PKG_CONFIG_LIBDIR="/usr/lib/$native_triplet/pkgconfig:/usr/share/pkgconfi
 pkg-config --exists freetype2 || {
     echo 'Install native FreeType development headers for Wine font generation.' >&2; exit 2;
 }
-(cd "$stage/tools" && if [[ ! -f Makefile ]]; then "$stage/source/configure" --enable-win64 --disable-tests \
+(cd "$stage/tools" && if [[ ! -f Makefile ]]; then CC='ccache gcc' CXX='ccache g++' "$stage/source/configure" --enable-win64 --disable-tests \
     --without-mingw --without-x --without-wayland \
     ; fi
     make -j"${JOBS:-8}" tools/all tools/sfnt2fon/all \
@@ -102,6 +105,7 @@ make -C "$stage/core" -j"${JOBS:-8}" > "$stage/build.log" 2>&1
 make -C "$stage/core" install DESTDIR="$stage/install" > "$stage/install.log" 2>&1
 # PE-only configure omits native loader data and font installation rules.
 # Generate these with matching native tools, preserving the same source version.
+if [[ "$architecture" == all || "$architecture" == aarch64 ]]; then
 make -C "$stage/tools" -j"${JOBS:-8}" loader/wine.inf fonts/all > "$stage/data.log" 2>&1
 mkdir -p "$stage/install/usr/local/share/wine/fonts"
 install -m644 "$stage/tools/loader/wine.inf" "$stage/install/usr/local/share/wine/wine.inf"
@@ -109,11 +113,13 @@ find "$stage/tools/fonts" -maxdepth 1 -type f \( -name '*.fon' -o -name '*.ttf' 
     -exec install -m644 -t "$stage/install/usr/local/share/wine/fonts" {} +
 find "$stage/source/fonts" -maxdepth 1 -type f -name '*.ttf' \
     -exec install -m644 -t "$stage/install/usr/local/share/wine/fonts" {} +
+fi
 if [[ -d "$stage/install/usr/local/lib/wine/aarch64-unix" ]]; then
     rm -r -- "$stage/install/usr/local/lib/wine/aarch64-unix"
 fi
 mkdir -p "$stage/output/files"
 # Copy rather than move: an interrupted packaging step can be retried safely.
+if [[ "$architecture" == all || "$architecture" == aarch64 ]]; then
 cp -a "$stage/install/usr/local/." "$stage/output/files/"
 git -C "$source_dir" rev-parse HEAD > "$stage/output/wine-commit"
 cp "$stage/source/VERSION" "$stage/output/wine-version"
@@ -128,6 +134,12 @@ from pathlib import Path
 stage = Path(sys.argv[1])
 (stage/'output/build-state.json').write_text(json.dumps({'tools': str(stage/'tools')}) + '\n')
 BUILD_STATE
+else
+    # The merge consumes only these modules. Common data, source archives and
+    # host-tool references come from the ARM64 part, never these two jobs.
+    mkdir -p "$stage/output/files/lib/wine"
+    cp -a "$stage/install/usr/local/lib/wine/$architecture-windows" "$stage/output/files/lib/wine/"
+fi
 mkdir -p "$(dirname "$destination")"
 mv -T --no-clobber "$stage/output" "$destination"
 [[ ! -d "$stage/output" ]] || { echo 'Destination appeared during build; preserving outputs.' >&2; exit 2; }
