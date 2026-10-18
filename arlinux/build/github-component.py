@@ -175,7 +175,8 @@ def toolchains(root, framework):
         target = launcher/compiler.name
         if target.exists() or target.is_symlink():
             continue
-        if (compiler.name in ('clang','clang++') or compiler.name.endswith(('-clang','-clang++'))) and compiler.is_file():
+        if (compiler.name in ('clang','clang++','cc','c++','gcc','g++') or
+                compiler.name.endswith(('-clang','-clang++','-gcc','-g++','-cc','-c++'))) and compiler.is_file():
             target.write_text('#!/bin/sh\nexec ccache "'+str(compiler)+'" "$@"\n')
             target.chmod(0o755)
         else:
