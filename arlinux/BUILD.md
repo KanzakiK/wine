@@ -27,6 +27,10 @@ identical requests share one hosted workflow rather than queueing duplicate jobs
 Locks are released by the operating system on process exit. Full commit pins
 skip redundant commit-resolution API calls; source and artifact hashes still
 determine reuse.
+After successful publication, workflows remove obsolete pipeline input identities
+and generations before saving Actions caches. Current generations and directories
+referenced by current receipts remain at their original paths. This bounds cache
+growth without relocating compiler tools or discarding live ABI headers.
 
 From a clean clone of the intended pushed commit, with Python, zstandard and gh:
 
