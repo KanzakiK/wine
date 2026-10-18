@@ -318,9 +318,10 @@ def publish(data, framework):
             paths = [final]
     # A forced hosted rerun must verify the rebuilt/cached bytes, but need not
     # recompress or upload the same immutable capsule a second time.
-    from pipeline_cache import inventory
     contents = ({'outputs': state['outputs'], 'references': state['references']}
-                if stage not in ('windows-fonts',) else {str(p.relative_to(root)): inventory(p) for p in paths})
+                if stage != 'windows-fonts' else {str(p.relative_to(root)): {
+                    file.relative_to(p).as_posix(): sha(file) for file in sorted(p.rglob('*')) if file.is_file()}
+                    for p in paths})
     record['outputIdentity'] = hashlib.sha256(json.dumps(contents, sort_keys=True).encode()).hexdigest()
     tag = 'arlinux-'+stage+'-'+data['identity'][:24]
     repository = os.environ['GITHUB_REPOSITORY']
