@@ -1,0 +1,30 @@
+[submodule "arlinux/components/libX11"]
+	path = arlinux/components/libX11
+	url = https://github.com/taowen/libX11.git
+[submodule "arlinux/components/libxshmfence"]
+	path = arlinux/components/libxshmfence
+	url = https://github.com/taowen/libxshmfence.git
+[submodule "arlinux/components/mesa"]
+	path = arlinux/components/mesa
+	url = https://github.com/taowen/mesa.git
+[submodule "arlinux/components/android-headers"]
+	path = arlinux/components/android-headers
+	url = https://github.com/Halium/android-headers.git
+[submodule "arlinux/components/FEX"]
+	path = arlinux/components/FEX
+	url = https://github.com/taowen/FEX.git
+[submodule "arlinux/components/steamworks"]
+	path = arlinux/components/steamworks
+	url = https://github.com/taowen/arlinux-steamworks.git
+[submodule "arlinux/components/windows-integration"]
+	path = arlinux/components/windows-integration
+	url = https://github.com/taowen/arlinux-windows-integration.git
+[submodule "arlinux/components/bionic-deps"]
+	path = arlinux/components/bionic-deps
+	url = https://github.com/taowen/arlinux-bionic-deps.git
+[submodule "arlinux/components/pulseaudio-android"]
+	path = arlinux/components/pulseaudio-android
+	url = https://github.com/taowen/pulseaudio-android.git
+[submodule "arlinux/components/libhybris"]
+	path = arlinux/components/libhybris
+	url = https://github.com/taowen/libhybris.git
