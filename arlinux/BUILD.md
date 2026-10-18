@@ -87,12 +87,26 @@ binaries, not compiler objects or references to a private native build tree.
 All tasks remain independent dispatches in their owning repositories and are
 scheduled by the same product graph. Hosted validation of this split is pending.
 
-The first incremental PE measurement is complete: the i386 build step changed
-from 535 seconds ([cache population](https://github.com/taowen/wine/actions/runs/39174752412))
-to 55 seconds ([incremental build](https://github.com/taowen/wine/actions/runs/39177295805)).
-The restored ccache counters increased from 598 to 5,529 hits while misses stayed
-at 4,495: this invocation added 4,931 hits and zero cacheable compilation misses.
-These are build-step measurements, not end-to-end runtime or device acceptance.
+Steamworks native C++ files now invoke ccache directly. Its server and launch
+helper compile to cached objects before linking, and intermediate objects are
+removed from the exported capsule. The recipe remains in the pinned Steamworks
+repository; hosted validation of its new compiler-cache coverage is pending.
+
+All three incremental PE builds passed with actual compiler invocations:
+
+| Architecture | Cache population build step | Incremental build step | Added ccache hits | Added misses |
+|---|---:|---:|---:|---:|
+| [ARM64](https://github.com/taowen/wine/actions/runs/39177298054) | 1,285s | 96s | 9,532 | 0 |
+| [x64](https://github.com/taowen/wine/actions/runs/39177384110) | 676s | 66s | 4,714 | 0 |
+| [x86](https://github.com/taowen/wine/actions/runs/39177295805) | 535s | 55s | 4,931 | 0 |
+
+Population runs were [ARM64](https://github.com/taowen/wine/actions/runs/39174752101),
+[x64](https://github.com/taowen/wine/actions/runs/39174846810) and
+[x86](https://github.com/taowen/wine/actions/runs/39174752412).
+Counters are cumulative in the restored cache; the table uses differences
+between the two jobs rather than presenting the cumulative hit percentage as
+this invocation's hit rate. These are build-step measurements, not end-to-end
+runtime or device acceptance. Changed Wine files still require compilation.
 
 From a clean clone of the intended pushed commit, with Python, zstandard and gh:
 
