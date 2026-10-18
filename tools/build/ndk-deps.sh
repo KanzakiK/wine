@@ -156,6 +156,9 @@ if [[ ! -f "$PREFIX/lib/pkgconfig/libxml-2.0.pc" ]]; then
     meson_cross -Dpython=false -Diconv=disabled -Dhttp=false
     meson compile -C build xml2 -j"$JOBS"
     meson install -C build
+    # libxml2 2.13.5's Meson metadata omits its installed header subdirectory.
+    # Consumers such as xkbregistry include <libxml/parser.h>.
+    sed -i 's|^Cflags: -I${includedir}$|Cflags: -I${includedir}/libxml2|' "$PREFIX/lib/pkgconfig/libxml-2.0.pc"
     popd >/dev/null
 fi
 
