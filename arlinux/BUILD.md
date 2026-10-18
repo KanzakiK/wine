@@ -31,6 +31,13 @@ After successful publication, workflows remove obsolete pipeline input identitie
 and generations before saving Actions caches. Current generations and directories
 referenced by current receipts remain at their original paths. This bounds cache
 growth without relocating compiler tools or discarding live ABI headers.
+The cache namespace is `arlinux-v2-`, with old verified entries retained as restore
+seeds. This lets compacted entries be saved despite Actions cache immutability.
+[The x64 PE verification](https://github.com/taowen/wine/actions/runs/39147024702)
+passed twice: 163 and 125 seconds overall, with build steps of 11 and 7 seconds.
+The saved cache decreased from 634,982,115 to 367,580,990 bytes; both attempts
+verified the same published component. Runner preparation still accounts for
+most of the warm job's duration.
 
 From a clean clone of the intended pushed commit, with Python, zstandard and gh:
 
