@@ -483,6 +483,16 @@ This is the recommended branch. What it changes, by subsystem:
   their own frame and are unchanged. Setting `DecorateToolWindows` to `N` under
   `HKCU\Software\Wine\X11 Driver`, or per application under
   `HKCU\Software\Wine\AppDefaults\<app.exe>\X11 Driver`, restores the previous behaviour.
+- **win32u**: a captioned window whose client area reaches into the caption or the borders
+  — an application that draws its own title bar from `WM_NCCALCSIZE` — is shown with its
+  full window rectangle and without a window manager frame (upstream `6cfa941df3f`,
+  Wine 11.20, cherry-picked with its origin; Wine bugs 59877 and 42877). Before, the frame
+  was derived from the standard caption and covered the top of the application's own title
+  bar: a test window that keeps its borders and drops only the caption got decorations
+  `0x7a` and an X window starting 23 px below its client origin; it now gets decorations
+  `0x0` and the whole window. The main windows of FL Studio 2026 (no
+  `WS_CAPTION`), Ableton Live 12 and Cubase 15 (client area inside the frame) keep their
+  frame and geometry unchanged.
 - **win32u / winex11**: a top-level window the window manager raised on its own (a click
   under X11) is brought to the top of the win32 Z-order as well, as Windows does on
   activation, and the win32 order that results is applied back to the X stacking. An
