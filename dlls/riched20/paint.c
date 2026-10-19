@@ -41,6 +41,18 @@ void editor_draw( ME_TextEditor *editor, HDC hDC, const RECT *update )
   HBRUSH brush = CreateSolidBrush( ITextHost_TxGetSysColor( editor->texthost, COLOR_WINDOW ) );
 
   ME_InitContext( &c, editor, hDC );
+  if (TRACE_ON(richedit))
+  {
+    RECT clip;
+    POINT viewport, origin;
+    INT clip_type = GetClipBox( hDC, &clip );
+    GetViewportOrgEx( hDC, &viewport );
+    GetWindowOrgEx( hDC, &origin );
+    TRACE( "editor %p dc %p view %s update %s clip %d %s viewport %ld,%ld origin %ld,%ld scroll %d,%d\n",
+           editor, hDC, wine_dbgstr_rect( &c.rcView ), wine_dbgstr_rect( update ), clip_type,
+           wine_dbgstr_rect( &clip ), viewport.x, viewport.y, origin.x, origin.y,
+           editor->horz_si.nPos, editor->vert_si.nPos );
+  }
   if (!update)
   {
       client = c.rcView;
@@ -365,6 +377,20 @@ static void draw_text( ME_Context *c, ME_Run *run, int x, int y, BOOL selected, 
 
     old_text = SetTextColor( c->hDC, text_color );
     if (paint_bg) old_back = SetBkColor( c->hDC, back_color );
+
+    if (TRACE_ON(richedit))
+    {
+        RECT clip;
+        TEXTMETRICW metrics = {0};
+        LOGFONTW font = {0};
+        INT clip_type = GetClipBox( c->hDC, &clip );
+        GetTextMetricsW( c->hDC, &metrics );
+        GetObjectW( GetCurrentObject( c->hDC, OBJ_FONT ), sizeof(font), &font );
+        TRACE( "dc %p run length %d at %d,%d selected %d colors %08lx,%08lx selection %s clip %d %s font %s height %ld metrics %ld/%ld/%ld\n",
+               c->hDC, run->len, x, y, selected, text_color, back_color, wine_dbgstr_rect( sel_rect ),
+               clip_type, wine_dbgstr_rect( &clip ), debugstr_w( font.lfFaceName ), font.lfHeight,
+               metrics.tmHeight, metrics.tmAscent, metrics.tmDescent );
+    }
 
     if (run->para->nFlags & MEPF_COMPLEX)
         ScriptTextOut( c->hDC, &run->style->script_cache, x, y, paint_bg ? ETO_OPAQUE : 0, sel_rect,
