@@ -432,9 +432,18 @@ static int set_parent_window( struct window *win, struct window *parent )
             SHARED_WRITE_END;
         }
 
-        /* if parent belongs to a different thread and the window isn't */
-        /* top-level, attach the two threads */
-        if (parent->thread && parent->thread != win->thread && !is_desktop_window(parent))
+        /* if parent belongs to a different thread and the window is a child
+         * window, attach the two threads.  Windows does this for WS_CHILD
+         * windows only: a WS_POPUP window given a parent through SetParent()
+         * keeps its own thread input, and its activation deactivates the
+         * other thread's window through the foreground switch without
+         * waiting for that thread.  Attaching it instead made the other
+         * thread's active window the "previous" of set_active_window() and
+         * the deactivation a synchronous send -- FL Studio's ilbridge.exe
+         * reparents its plug-in window into FL's frame while FL's main thread
+         * waits for the bridge, and both sat there forever (WineHQ 44827). */
+        if (parent->thread && parent->thread != win->thread && !is_desktop_window(parent)
+            && (win->style & (WS_CHILD | WS_POPUP)) == WS_CHILD)
             attach_thread_input( win->thread, parent->thread );
 
         if (win->paint_flags & (PAINT_HAS_PIXEL_FORMAT | PAINT_PIXEL_FORMAT_CHILD))
