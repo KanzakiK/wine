@@ -673,7 +673,8 @@ This is the recommended branch. What it changes, by subsystem:
   radar map only appeared after a window move and zooming, resizing and the whole UI lagged
   by seconds (WineHQ bug 60354 reports the same for 32-bit games). With the mapping retained
   the chunk is mapped once: `mmap` 5760 → 206 and `ioctl` 17 861 → 2440 in a 3 s sample of
-  the CS thread, no further `/dev/nvidiactl` opens. The 32-bit reservation of the address
+  the CS thread, and none of the remaining `mmap()` calls maps 64 MiB any more (the driver still
+  opens `/dev/nvidiactl` for about 40 small mappings per second). The 32-bit reservation of the address
   range was already kept across unmaps, so this costs no additional address space; the
   retained mappings show up in the process RSS (13 chunks, ~830 MiB for vatSys). The
   `VkApplicationInfo` of the Vulkan instance that this path creates now carries the right
