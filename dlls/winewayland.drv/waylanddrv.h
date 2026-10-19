@@ -283,6 +283,7 @@ struct wayland_shm_buffer
 
 struct wayland_surface
 {
+    struct wl_list hwnd_dmabuf_surfaces;
     HWND hwnd;
 
     struct wl_surface *wl_surface;
@@ -340,6 +341,8 @@ void color_management_init(void);
 
 struct wayland_surface *wayland_surface_create(HWND hwnd);
 void wayland_surface_destroy(struct wayland_surface *surface);
+void wayland_hwnd_gdi_update(struct wayland_surface *surface);
+void wayland_hwnd_gdi_clear(struct wayland_surface *surface);
 void wayland_surface_make_toplevel(struct wayland_surface *surface);
 void wayland_surface_make_subsurface(struct wayland_surface *surface,
                                      struct wayland_surface *parent);

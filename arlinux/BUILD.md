@@ -26,6 +26,18 @@ validation. Evidence is retained in the Android checkout under
 `build/validation-20261019/steam-launch`, including `wasd-fixed-acceptance`,
 `wasd-gameplay-*.png` and `ime-fixed-notepad-msaa.txt`.
 
+The foreign GDI delivery candidate adapts Erhan Bilgili's
+[Wine-Wineland transport](https://github.com/nanomatters/wine-wineland/commit/908f7702fbf6e6edb761daa47476d283e52b60f1)
+into ordinary fork sources. Wayland opts into shared-memory producer surfaces
+when a window DC's top-level belongs to another process, including a locally
+owned child. Stable slots remain unavailable until the compositor releases them;
+failed or backpressured publication keeps dirty bounds for retry. The consumer
+preserves source cropping and producer ordering under the owner window. This
+imports the GDI path only; GPU swapchains retain their existing WSI path.
+Native and PE builds both regenerate the changed server protocol. This candidate
+is pending fresh-instance Power BI and application/game regression; it is not
+approval to publish latest.
+
 This fork owns Bionic Wine integration, its component dependency graph,
 hosted dispatch, assembly, source archives and the `latest` publisher.
 The Linux entry is `./arlinux/build.sh`. Android's `arlinux/build.ps1 wine`

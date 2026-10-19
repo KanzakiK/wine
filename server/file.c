@@ -169,7 +169,7 @@ struct file *create_file_for_fd_obj( struct fd *fd, unsigned int access, unsigne
     return file;
 }
 
-static struct object *create_file_obj( struct fd *fd, unsigned int access, mode_t mode )
+struct object *create_file_obj( struct fd *fd, unsigned int access, mode_t mode )
 {
     struct file *file = alloc_object( &file_ops );
 

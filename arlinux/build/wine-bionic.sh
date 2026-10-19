@@ -33,6 +33,7 @@ git -C "$source_dir" archive HEAD | tar -xf - -C "$stage/source"
 source_dir="$stage/source"
 python3 "$repo/arlinux/build/refresh-wine-vkd3d.py" "$source_dir"
 bash "$repo/arlinux/build/prepare-wine-dcomp.sh" "$source_dir"
+(cd "$source_dir" && perl tools/make_requests)
 if ! grep -q '/apex/com.android.conscrypt/cacerts' "$source_dir/dlls/crypt32/unixlib.c"; then
     patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-certificates.patch"
 fi

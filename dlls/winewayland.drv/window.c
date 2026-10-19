@@ -773,6 +773,17 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_WAYLAND_SET_FOREGROUND:
         NtUserSetForegroundWindowInternal(hwnd);
         return 0;
+    case WM_WINE_FIRST_DRIVER_MSG + 3:
+    {
+        struct wayland_win_data *data = wayland_win_data_get(hwnd);
+        if (data)
+        {
+            if (data->wayland_surface) wayland_hwnd_gdi_update(data->wayland_surface);
+            wayland_win_data_release(data);
+        }
+        wl_display_flush(process_wayland.wl_display);
+        return 0;
+    }
     default:
         FIXME("got window msg %x hwnd %p wp %lx lp %lx\n", msg, hwnd, (long)wp, lp);
         return 0;

@@ -32,6 +32,11 @@
 
 char *process_name = NULL;
 
+static BOOL WAYLAND_UseForeignGdiBridge(void)
+{
+    return process_wayland.wl_shm != NULL;
+}
+
 static const struct user_driver_funcs waylanddrv_funcs =
 {
     .pActivateWindow = WAYLAND_ActivateWindow,
@@ -57,6 +62,7 @@ static const struct user_driver_funcs waylanddrv_funcs =
     .pWindowPosChanging = WAYLAND_WindowPosChanging,
     .pCreateClientSurface = WAYLAND_CreateClientSurface,
     .pCreateWindowSurface = WAYLAND_CreateWindowSurface,
+    .pUseForeignGdiBridge = WAYLAND_UseForeignGdiBridge,
     .pVulkanInit = WAYLAND_VulkanInit,
     .pOpenGLInit = WAYLAND_OpenGLInit,
 };

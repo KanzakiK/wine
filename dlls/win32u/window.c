@@ -5534,6 +5534,7 @@ LRESULT destroy_window( HWND hwnd )
     detach_client_surfaces( hwnd );
     if (win->current_drawable) opengl_drawable_release( win->current_drawable );
     if (win->unused_drawable) opengl_drawable_release( win->unused_drawable );
+    forget_foreign_gdi_surface( hwnd );
     user_driver->pDestroyWindow( hwnd );
 
     free_window_handle( hwnd );

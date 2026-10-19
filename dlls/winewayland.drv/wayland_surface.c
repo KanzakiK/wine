@@ -285,6 +285,7 @@ struct wayland_surface *wayland_surface_create(HWND hwnd)
     TRACE("surface=%p\n", surface);
 
     surface->hwnd = hwnd;
+    wl_list_init(&surface->hwnd_dmabuf_surfaces);
     surface->wl_surface = wl_compositor_create_surface(process_wayland.wl_compositor);
     if (!surface->wl_surface)
     {
@@ -330,6 +331,7 @@ err:
  */
 void wayland_surface_destroy(struct wayland_surface *surface)
 {
+    wayland_hwnd_gdi_clear(surface);
     pthread_mutex_lock(&process_wayland.pointer.mutex);
     if (process_wayland.pointer.focused_hwnd == surface->hwnd)
     {
