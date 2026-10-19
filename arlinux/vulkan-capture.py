@@ -137,18 +137,26 @@ def main():
     if not captures or not metadata['layer_processes'] or stopped.returncode:
         raise RuntimeError('Capture was not verified; inspect the retained report')
     if args.convert:
-        converter = Path('/usr/lib/arlinux/gfxreconstruct/bin/gfxrecon-convert')
-        metadata['converter_sha256'] = digest(converter)
+        converter = Path('/usr/lib/arlinux/gfxreconstruct/gfxrecon-convert')
         metadata['conversions'] = {}
-        for capture in captures:
-            target = capture.with_suffix('.jsonl')
-            with target.open('w') as output, target.with_suffix('.convert.log').open('w') as errors:
-                result = subprocess.run([str(converter), str(capture)], stdout=output,
-                                        stderr=errors, timeout=120)
-            metadata['conversions'][capture.name] = result.returncode
-        metadata['files'] = {p.name:dict(sha256=digest(p),bytes=p.stat().st_size)
-                             for p in report.iterdir() if p.is_file() and p.name != 'metadata.json'}
-        (report/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
+        try:
+            metadata['converter_sha256'] = digest(converter)
+            conversion_env = os.environ.copy()
+            conversion_env['LD_LIBRARY_PATH'] = ':'.join(filter(None, (
+                str(converter.parent/'runtime'), conversion_env.get('LD_LIBRARY_PATH'))))
+            for capture in captures:
+                target = capture.with_suffix('.jsonl')
+                with target.open('w') as output, target.with_suffix('.convert.log').open('w') as errors:
+                    result = subprocess.run([str(converter), str(capture)], stdout=output,
+                                            stderr=errors, env=conversion_env, timeout=120)
+                metadata['conversions'][capture.name] = result.returncode
+        except (OSError, subprocess.TimeoutExpired) as error:
+            metadata['conversion_error'] = str(error)
+            raise
+        finally:
+            metadata['files'] = {p.name:dict(sha256=digest(p),bytes=p.stat().st_size)
+                                 for p in report.iterdir() if p.is_file() and p.name != 'metadata.json'}
+            (report/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
         if any(metadata['conversions'].values()):
             raise RuntimeError('Capture conversion failed; inspect conversion logs')
     print(json.dumps(dict(report=str(report), status='CAPTURED_AND_CONVERTED' if args.convert else 'CAPTURED')))
