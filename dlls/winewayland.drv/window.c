@@ -198,9 +198,15 @@ static void wayland_win_data_update_input(struct wayland_win_data *data, struct 
 
     if ((exstyle & (WS_EX_LAYERED | WS_EX_TRANSPARENT)) == (WS_EX_LAYERED | WS_EX_TRANSPARENT))
         region = wl_compositor_create_region(process_wayland.wl_compositor);
-    else if (data->input_region && (shape = get_region_data(data->input_region)))
+    else if (data->input_region)
     {
-        RECT *rects = (RECT *)shape->Buffer;
+        RECT *rects;
+        if (!(shape = get_region_data(data->input_region)))
+        {
+            WARN("Failed to read input shape for hwnd=%p\n", data->hwnd);
+            return;
+        }
+        rects = (RECT *)shape->Buffer;
         region = wl_compositor_create_region(process_wayland.wl_compositor);
         for (i = 0; i < shape->rdh.nCount; ++i)
         {
@@ -788,6 +794,16 @@ void WAYLAND_SetWindowStyle(HWND hwnd, INT offset, STYLESTRUCT *style)
         if ((surface = data->wayland_surface))
             wayland_surface_set_opacity(surface, 0, 0);
         data->layered_attribs_set = FALSE;
+    }
+
+    if (offset == GWL_EXSTYLE && (changed & WS_EX_TRANSPARENT) &&
+        (surface = data->wayland_surface))
+    {
+        /* Input regions are double-buffered Wayland state. A style toggle
+         * need not repaint, so publish it without waiting for a buffer flush. */
+        wayland_win_data_update_input(data, surface);
+        wl_surface_commit(surface->wl_surface);
+        wl_display_flush(process_wayland.wl_display);
     }
 
     wayland_win_data_release(data);
