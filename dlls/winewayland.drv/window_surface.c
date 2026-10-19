@@ -519,11 +519,20 @@ BOOL WAYLAND_CreateWindowSurface(HWND hwnd, BOOL layered, const RECT *surface_re
 
     TRACE("hwnd %p, layered %u, surface_rect %s, surface %p\n", hwnd, layered, wine_dbgstr_rect(surface_rect), surface);
 
-    if ((previous = *surface) && previous->funcs == &wayland_window_surface_funcs) return TRUE;
     if (!(data = wayland_win_data_get(hwnd))) return TRUE; /* use default surface */
+    if (layered) data->layered_attribs_set = TRUE;
+    if ((previous = *surface) && previous->funcs == &wayland_window_surface_funcs)
+    {
+        /* UpdateLayeredWindow can reuse an existing RGB surface. Keep its
+         * pixels, but select ARGB at the next flush instead of treating the
+         * new per-pixel alpha as opaque RGB. The reverse transition must also
+         * restore ordinary GDI rendering. */
+        wayland_window_surface_cast(previous)->layered = layered;
+        wayland_win_data_release(data);
+        return TRUE;
+    }
     if (previous) window_surface_release(previous);
 
-    if (layered) data->layered_attribs_set = TRUE;
     *surface = wayland_window_surface_create(data->hwnd, surface_rect, layered);
 
     wayland_win_data_release(data);

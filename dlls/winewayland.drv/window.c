@@ -387,6 +387,15 @@ static BOOL is_window_managed(HWND hwnd, UINT swp_flags, BOOL fullscreen)
     /* child windows are not managed */
     style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
     if ((style & (WS_CHILD|WS_POPUP)) == WS_CHILD) return FALSE;
+    ex_style = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
+    /* An owned, non-activating transparent tool surface decorates another
+     * window; it must not acquire an independently focusable xdg_toplevel.
+     * Keep genuine application windows and framed palettes managed. */
+    if ((ex_style & (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW)) ==
+        (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW) &&
+        !(ex_style & WS_EX_APPWINDOW) && !(style & (WS_CAPTION | WS_THICKFRAME)) &&
+        NtUserGetWindowRelative(hwnd, GW_OWNER))
+        return FALSE;
     /* activated windows are managed */
     if (!(swp_flags & (SWP_NOACTIVATE|SWP_HIDEWINDOW))) return TRUE;
     if (hwnd == get_active_window()) return TRUE;
@@ -402,7 +411,6 @@ static BOOL is_window_managed(HWND hwnd, UINT swp_flags, BOOL fullscreen)
         if (fullscreen) return TRUE;
     }
     /* application windows are managed */
-    ex_style = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
     if (ex_style & WS_EX_APPWINDOW) return TRUE;
     /* windows that own popups are managed */
     if (has_owned_popups(hwnd)) return TRUE;
