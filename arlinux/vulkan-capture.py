@@ -147,9 +147,11 @@ def main():
             for capture in captures:
                 target = capture.with_suffix('.jsonl')
                 with target.open('w') as output, target.with_suffix('.convert.log').open('w') as errors:
-                    result = subprocess.run([str(converter), str(capture)], stdout=output,
+                    result = subprocess.run([str(converter), '--format', 'jsonl', '--output', 'stdout', str(capture)], stdout=output,
                                             stderr=errors, env=conversion_env, timeout=120)
                 metadata['conversions'][capture.name] = result.returncode
+                if result.returncode == 0 and target.stat().st_size == 0:
+                    raise RuntimeError('Converter returned no JSON records: '+capture.name)
         except (OSError, subprocess.TimeoutExpired) as error:
             metadata['conversion_error'] = str(error)
             raise
