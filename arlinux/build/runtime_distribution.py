@@ -87,8 +87,11 @@ def component_name(name):
     if 'fex' in path.name.lower():
         return 'fex'
     for prefix, group in (
+        ('files/etc/', 'configuration'),
+        ('files/share/fex-emu/', 'configuration'),
         ('files/lib/arlinux/', 'integration'),
         ('files/share/arlinux/fonts/', 'fonts'),
+        ('files/share/wine/fonts/', 'fonts'),
         ('files/lib/wine/dxvk/', 'dxvk'),
         ('files/lib/wine/aarch64-windows/', 'wine-pe-arm64'),
         ('files/lib/wine/x86_64-windows/', 'wine-pe-x64'),
