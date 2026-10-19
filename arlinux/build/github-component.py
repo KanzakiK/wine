@@ -306,6 +306,7 @@ def build(data, framework):
                 target.add(staged,arcname='capture-tools')
             (output/(archive.name+'.sha256')).write_text(sha(archive)+'  '+archive.name+'\n')
             shutil.rmtree(staged)
+            shutil.copyfile(framework/'arlinux/vulkan-capture.py', output/'vulkan-capture.py')
         output = cache.stage(stage, inputs, compile_capture)
         descriptor = framework/'build/artifacts/components'/f'{stage}.json'
         descriptor.parent.mkdir(parents=True,exist_ok=True)

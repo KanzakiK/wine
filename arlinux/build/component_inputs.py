@@ -32,7 +32,7 @@ SOURCES = {
                         'arlinux/build/runtime_assembly.py'),
     'wine-product': ('arlinux/package-wine-bionic.py', 'arlinux/build/runtime_assembly.py',
                      'arlinux/build/runtime_distribution.py'),
-    'wine-capture': ('arlinux/components/gfxreconstruct',),
+    'wine-capture': ('arlinux/components/gfxreconstruct', 'arlinux/vulkan-capture.py'),
     'windows-fonts': (),
 }
 RESOURCES = {name: ('mingw',) for name in SOURCES}

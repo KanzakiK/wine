@@ -1,0 +1,128 @@
+"""Bounded opt-in capture of one Windows application through Bionic Wine.
+
+Run with arlinux-py.py. Tools must come from build.ps1 wine-capture, extracted
+under app-private storage. Captures may contain private application contents.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+
+def digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--tools', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--seconds', type=int, default=30)
+    parser.add_argument('--max-mib', type=int, default=512)
+    parser.add_argument('--memory-tracking', choices=('unassisted', 'page_guard', 'assisted'), default='unassisted')
+    parser.add_argument('--frames', default='')
+    parser.add_argument('--convert', action='store_true')
+    parser.add_argument('executable', type=Path)
+    parser.add_argument('arguments', nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if not 1 <= args.seconds <= 120 or not 1 <= args.max_mib <= 512:
+        parser.error('Use 1..120 seconds and 1..512 MiB')
+    sys.path.insert(0, '/usr/lib/arlinux')
+    import windows
+    tools = args.tools.expanduser().resolve(strict=True)
+    provenance = json.loads((tools/'provenance.json').read_text())
+    if provenance['abi'] != 'aarch64-bionic':
+        raise ValueError('Use the Bionic capture product, not the glibc tools')
+    for name, expected in provenance['files'].items():
+        path = (tools/name).resolve(strict=True)
+        if not path.is_relative_to(tools) or digest(path) != expected:
+            raise ValueError('Capture tool hash/path mismatch: '+name)
+    executable = args.executable.expanduser().resolve(strict=True)
+    report = args.output.expanduser()
+    report.mkdir(parents=True, mode=0o700, exist_ok=False)
+    report = report.resolve()
+    runtime, prefix = windows.ensure_runtime(), windows.instance_prefix()
+    windows.initialize(runtime, prefix)
+    import windows_webview
+    env = windows_webview.prepare(runtime, prefix, windows.environment(runtime, prefix))
+    env['ARLINUX_VULKAN_CAPTURE'] = json.dumps(dict(
+        tools=str(windows.host_path(tools)), output=str(windows.host_path(report)),
+        memoryTracking=args.memory_tracking, frames=args.frames))
+    overrides = {name: env[name] for name in ('ARLINUX_VULKAN_CAPTURE',
+        'WEBVIEW2_BROWSER_EXECUTABLE_FOLDER', 'WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS') if name in env}
+    metadata = dict(started=time.time(), runtime_sha256=runtime.name,
+        executable=str(executable), executable_sha256=digest(executable),
+        arguments=args.arguments, seconds=args.seconds, max_mib=args.max_mib,
+        memory_tracking=args.memory_tracking, frames=args.frames, provenance=provenance,
+        layer_processes={}, stop_reason=None)
+    (report/'runtime.json').write_text((runtime/'bionic-runtime.json').read_text())
+    response = windows.request(runtime, prefix, executable, args.arguments,
+                               diagnostics=overrides, task=True)
+    metadata['job'] = response['job']
+    deadline = time.monotonic()+args.seconds
+    print('Capturing one owned Windows job; output can contain private data.', flush=True)
+    try:
+        while True:
+            for process in Path('/proc').iterdir():
+                if not process.name.isdigit():
+                    continue
+                try:
+                    # Match only this task; never retain process environments.
+                    if process.stat().st_uid != os.getuid():
+                        continue
+                    entries = (process/'environ').read_bytes().split(b'\0')
+                    tag = ('ARLINUX_RUN_ID='+response['job']).encode()
+                    if tag not in entries:
+                        continue
+                    maps = (process/'maps').read_text()
+                    if 'libVkLayer_gfxreconstruct.so' in maps:
+                        metadata['layer_processes'][process.name] = 'process-'+process.name+'-maps.txt'
+                        (report/metadata['layer_processes'][process.name]).write_text(maps)
+                except (OSError, PermissionError):
+                    continue
+            size = sum(p.stat().st_size for p in report.glob('*.gfx*') if p.is_file())
+            if windows.guest_path(response['exit']).is_file():
+                metadata['stop_reason'] = 'application_exit'; break
+            if size >= args.max_mib*1024*1024:
+                metadata['stop_reason'] = 'size_limit'; break
+            if time.monotonic() >= deadline:
+                metadata['stop_reason'] = 'time_limit'; break
+            time.sleep(.25)
+    finally:
+        helper = runtime/'files/lib/arlinux/windows-tray.exe'
+        stopped = windows.run(runtime, prefix, helper, ['--stop', response['job']], capture=True, timeout=30)
+        metadata['stop_exit_code'] = stopped.returncode
+        source_log = windows.guest_path(response['log'])
+        if source_log.is_file():
+            shutil.copyfile(source_log, report/'wine.log')
+        metadata['finished'] = time.time()
+        metadata['files'] = {p.name:dict(sha256=digest(p),bytes=p.stat().st_size)
+                             for p in report.iterdir() if p.is_file()}
+        (report/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
+    captures = sorted(report.glob('*.gfxr'))
+    if not captures or not metadata['layer_processes'] or stopped.returncode:
+        raise RuntimeError('Capture was not verified; inspect the retained report')
+    if args.convert:
+        converter = Path('/usr/lib/arlinux/gfxreconstruct/bin/gfxrecon-convert')
+        metadata['converter_sha256'] = digest(converter)
+        metadata['conversions'] = {}
+        for capture in captures:
+            target = capture.with_suffix('.jsonl')
+            with target.open('w') as output, target.with_suffix('.convert.log').open('w') as errors:
+                result = subprocess.run([str(converter), str(capture)], stdout=output,
+                                        stderr=errors, timeout=120)
+            metadata['conversions'][capture.name] = result.returncode
+        (report/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
+        if any(metadata['conversions'].values()):
+            raise RuntimeError('Capture conversion failed; inspect conversion logs')
+    print(json.dumps(dict(report=str(report), status='CAPTURED_AND_CONVERTED' if args.convert else 'CAPTURED')))
+
+
+if __name__ == '__main__':
+    main()
