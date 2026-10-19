@@ -274,6 +274,28 @@ took only a few seconds. At inspection the Wine repository retained
 current compact v3 compiler cache. New hosted timings and device acceptance
 remain separate from these baseline observations.
 
+Hosted verification at integration `ca30806` passed the complete component
+chain, including runtime assembly run 39332303780 and final product run
+39333244260. Runtime assembly restored all three independent tool caches
+(NDK 774,613,289 bytes, MinGW 83,887,405 bytes, addons 167,194,233 bytes).
+Its dispatcher took 254 seconds versus 324 in the baseline; this is an
+observed stage comparison, not a controlled whole-graph speedup. Native host
+preparation took 162 seconds versus 302; network/runner variation also matters.
+One coordinator invocation exhausted its GitHub API EOF retries. Re-entering
+the sole build command reused the completed components without recompilation.
+The subsequent warm audio coordinator completed in 0.421 seconds with zero
+product-transfer time. These are build/cache results, not fresh-device approval
+of a newly packaged runtime or permission to promote latest.
+
+The runtime assembly log also exposed an Actions prefix collision:
+`arlinux-v3-X64-wine-bionic-` restored the `wine-bionic-compile` cache. PE merge
+could similarly restore an architecture compiler cache. Pure merge/package/
+runtime assembly jobs now skip the irrelevant compiler cache entirely. New
+v4 keys delimit stage names with `--`; remaining compiler jobs may use v3/v2
+as migration seeds. The key-only wrapper update does not alter product input
+identities or rebuild outputs. Its first natural hosted cache save is pending;
+do not report a warm v4 compiler measurement before it occurs.
+
 All three incremental PE builds passed with actual compiler invocations:
 
 | Architecture | Cache population build step | Incremental build step | Added ccache hits | Added misses |
