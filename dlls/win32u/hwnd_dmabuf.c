@@ -129,4 +129,3 @@ int hwnd_dmabuf_channel_recv_release( int channel_fd, void *release )
     if (!n) return HWND_DMABUF_CHANNEL_CLOSED;
     return n < 0 ? hwnd_dmabuf_channel_result_from_errno( errno ) : HWND_DMABUF_CHANNEL_ERROR;
 }
-

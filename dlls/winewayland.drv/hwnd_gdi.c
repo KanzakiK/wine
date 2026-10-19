@@ -84,7 +84,7 @@ struct wayland_hwnd_dmabuf_surface
  * the producer thinks are still cached. Keep an unseen surface for a grace window first. */
 #define WAYLAND_DMABUF_SURFACE_GRACE_MS 1000
 
-unsigned long long wayland_time_ms(void)
+static unsigned long long wayland_time_ms(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -483,8 +483,14 @@ static void wayland_hwnd_dmabuf_drop_current_frame(struct wayland_hwnd_dmabuf_su
     struct wayland_hwnd_dmabuf_buffer *buffer = surface->current;
 
     if (!buffer) return;
-    wayland_hwnd_dmabuf_buffer_send_release(buffer, flags, buffer->stable_slot);
+    /* An attached buffer remains immutable until wl_buffer.release, even when
+     * its window becomes hidden or clipped. Only an uncommitted frame can be
+     * returned to the producer immediately. */
+    if (InterlockedCompareExchange(&buffer->ref, 0, 0) == 1)
+        wayland_hwnd_dmabuf_buffer_send_release(buffer, flags, buffer->stable_slot);
     surface->current = NULL;
+    wl_surface_attach(surface->wl_surface, NULL, 0, 0);
+    wl_surface_commit(surface->wl_surface);
     if (!buffer->stable_slot) wayland_hwnd_dmabuf_buffer_reap(buffer);
 }
 
@@ -716,11 +722,6 @@ void wayland_hwnd_gdi_update(struct wayland_surface *surface)
             TRACE("hwnd=%p child=%p configure failed frame_seq=%u\n",
                   surface->hwnd, hwnd, frames[i].frame_seq);
             wayland_hwnd_dmabuf_drop_current_frame(dmabuf_surface, HWND_DMABUF_RELEASE_DROPPED);
-            if (dmabuf_surface->wl_surface)
-            {
-                wl_surface_attach(dmabuf_surface->wl_surface, NULL, 0, 0);
-                wl_surface_commit(dmabuf_surface->wl_surface);
-            }
             continue;
         }
 

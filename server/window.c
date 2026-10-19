@@ -3209,8 +3209,7 @@ DECL_HANDLER(hwnd_dmabuf_claim_channel)
 }
 
 
-/* Drop one active producer reference. Keep the retained socket through a pending
- * recreate so the consumer fd survives resize handoff; release it when idle. */
+/* Drop one active producer reference and retire an idle channel. */
 DECL_HANDLER(hwnd_dmabuf_release_channel)
 {
     struct window *win = get_window( req->hwnd );
