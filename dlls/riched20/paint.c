@@ -435,7 +435,13 @@ static void draw_text_with_style( ME_Context *c, ME_Run *run, int x, int y,
     }
     else
     {
-      sel_rgn = CreateRectRgnIndirect( &sel_rect );
+      POINT points[4] = {{sel_rect.left, sel_rect.top}, {sel_rect.right, sel_rect.top},
+                         {sel_rect.right, sel_rect.bottom}, {sel_rect.left, sel_rect.bottom}};
+
+      /* Clip regions use device units, unlike the text/selection rectangle.
+       * Windowless hosts can supply a translated or scaled drawing DC. */
+      if (LPtoDP( hDC, points, ARRAY_SIZE(points) ))
+        sel_rgn = CreatePolygonRgn( points, ARRAY_SIZE(points), WINDING );
       clip = CreateRectRgn( 0, 0, 0, 0 );
       if (GetClipRgn( hDC, clip ) != 1)
       {
