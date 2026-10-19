@@ -18,8 +18,7 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
     recipes = {
         'wine-pulse': (),
         'wine-pe': ('arlinux/build/wine-pe.sh', 'arlinux/build/refresh-wine-vkd3d.py',
-                    'arlinux/build/prepare-wine-dcomp.sh', 'arlinux/patches',
-                    'arlinux/components/windows-integration/tray/protocol.h'),
+                    'arlinux/build/prepare-wine-dcomp.sh', 'arlinux/patches'),
         'fex': ('arlinux/build/fex-windows.sh', 'arlinux/components/FEX'),
         'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/patches/dxvk-optional-pipeline-library.patch'),
         'wine-pe-package': ('arlinux/package-wine-pe.py', 'arlinux/wine_pe_debug.py'),
@@ -28,7 +27,7 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
         'wine-vulkan': ('arlinux/components/libhybris/arlinux/build-bionic-vulkan.py', 'arlinux/components/libhybris', 'arlinux/components/android-headers', 'arlinux/patches'),
         'wine-bionic-compile': ('arlinux/build/wine-bionic.sh', 'arlinux/build/refresh-wine-vkd3d.py',
                         'arlinux/build/prepare-wine-dcomp.sh', 'arlinux/components/FEX',
-                        'arlinux/components/windows-integration/tray/protocol.h', 'arlinux/patches'),
+                        'arlinux/patches'),
         'wine-bionic': ('arlinux/package-wine-bionic.py', 'arlinux/wine_pe_debug.py',
                         'arlinux/wine_fonts.py', 'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB'),
     }

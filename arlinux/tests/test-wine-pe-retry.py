@@ -28,9 +28,6 @@ class RetryTests(unittest.TestCase):
                    (SCRIPT.parents[2]/'dlls/dwrite/font.c').read_text())
         self.write('repo/arlinux/patches/wine-dwrite-bitmap-cache.patch',
                    (SCRIPT.parents[1]/'patches/wine-dwrite-bitmap-cache.patch').read_text())
-        self.write("source/programs/explorer/systray.c", (SCRIPT.parents[2]/"programs/explorer/systray.c").read_text())
-        self.write("repo/arlinux/patches/wine-bionic-tray-task.patch", (SCRIPT.parents[1]/"patches/wine-bionic-tray-task.patch").read_text())
-        self.write("repo/arlinux/components/windows-integration/tray/protocol.h", "fixture tray protocol")
         keyboard_patch = (SCRIPT.parents[1]/'patches/wine-keyboard-layout.patch').read_text()
         # This test replaces configure with a compiler fixture, so omit its
         # generated module-list hunk; the real source patch is validated separately.

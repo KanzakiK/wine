@@ -38,8 +38,7 @@ inputs=[repo/'arlinux/build/wine-pe.sh',repo/'arlinux/build/refresh-wine-vkd3d.p
 inputs+=sorted((repo/'arlinux/patches/wine-staging-vkd3d').glob('*'))
 inputs+=[repo/'arlinux/patches/wine-dcomp-content-lifetime.patch',
          repo/'arlinux/patches/wine-dwrite-bitmap-cache.patch',
-         repo/'arlinux/patches/wine-keyboard-layout.patch',
-         repo/'arlinux/patches/wine-bionic-tray-task.patch', repo/'arlinux/components/windows-integration/tray/protocol.h']
+         repo/'arlinux/patches/wine-keyboard-layout.patch']
 for path in inputs:
     h.update(path.name.encode());h.update(path.read_bytes())
 for name in ('clang','ld.lld'):
@@ -74,8 +73,6 @@ if [[ ! -f "$stage/source-ready" ]]; then
     bash "$repo/arlinux/build/prepare-wine-dcomp.sh" "$prepare/source"
     patch -d "$prepare/source" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-dwrite-bitmap-cache.patch"
     patch -d "$prepare/source" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-keyboard-layout.patch"
-    cp "$repo/arlinux/components/windows-integration/tray/protocol.h" "$prepare/source/programs/explorer/arlinux_tray.h"
-    patch -d "$prepare/source" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-tray-task.patch"
     (cd "$prepare/source" && perl tools/make_requests)
     if [[ -d "$stage/source" ]]; then
         echo "Incomplete source preparation at $stage/source; inspect it before retrying." >&2

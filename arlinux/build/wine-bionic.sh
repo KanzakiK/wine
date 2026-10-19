@@ -51,8 +51,6 @@ patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic
 patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-layered-alpha.patch"
 patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-transparent-initial.patch"
 patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-layered-minimize.patch"
-cp "$repo/arlinux/components/windows-integration/tray/protocol.h" "$source_dir/programs/explorer/arlinux_tray.h"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-tray-task.patch"
 patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-mmap-probe.patch"
 (cd "$source_dir/dlls/winevulkan" && python3 make_vulkan)
 cp "$fex_source/Source/Windows/UnixLib/"{FEXUnixLib.cpp,FEXUnixLib.h} "$stage/fex/"

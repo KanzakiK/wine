@@ -364,6 +364,10 @@ static SIZE get_window_size(void)
     rect.top = 0;
     rect.right = icon_cx * max( nb_displayed, MIN_DISPLAYED );
     rect.bottom = icon_cy;
+    /* Keep the standalone host usable on touch displays, including at small
+     * icon counts. The icon windows retain Wine's native mouse callbacks. */
+    rect.right = max( rect.right, 12 * icon_cx );
+    rect.bottom = max( rect.bottom, 3 * icon_cy );
     AdjustWindowRect( &rect, WS_CAPTION, FALSE );
     size.cx = rect.right - rect.left;
     size.cy = rect.bottom - rect.top;
@@ -1126,6 +1130,14 @@ static LRESULT WINAPI shell_traywnd_proc( HWND hwnd, UINT msg, WPARAM wparam, LP
         break;
 
     case WM_CLOSE:
+        if (!enable_taskbar && nb_displayed)
+        {
+            /* Closing the host must not make still-running tray applications
+             * unreachable. Minimize this ordinary window instead. */
+            ShowWindow( hwnd, SW_MINIMIZE );
+            hide_balloon( balloon_icon );
+            return 0;
+        }
         /* don't destroy the tray window, just hide it */
         ShowWindow( hwnd, SW_HIDE );
         hide_balloon( balloon_icon );
@@ -1160,7 +1172,7 @@ static LRESULT WINAPI shell_traywnd_proc( HWND hwnd, UINT msg, WPARAM wparam, LP
         break;
 
     case WM_MOUSEACTIVATE:
-        return MA_NOACTIVATE;
+        return enable_taskbar ? MA_NOACTIVATE : MA_ACTIVATE;
 
     case WM_INITMENUPOPUP:
     case WM_MENUCOMMAND:
@@ -1221,13 +1233,13 @@ void initialize_systray( BOOL arg_using_root, BOOL arg_enable_shell, BOOL arg_sh
 
     if (arg_using_root)
     {
-        show_systray = arg_show_systray;
+        show_systray = TRUE;
         enable_taskbar = FALSE;
-        enable_dock = TRUE;
+        enable_dock = FALSE;
     }
     else
     {
-        show_systray = arg_show_systray && !arg_enable_shell;
+        show_systray = !arg_enable_shell;
         enable_taskbar = arg_enable_shell;
         enable_dock = FALSE;
     }
@@ -1259,7 +1271,8 @@ void initialize_systray( BOOL arg_using_root, BOOL arg_enable_shell, BOOL arg_sh
     else
     {
         SIZE size = get_window_size();
-        tray_window = CreateWindowExW( 0, shell_traywnd_class.lpszClassName, L"", WS_CAPTION | WS_SYSMENU,
+        tray_window = CreateWindowExW( 0, shell_traywnd_class.lpszClassName, L"Windows Tray",
+                                       WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
                                        CW_USEDEFAULT, CW_USEDEFAULT, size.cx, size.cy, 0, 0, 0, 0 );
         NtUserMessageCall( tray_window, WINE_SYSTRAY_DOCK_INIT, 0, 0, NULL, NtUserSystemTrayCall, FALSE );
     }
