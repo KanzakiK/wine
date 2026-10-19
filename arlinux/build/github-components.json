@@ -121,6 +121,7 @@
       "compilerCacheMiB": 256
     },
     "runtime-support": {
+      "artifactInputsOnly": true,
       "repository": "taowen/wine",
       "runner": "ubuntu-24.04",
       "dependencies": [
@@ -132,6 +133,7 @@
       "compilerCacheMiB": 256
     },
     "wine-product": {
+      "artifactInputsOnly": true,
       "repository": "taowen/wine",
       "runner": "ubuntu-24.04",
       "dependencies": [

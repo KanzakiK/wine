@@ -69,7 +69,8 @@ def source_inputs(repo, revision, stage, plan):
     versions = json.loads(lock)
     return dict(sourceSha256=hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest(),
                 tools={n: versions[n] for n in RESOURCES[stage]},
-                runner=plan['stages'][stage]['runner'])
+                runner=plan['stages'][stage]['runner'],
+                artifactInputsOnly=plan['stages'][stage].get('artifactInputsOnly', False))
 
 
 def request_identity(data):
@@ -84,8 +85,9 @@ def requirements(stage, plan):
     def visit(name):
         if name not in stages:
             stages.add(name)
-            for dependency in plan['stages'][name]['dependencies']:
-                visit(dependency)
+            if not plan['stages'][name].get('artifactInputsOnly'):
+                for dependency in plan['stages'][name]['dependencies']:
+                    visit(dependency)
     visit(stage)
     paths = {p for name in stages for p in SOURCES[name] if p.startswith('arlinux/components/')}
     modules = sorted({'/'.join(p.split('/')[:3]) for p in paths})

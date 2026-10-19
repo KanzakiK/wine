@@ -150,6 +150,10 @@ def main():
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     framework = Path(config['framework']).resolve(strict=True)
+    if args.target and 'artifacts' in config:
+        import runtime_assembly
+        runtime_assembly.build_target(framework, args.target, config['artifacts'], args.rebuild)
+        return
     paths = {name: Path(config[name]).resolve() for name in ('wineSource', 'mingw', 'ndk', 'addons')}
     android = framework
     dirty = subprocess.check_output(['git', '-C', str(paths['wineSource']), 'status', '--porcelain', '--untracked-files=normal'])
@@ -204,14 +208,8 @@ def main():
                 'arlinux/components/windows-integration/build-tray.sh'), lambda out: invoke(
                 'bash', 'arlinux/components/windows-integration/build-tray.sh', paths['mingw'], out))
         import runtime_assembly as assembly
-        support = cache.stage('runtime-support', dict(engine=digest(assembly.__file__),
-            sources=support_sources(framework),
-            dependencies={name: cache.records[name] for name in ('steamworks', 'windows-accessibility', 'windows-tray') if name in cache.records}),
-            lambda out: assembly.assemble_support(out, bridge, observer, tray))
-        final = cache.stage('wine-product', dict(engine=digest(assembly.__file__),
-            packager=inventory(framework/'arlinux/package-wine-bionic.py'),
-            dependencies=cache.records.copy()),
-            lambda out: assembly.assemble_product(out, framework, base, support, invoke))
+        support = assembly.cached_support(cache, framework, bridge, observer, tray, invoke)
+        final = assembly.cached_product(cache, framework, base, support, invoke)
         output = framework / 'build/artifacts/wine'
         output.mkdir(parents=True, exist_ok=True)
         for source in final.iterdir():

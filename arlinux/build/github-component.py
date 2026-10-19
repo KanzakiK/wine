@@ -62,6 +62,23 @@ def prepare(data, framework):
         for name in ('framework',):
             shutil.move(str(framework.parent / name), root / name)
         framework = root / 'framework'
+        plan = json.loads((framework/'arlinux/build/github-components.json').read_text())
+        if plan['stages'][data['stage']].get('artifactInputsOnly'):
+            # Standard hosted runners already provide Python, Git and tar.
+            # Assembly needs the capsule decoder, not any compiler toolchain.
+            python_lib = root/'pythonlib'
+            run(sys.executable, '-m', 'pip', 'install', '--target', python_lib, 'zstandard==0.25.0')
+            modules, _ = requirements(data['stage'], plan)
+            if modules:
+                run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1', '--', *modules)
+            with Path(os.environ['GITHUB_ENV']).open('a') as out:
+                out.write('ARLINUX_FRAMEWORK='+framework.as_posix()+'\n')
+                out.write('ARLINUX_WORKSPACE='+root.as_posix()+'\n')
+                out.write('PYTHONPATH='+str(python_lib)+'\nARLINUX_ASSEMBLY_ONLY=1\n')
+            with Path(os.environ['GITHUB_OUTPUT']).open('a') as out:
+                if data['stage'] != 'wine-product':
+                    out.write('cache-paths='+str(framework/'build/pipeline'/data['stage'])+'\n')
+            return
         # Only remove optional software on the ephemeral GitHub runner.
         # Never run this cleanup in a workstation or self-hosted environment.
         if data['stage'] in ('wine-bionic-compile', 'wine-graphics', 'fex'):
@@ -188,7 +205,7 @@ def toolchains(root, framework):
         ndk=str(tools/'ndk'), mingw=str(launcher), addons=str(addons))
 
 
-def import_dependency(root, dependency, visited=None):
+def import_dependency(root, dependency, visited=None, *, recursive=True):
     if visited is None:
         visited = set()
     if dependency['identity'] in visited:
@@ -200,8 +217,9 @@ def import_dependency(root, dependency, visited=None):
     record = json.loads(manifest.read_text())
     if record['identity'] != dependency['identity']:
         raise ValueError('Dependency identity mismatch')
-    for parent in record.get('dependencies', []):
-        import_dependency(root, parent, visited)
+    if recursive:
+        for parent in record.get('dependencies', []):
+            import_dependency(root, parent, visited)
     for part in record['parts']:
         download(part['url'], directory/part['name'], part['sha256'])
     archive = directory / 'capsule.tar.zst'
@@ -241,16 +259,17 @@ def import_dependency(root, dependency, visited=None):
     archive.unlink()
     for part in record['parts']:
         (directory/part['name']).unlink()
+    return record
 
 
-def restore_seed(root, framework, data, visited):
+def restore_seed(root, framework, data, visited, *, recursive=True):
     if not data.get('cacheSeed'):
         return
     stage_cache = framework/'build/pipeline'/data['stage']
     if any(stage_cache.glob('*/receipt.json')):
         print('Keep restored Actions cache before release seed: '+data['stage'], flush=True)
         return
-    import_dependency(root, data['cacheSeed'], visited)
+    import_dependency(root, data['cacheSeed'], visited, recursive=recursive)
 
 
 def build(data, framework):
@@ -282,11 +301,17 @@ def build(data, framework):
         descriptor.write_text(json.dumps(dict(output=str(output), records=cache.records))+'\n')
         return
     visited = set()
-    restore_seed(root, framework, data, visited)
+    plan = json.loads((framework/'arlinux/build/github-components.json').read_text())
+    assembly = plan['stages'][stage].get('artifactInputsOnly', False)
+    restore_seed(root, framework, data, visited, recursive=not assembly)
+    artifacts = {}
     for dependency in data['dependencies']:
-        import_dependency(root, dependency, visited)
+        record = import_dependency(root, dependency, visited, recursive=not assembly)
+        if assembly:
+            artifacts[record['stage']] = record['pipelineOutput']
     config = root / 'product.json'
-    config.write_text(json.dumps(toolchains(root, framework)))
+    config.write_text(json.dumps(dict(framework=str(framework), artifacts=artifacts)
+                                 if assembly else toolchains(root, framework)))
     env = dict(os.environ, ARLINUX_WINDOWS_FONTS=str(root/'vendor/fonts'), JOBS='4',
         CCACHE_DIR=str(root/'cache/ccache'), CCACHE_BASEDIR=str(framework))
     run('bash', framework/'arlinux/build.sh', 'wine', '--config', config,
@@ -312,6 +337,7 @@ def publish(data, framework):
             raise ValueError('Component output differs from its build-cache receipt')
         paths = [path.parent, path.parent.parent/'receipt.json',
                  *(Path(name) for name in state['references'])]
+        record['pipelineOutput'] = path.relative_to(root).as_posix()
         if stage in ('wine-product', 'wine-diagnostics'):
             # Consumers need distributable archives, not the native compiler work tree.
             final = framework/('build/artifacts/'+('diagnostics' if stage == 'wine-diagnostics' else 'wine'))

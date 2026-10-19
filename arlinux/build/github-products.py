@@ -79,6 +79,7 @@ class Coordinator:
         self.plan,self.framework,self.android,self.state,self.poll = plan,framework,android,state,poll
         state.mkdir(parents=True,exist_ok=True)
         self.stopped = Event()
+        self.timings = {}
 
     def runs(self, repository):
         return json.loads(gh('run','list','--repo',repository,'--workflow',self.plan['workflow'],
@@ -109,12 +110,16 @@ class Coordinator:
             manifestUrl=asset['browser_download_url'],manifestSha256=digest[7:])
 
     def component(self, stage, dependencies):
+        started = time.monotonic()
         framework = Path(__file__).resolve().parents[2]
         request = dict(format=2,stage=stage,framework=self.framework,android=self.android,
                        dependencies=dependencies, sourceInputs=source_inputs(framework, self.framework, stage, self.plan))
         request['identity']=request_identity(request)
         with request_lock(self.state/request['identity']/'dispatch.lock', self.stopped):
-            return self._component(request)
+            result = self._component(request)
+        self.timings[stage] = dict(seconds=round(time.monotonic()-started, 3),
+                                  repository=result['repository'], identity=result['identity'])
+        return result
 
     def _component(self, request):
         stage = request['stage']
@@ -292,11 +297,20 @@ def main():
     products=['wine','audio'] if args.product=='all' else [args.product]
     state=args.output/'github-state'
     coordinator=Coordinator(plan,framework_sha,None,state)
+    started=time.monotonic()
     result=coordinator.run(products,args.parallel)
+    graph_seconds=time.monotonic()-started
+    transfers={}
     for name,reference in result.items():
+        transfer_started=time.monotonic()
         fetch_product(reference,args.output/name)
+        transfers[name]=dict(seconds=round(time.monotonic()-transfer_started,3))
     (args.output/'products.json').write_text(json.dumps(dict(format=1,
         framework=framework_sha,products=result),indent=2)+'\n')
+    (args.output/'build-timing.json').write_text(json.dumps(dict(format=1,
+        framework=framework_sha, totalSeconds=round(time.monotonic()-started,3),
+        graphSeconds=round(graph_seconds,3), components=coordinator.timings,
+        productTransfers=transfers),indent=2)+'\n')
 
 
 if __name__=='__main__':
