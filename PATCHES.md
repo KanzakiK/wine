@@ -666,8 +666,9 @@ This is the recommended branch. What it changes, by subsystem:
   `glMapBufferRange()`/`glUnmapBuffer()` pair. 32-bit wined3d does not keep its buffer
   objects mapped (`wined3d_map_persistent()` is false on 32-bit), so every upload maps and
   unmaps the 64 MiB allocator chunk; on WoW64 each of these went through `vkMapMemory2KHR`
-  (placed) and `vkUnmapMemory2KHR`, which the NVIDIA driver implements as a full
-  `mmap`/`munmap` of the chunk plus control ioctls. vatSys (PE32, SharpDX Direct2D) made
+  (placed) and `vkUnmapMemory2KHR`, which the NVIDIA driver implements as two 64 MiB `mmap()`
+  calls per cycle (`PROT_NONE` over the range to release it, `MAP_SHARED` on `/dev/nvidiactl` to
+  map it again) plus control ioctls. vatSys (PE32, SharpDX Direct2D) made
   ~1000 such cycles per second, the `wined3d_cs` thread spent 85 % of its time in them, the
   radar map only appeared after a window move and zooming, resizing and the whole UI lagged
   by seconds (WineHQ bug 60354 reports the same for 32-bit games). With the mapping retained
