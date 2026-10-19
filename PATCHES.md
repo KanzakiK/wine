@@ -666,6 +666,16 @@ This is the recommended branch. What it changes, by subsystem:
   after the drag went through the held DC at the old origin; with the fresh DC the image
   follows the frame and nothing is left behind. The held DC stays as it is, a GL context
   that is not forced to GDI is bound to it
+- **wined3d (Vulkan renderer)**: the SPIR-V vertex and fragment pipes carry `state_nop`
+  entries for the 13 fixed-function render states that the stateblock turns into
+  replacement shaders (`LIGHTING`, `FOGENABLE`, `SPECULARENABLE`, `COLORKEYENABLE`,
+  `RANGEFOGENABLE`, `COLORVERTEX`, `LOCALVIEWER`, `NORMALIZENORMALS`, the four material
+  sources, `VERTEXBLEND`), as upstream `d231cb2832a` added them to the GLSL pipes. Without
+  them `validate_state_table()` printed 13 `err:d3d:validate_state_table … should have a
+  representative` lines at every device creation with `renderer=vulkan` (65 at SynthEdit's
+  start). Nothing changes in behaviour: the Vulkan context checks none of these states,
+  and `d3d9_test stateblock` gives the same results before and after, 64- and 32-bit.
+  Upstream 11.20 still prints the lines
 - **opengl32 (WoW64)**: the Vulkan mapping behind a persistently mappable GL buffer is kept
   for the lifetime of the buffer instead of being created and destroyed around every
   `glMapBufferRange()`/`glUnmapBuffer()` pair. 32-bit wined3d does not keep its buffer
