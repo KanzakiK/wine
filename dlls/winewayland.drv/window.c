@@ -496,6 +496,7 @@ static void activation_token_done(void *context, struct xdg_activation_token_v1 
         {
             data->activation_token = NULL;
             if (data->wayland_surface && wayland_surface_is_toplevel(data->wayland_surface) &&
+                NtUserGetForegroundWindow() == data->hwnd &&
                 (NtUserGetWindowLongW(data->hwnd, GWL_STYLE) & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE)
                 xdg_activation_v1_activate(process_wayland.xdg_activation_v1, value,
                                             data->wayland_surface->wl_surface);
@@ -518,7 +519,8 @@ void WAYLAND_ActivateWindow(HWND hwnd, HWND previous)
     struct wayland_win_data *data;
     uint32_t serial;
 
-    if (!process_wayland.xdg_activation_v1 || wayland_keyboard_get_focused_hwnd() == hwnd) return;
+    if (!process_wayland.xdg_activation_v1 || NtUserGetForegroundWindow() != hwnd ||
+        wayland_keyboard_get_focused_hwnd() == hwnd) return;
     if (!(data = wayland_win_data_get(hwnd))) return;
     if (!data->activation_token && data->wayland_surface &&
         wayland_surface_is_toplevel(data->wayland_surface) &&
