@@ -69,7 +69,8 @@ static BOOL is_ime_hkl(HKL hkl)
 
 static HKL get_ime_hkl(LCID locale)
 {
-    return ULongToHandle(MAKELONG(locale, 0xe001));
+    /* Preserve the signed 32-bit HKL when it is carried in a Win64 message. */
+    return LongToHandle(MAKELONG(locale, 0xe001));
 }
 
 struct layout
@@ -388,8 +389,8 @@ static inline LANGID langid_from_xkb_layout(const char *layout, size_t layout_le
 
 static HKL get_layout_hkl(struct layout *layout, LCID locale)
 {
-    if (!layout->layout_id) return (HKL)(UINT_PTR)MAKELONG(locale, layout->lang);
-    else return (HKL)(UINT_PTR)MAKELONG(locale, 0xf000 | layout->layout_id);
+    if (!layout->layout_id) return LongToHandle(MAKELONG(locale, layout->lang));
+    else return LongToHandle(MAKELONG(locale, 0xf000 | layout->layout_id));
 }
 
 static void add_xkb_layout(const char *xkb_layout, struct xkb_keymap *xkb_keymap,
