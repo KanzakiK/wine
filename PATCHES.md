@@ -46,7 +46,14 @@ This is the recommended branch. What it changes, by subsystem:
   object per call. Cymatics Hotline draws its LCD dot matrix as 1 931 rounded rectangles
   per frame: 13.9 → 25.1 fps on a 2-core laptop, `wined3d_cs` 57 % → 12 %, the main
   thread at 65 % for nearly twice the frames, pixels identical except for 8-bit rounding
-  where fills of one colour overlap. Bitmap brushes honour WRAP and MIRROR instead of degrading to CLAMP,
+  where fills of one colour overlap. Closing a path geometry tests the control triangles of
+  its Bézier pieces pairwise for overlap; pairs whose bounding boxes lie apart skip the test
+  (half of `Close()` for glyph outlines, where it never split anything), and the result of
+  `Close()` is kept by the figure data and copied back for an identical path
+  (`WINE_D2D_FILL_CACHE=0` disables it): JUCE 8 draws text as path outlines rebuilt every
+  frame — Hotline closes 27 glyph paths per frame, 37 distinct ones in all — so a frame's
+  `Close()` time goes from 8.4 ms to 0.2–0.4 ms and the main thread from 62 % to 46 %,
+  pixels identical. Bitmap brushes honour WRAP and MIRROR instead of degrading to CLAMP,
   so a tiled background is tiled rather than one tile with its edge texels stretched
   (SynthEdit panels). `SetTarget(NULL)` drops the render target bindings, so a swapchain
   back buffer is not held across `ResizeBuffers()`. The scratch vertex and index buffers are dynamic and written through a
