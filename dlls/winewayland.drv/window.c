@@ -593,6 +593,10 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
 
     if (owner_data) wayland_win_data_release(owner_data);
     wayland_win_data_release(data);
+    /* An ancestor can move or hide without repainting a foreign GDI leaf.
+     * Notify the owning root even when this process owns no producer surface. */
+    owner = NtUserGetAncestor(hwnd, GA_ROOT);
+    if (owner && owner != hwnd) NtUserPostMessage(owner, WM_WINE_HWND_GDI_FRAME, 0, 0);
     if (!(swp_flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW))) WAYLAND_ActivateWindow(hwnd, NULL);
 }
 
@@ -1045,6 +1049,8 @@ BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffe
                 wayland_win_data_update_input(data, wayland_surface);
             wayland_surface_attach_shm(wayland_surface, shm_buffer, damage_region);
             wl_surface_commit(wayland_surface->wl_surface);
+            if (!wl_list_empty(&wayland_surface->hwnd_dmabuf_surfaces))
+                wayland_hwnd_gdi_update(wayland_surface);
             committed = TRUE;
         }
         else
