@@ -371,4 +371,11 @@ its internal provenance records the GFXReconstruct commit and per-file hashes.
 The ARM64 Bionic capture layer and conversion/info tools use process environment
 settings, avoiding Android-wide capture properties. Keep normal graphics layers
 and ICD selection intact when opting one owned application job into capture.
-Device capture, conversion and cleanup validation are pending.
+Xiaomi 15 fresh-instance diagnostics on 2026-10-20 verified the Bionic layer
+loading, bounded initialization capture, conversion to 3,415 parseable JSONL
+records and owned-task cleanup with integration `dbaabe6784bd6192e45e466b324f38a89ce2b53a`.
+The subsequent uncaptured task had neither the layer nor capture environment.
+The captured stream contains no queue submit/present; rendered frames and
+faithful replay remain unverified. This is diagnostic-tool validation, not
+Power BI or Steam gameplay acceptance. Exact device/APK/runtime evidence is
+recorded in the Android diagnostic notes.
