@@ -43,8 +43,8 @@ void editor_draw( ME_TextEditor *editor, HDC hDC, const RECT *update )
   ME_InitContext( &c, editor, hDC );
   if (TRACE_ON(richedit))
   {
-    RECT clip;
-    POINT viewport, origin;
+    RECT clip = {0};
+    POINT viewport = {0}, origin = {0};
     INT clip_type = GetClipBox( hDC, &clip );
     GetViewportOrgEx( hDC, &viewport );
     GetWindowOrgEx( hDC, &origin );
@@ -380,7 +380,7 @@ static void draw_text( ME_Context *c, ME_Run *run, int x, int y, BOOL selected, 
 
     if (TRACE_ON(richedit))
     {
-        RECT clip;
+        RECT clip = {0};
         TEXTMETRICW metrics = {0};
         LOGFONTW font = {0};
         INT clip_type = GetClipBox( c->hDC, &clip );
