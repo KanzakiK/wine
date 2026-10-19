@@ -37,7 +37,16 @@ This is the recommended branch. What it changes, by subsystem:
   collapsing into a plain arc, and `GetBounds()` bounds the same chain. Consecutive
   `DrawLine()` calls with a solid brush are batched into one upload and one draw per
   colour (Serum 2's 3D wavetable view draws 68 352 lines that way: 2D→3D toggle 1 060 ms
-  → about 80 ms). Bitmap brushes honour WRAP and MIRROR instead of degrading to CLAMP,
+  → about 80 ms). Consecutive solid-colour fills — `FillRectangle()`,
+  `FillRoundedRectangle()`, `FillEllipse()`, `FillGeometry()` — are batched the same way:
+  the antialiased fill meshes and the curve triangles of all of them go up in one vertex
+  buffer each and are drawn per colour run, instead of two uploads and two draws with a
+  full state setup per geometry, and `FillRoundedRectangle()` reuses one retained geometry
+  per device context (fill only, no outline tessellation) instead of building a factory
+  object per call. Cymatics Hotline draws its LCD dot matrix as 1 931 rounded rectangles
+  per frame: 13.9 → 25.1 fps on a 2-core laptop, `wined3d_cs` 57 % → 12 %, the main
+  thread at 65 % for nearly twice the frames, pixels identical except for 8-bit rounding
+  where fills of one colour overlap. Bitmap brushes honour WRAP and MIRROR instead of degrading to CLAMP,
   so a tiled background is tiled rather than one tile with its edge texels stretched
   (SynthEdit panels). `SetTarget(NULL)` drops the render target bindings, so a swapchain
   back buffer is not held across `ResizeBuffers()`. The scratch vertex and index buffers are dynamic and written through a
