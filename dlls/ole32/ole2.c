@@ -631,6 +631,7 @@ HRESULT WINAPI RevokeDragDrop(HWND hwnd)
   IStream *stream;
   IDropTarget *drop_target;
   HRESULT hr;
+  DWORD pid = 0;
 
   TRACE("(%p)\n", hwnd);
 
@@ -639,6 +640,11 @@ HRESULT WINAPI RevokeDragDrop(HWND hwnd)
     ERR("invalid hwnd %p\n", hwnd);
     return DRAGDROP_E_INVALIDHWND;
   }
+
+  /* Both the interface pointer and mapping handle belong to the owner. */
+  GetWindowThreadProcessId(hwnd, &pid);
+  if (pid != GetCurrentProcessId())
+    return RPC_E_WRONG_THREAD;
 
   /* no registration data */
   if (!(map = get_droptarget_handle(hwnd)))
