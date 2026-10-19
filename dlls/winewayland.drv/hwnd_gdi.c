@@ -582,7 +582,7 @@ static struct wayland_hwnd_dmabuf_buffer *wayland_hwnd_dmabuf_surface_import_buf
 {
     struct wayland_hwnd_dmabuf_buffer *buffer = NULL;
     hwnd_dmabuf_frame_desc_t pdesc, desc;
-    BOOL have_pending = FALSE;
+    BOOL have_pending = FALSE, reclaimed_channel = FALSE;
     int pfd = -1, fd, r;
 
     *created_buffer = FALSE;
@@ -592,6 +592,7 @@ static struct wayland_hwnd_dmabuf_buffer *wayland_hwnd_dmabuf_surface_import_buf
     wayland_hwnd_dmabuf_surface_claim_channel(surface);
     if (surface->channel_fd < 0) return surface->current;
 
+retry_channel:
     while ((r = wayland_hwnd_dmabuf_channel_recv_one(surface->channel_fd, &desc, &fd)) > 0)
     {
         if (desc.version != HWND_DMABUF_DESC_VERSION_V1 || !desc.width || !desc.height ||
@@ -618,6 +619,14 @@ static struct wayland_hwnd_dmabuf_buffer *wayland_hwnd_dmabuf_surface_import_buf
     {
         close(surface->channel_fd);
         surface->channel_fd = -1;
+        /* Resize can replace the server channel before this wake is handled.
+         * Read the replacement now: a static window may publish just one frame. */
+        if (!reclaimed_channel)
+        {
+            reclaimed_channel = TRUE;
+            wayland_hwnd_dmabuf_surface_claim_channel(surface);
+            if (surface->channel_fd >= 0) goto retry_channel;
+        }
         if (!have_pending)
             wayland_hwnd_dmabuf_drop_current_frame(surface, HWND_DMABUF_RELEASE_ORPHANED);
     }
