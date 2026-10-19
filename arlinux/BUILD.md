@@ -68,7 +68,9 @@ verifies the expected request fields and archive hashes; an incomplete upload
 never satisfies the dependency. Workflow-tail failures must be inspected separately
 from product validity. The `arlinux-v3-` compiler caches exclude duplicate PE
 output/source/tool trees: those are already retained in verified component capsules.
-Earlier caches may seed the first migration; subsequent saves contain the compact
+Earlier caches with unchanged path lists may seed the first migration. PE's
+reduced path list changes Actions' cache version, so its first migration can be
+cold despite legacy restore-key prefixes; subsequent saves contain the compact
 payload. This migration changes identities once and requires hosted verification;
 do not present the first migration build as steady-state incremental performance.
 FEX is pinned to an unmodified upstream FEX-Emu/FEX commit. The taowen/FEX
