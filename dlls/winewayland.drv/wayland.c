@@ -127,6 +127,11 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
                              version < 2 ? version : 2);
         xdg_wm_base_add_listener(process_wayland.xdg_wm_base, &xdg_wm_base_listener, NULL);
     }
+    else if (strcmp(interface, "xdg_activation_v1") == 0)
+    {
+        process_wayland.xdg_activation_v1 =
+            wl_registry_bind(registry, id, &xdg_activation_v1_interface, 1);
+    }
     else if (strcmp(interface, "zxdg_decoration_manager_v1") == 0)
     {
         process_wayland.decoration_manager =

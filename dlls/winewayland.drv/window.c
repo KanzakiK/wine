@@ -485,6 +485,62 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, UINT swp_flags, BOOL shaped, const str
     return TRUE;
 }
 
+static void activation_token_done(void *context, struct xdg_activation_token_v1 *token,
+                                  const char *value)
+{
+    struct wayland_win_data *data = wayland_win_data_get(context);
+
+    if (data)
+    {
+        if (data->activation_token == token)
+        {
+            data->activation_token = NULL;
+            if (data->wayland_surface && wayland_surface_is_toplevel(data->wayland_surface) &&
+                (NtUserGetWindowLongW(data->hwnd, GWL_STYLE) & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE)
+                xdg_activation_v1_activate(process_wayland.xdg_activation_v1, value,
+                                            data->wayland_surface->wl_surface);
+        }
+        wayland_win_data_release(data);
+    }
+    /* The callback owns the token even if its HWND was destroyed or reused.
+     * Never retain window-data or surface pointers across this async reply. */
+    xdg_activation_token_v1_destroy(token);
+    wl_display_flush(process_wayland.wl_display);
+}
+
+static const struct xdg_activation_token_v1_listener activation_token_listener =
+{
+    activation_token_done
+};
+
+void WAYLAND_ActivateWindow(HWND hwnd, HWND previous)
+{
+    struct wayland_win_data *data;
+    uint32_t serial;
+
+    if (!process_wayland.xdg_activation_v1 || wayland_keyboard_get_focused_hwnd() == hwnd) return;
+    if (!(data = wayland_win_data_get(hwnd))) return;
+    if (!data->activation_token && data->wayland_surface &&
+        wayland_surface_is_toplevel(data->wayland_surface) &&
+        (NtUserGetWindowLongW(hwnd, GWL_STYLE) & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE)
+    {
+        data->activation_token = xdg_activation_v1_get_activation_token(process_wayland.xdg_activation_v1);
+        if (data->activation_token)
+        {
+            xdg_activation_token_v1_add_listener(data->activation_token, &activation_token_listener, hwnd);
+            if (process_name) xdg_activation_token_v1_set_app_id(data->activation_token, process_name);
+            serial = InterlockedCompareExchange(&process_wayland.input_serial, 0, 0);
+            pthread_mutex_lock(&process_wayland.seat.mutex);
+            if (serial && process_wayland.seat.wl_seat)
+                xdg_activation_token_v1_set_serial(data->activation_token, serial, process_wayland.seat.wl_seat);
+            pthread_mutex_unlock(&process_wayland.seat.mutex);
+            xdg_activation_token_v1_commit(data->activation_token);
+            wl_display_flush(process_wayland.wl_display);
+        }
+    }
+    wayland_win_data_release(data);
+}
+
 /***********************************************************************
  *           WAYLAND_WindowPosChanged
  */
@@ -534,6 +590,7 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
 
     if (owner_data) wayland_win_data_release(owner_data);
     wayland_win_data_release(data);
+    if (!(swp_flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW))) WAYLAND_ActivateWindow(hwnd, NULL);
 }
 
 static void wayland_configure_window(HWND hwnd)

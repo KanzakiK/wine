@@ -36,6 +36,7 @@
 #include "viewporter-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
+#include "xdg-activation-v1-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "wlr-data-control-unstable-v1-client-protocol.h"
 #include "xdg-toplevel-icon-v1-client-protocol.h"
@@ -175,6 +176,7 @@ struct wayland
     struct zxdg_output_manager_v1 *zxdg_output_manager_v1;
     struct wl_compositor *wl_compositor;
     struct xdg_wm_base *xdg_wm_base;
+    struct xdg_activation_v1 *xdg_activation_v1;
     struct zxdg_decoration_manager_v1 *decoration_manager;
     struct wl_shm *wl_shm;
     struct wp_viewporter *wp_viewporter;
@@ -392,6 +394,7 @@ struct wayland_win_data
     BOOL input_dirty;
     /* wayland surface (if any) for this window */
     struct wayland_surface *wayland_surface;
+    struct xdg_activation_token_v1 *activation_token;
     /* wayland client surface (if any) for this window */
     struct wayland_client_surface *client_surface;
     /* window rects, relative to parent client area */
@@ -482,6 +485,7 @@ void WAYLAND_SetLayeredWindowAttributes(HWND hwnd, COLORREF key, BYTE alpha, DWO
 void WAYLAND_SetWindowIcons(HWND hwnd, HICON icon, const ICONINFO *ii, HICON icon_small, const ICONINFO *ii_small);
 void WAYLAND_SetWindowStyle(HWND hwnd, INT offset, STYLESTRUCT *style);
 void WAYLAND_SetWindowText(HWND hwnd, LPCWSTR text);
+void WAYLAND_ActivateWindow(HWND hwnd, HWND previous);
 LRESULT WAYLAND_SysCommand(HWND hwnd, WPARAM wparam, LPARAM lparam, const POINT *pos);
 void WAYLAND_UpdateLayeredWindow(HWND hwnd, BYTE alpha, UINT flags);
 UINT WAYLAND_UpdateDisplayDevices(const struct gdi_device_manager *device_manager, void *param);
