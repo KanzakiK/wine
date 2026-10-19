@@ -259,9 +259,7 @@ def fetch_product(reference, output):
             output.mkdir(parents=True, exist_ok=True)
             files = {}
             object_cache = directory.parent/'objects'
-            for item in record['artifacts']:
-                if item['role'] not in ('runtime', 'manifest'):
-                    continue
+            def fetch_artifact(item):
                 name = item['name']
                 if Path(name).name != name or '\\' in name or ':' in name:
                     raise ValueError('Unsafe product artifact name')
@@ -271,7 +269,12 @@ def fetch_product(reference, output):
                     raise ValueError('Product artifact size mismatch')
                 import shutil
                 shutil.copyfile(cached, output/name)
-                files[name] = item['sha256']
+                return name, item['sha256']
+            artifacts = [item for item in record['artifacts'] if item['role'] in ('runtime', 'manifest')]
+            if len({item['name'] for item in artifacts}) != len(artifacts):
+                raise ValueError('Duplicate product artifact name')
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                files.update(pool.map(fetch_artifact, artifacts))
             from runtime_distribution import INDEX, read_index
             read_index(output/INDEX)
             (output/'github-component.json').write_text(json.dumps(record, indent=2)+'\n')
