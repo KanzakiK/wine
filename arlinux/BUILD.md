@@ -50,6 +50,27 @@ and toolchains. A forced rerun verifies outputs before reusing a published capsu
 Sources are fixed Git submodules. Steamworks owns its committed frontend fixes,
 Windows integration owns accessibility/tray, and the audio fork pins its patched
 PulseAudio fork. No Steam Proton distribution is built or patched.
+
+Recipe boundaries are declared in `component_inputs.py`. Its declaration tables
+contribute their resolved per-stage paths and tool pins, not the entire table's
+text. Shared assembly recipes hash the selected Python functions, imports and
+module-level initialization; compiler stages do not consume unrelated assembly
+functions. Keep component source dependencies declared when adding a recipe.
+Both hosted request identities and internal stage receipts use the scoped recipe
+inputs. Changes to the common compiler engine still invalidate affected stages.
+Final distribution publication and receipt writing live in `runtime_distribution.py`,
+so changing that product's packaging does not change the compiler engine.
+
+The coordinator prioritizes the longest remaining dependency chain among ready
+tasks. A checksum-bound `component.json` published after all outputs releases
+dependents immediately; optional workflow cache saving may finish later. It still
+verifies the expected request fields and archive hashes; an incomplete upload
+never satisfies the dependency. Workflow-tail failures must be inspected separately
+from product validity. The `arlinux-v3-` compiler caches exclude duplicate PE
+output/source/tool trees: those are already retained in verified component capsules.
+Earlier caches may seed the first migration; subsequent saves contain the compact
+payload. This migration changes identities once and requires hosted verification;
+do not present the first migration build as steady-state incremental performance.
 FEX is pinned to an unmodified upstream FEX-Emu/FEX commit. The taowen/FEX
 fork hosts standalone CI only; do not maintain translator or ARM64EC behavior
 patches there. Keep product integration and diagnostic recipes outside FEX.

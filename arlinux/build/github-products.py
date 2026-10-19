@@ -176,6 +176,12 @@ class Coordinator:
                 if status!=previous:
                     print(stage+': '+status+' '+run['url'],flush=True)
                     previous=status
+                if run['status'] != 'queued':
+                    result = self.existing(request)
+                    if result:
+                        print('OK verified publication '+repository+'/'+stage+
+                              '; workflow cache cleanup may still be running', flush=True)
+                        return result
                 if run['status']=='completed':
                     if run['conclusion']!='success':
                         raise RuntimeError(stage+' failed: '+run['url'])
@@ -199,9 +205,20 @@ class Coordinator:
         completed={}
         pending=set(required)
         active={}
+        consumers = {name: [] for name in required}
+        for name in required:
+            for dependency in self.plan['stages'][name]['dependencies']:
+                consumers[dependency].append(name)
+        ranks = {}
+        def rank(name):
+            if name not in ranks:
+                ranks[name] = 1 + max((rank(child) for child in consumers[name]), default=0)
+            return ranks[name]
+        for name in required:
+            rank(name)
         with ThreadPoolExecutor(max_workers=parallel) as executor:
             while pending or active:
-                for stage in sorted(pending):
+                for stage in sorted(pending, key=lambda name: (-ranks[name], name)):
                     dependencies=self.plan['stages'][stage]['dependencies']
                     if all(name in completed for name in dependencies) and len(active)<parallel:
                         future=executor.submit(self.component,stage,[completed[n] for n in dependencies])

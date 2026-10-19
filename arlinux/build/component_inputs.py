@@ -1,4 +1,5 @@
 """Content identities and bootstrap requirements for the Wine component graph."""
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -15,14 +16,15 @@ SOURCES = {
     'wine-pe': (),
     'fex': ('arlinux/build/fex-windows.sh', 'arlinux/components/FEX'),
     'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/patches/dxvk-optional-pipeline-library.patch'),
-    'wine-pe-package': ('arlinux/package-wine-pe.py', 'arlinux/wine_pe_debug.py'),
+    'wine-pe-package': ('arlinux/package-wine-pe.py', 'arlinux/wine_pe_debug.py', 'arlinux/build/runtime_assembly.py'),
     'wine-tls': ('arlinux/components/bionic-deps',),
     'wine-graphics': ('arlinux/build/wine-bionic-graphics.sh', 'arlinux/components/mesa',
                       'arlinux/components/libxshmfence', 'arlinux/components/libhybris'),
     'wine-vulkan': ('arlinux/components/libhybris', 'arlinux/components/android-headers', 'arlinux/patches'),
     'wine-bionic-compile': ('@wine', *PE, 'arlinux/build/wine-bionic.sh', 'arlinux/components/FEX'),
     'wine-bionic': ('arlinux/package-wine-bionic.py', 'arlinux/wine_pe_debug.py',
-                    'arlinux/wine_fonts.py', 'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB'),
+                    'arlinux/wine_fonts.py', 'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB',
+                    'arlinux/build/runtime_assembly.py'),
     'steamworks': ('arlinux/components/steamworks',),
     'windows-accessibility': ('arlinux/components/windows-integration',),
     'windows-tray': ('arlinux/components/windows-integration',),
@@ -40,9 +42,33 @@ for name in ('bionic-deps', 'bionic-x11', 'wine-pulse', 'wine-tls', 'wine-graphi
     RESOURCES[name] = ('ndk',)
 RESOURCES.update({'wine-pe-package': ('addons',), 'wine-bionic-compile': ('mingw', 'ndk'), 'wine-bionic': ('ndk',),
                   'runtime-support': (), 'wine-product': (), 'wine-capture': ('ndk',), 'windows-fonts': ()})
-SHARED = ('arlinux/build/component_inputs.py', 'arlinux/build/github-component.py',
+SHARED = ('arlinux/build/github-component.py',
           'arlinux/build/wine-pipeline.py', 'arlinux/build/pipeline_cache.py',
           'arlinux/build/wine_graph.py', 'arlinux/build.sh')
+ASSEMBLY_CODE = {
+    'wine-pe-package': ('package_pe',),
+    'wine-bionic': ('package_bionic',),
+    'runtime-support': ('assemble_support', 'cached_support', 'build_target'),
+    'wine-product': ('assemble_product', 'cached_product', 'build_target'),
+}
+
+
+def implementation(source, names=None):
+    """Hash declared Python recipes and imports, independent of other recipes.
+
+    The input engine's declaration tables are represented by their resolved
+    per-stage values below, not by unrelated stages' table entries.
+    """
+    tree = ast.parse(source)
+    definitions = {node.name: node for node in tree.body
+                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    selected = sorted(definitions) if names is None else names
+    nodes = [node for node in tree.body if
+             (not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+              if names is not None else isinstance(node, (ast.Import, ast.ImportFrom)))]
+    nodes += [definitions[name] for name in selected]
+    return hashlib.sha256(ast.dump(ast.Module(body=nodes, type_ignores=[]),
+                                  include_attributes=False).encode()).hexdigest()
 
 
 def core_path(name):
@@ -65,6 +91,13 @@ def tree_entries(repo, revision, paths=()):
 def source_inputs(repo, revision, stage, plan):
     paths = SOURCES[stage]
     selected = tree_entries(repo, revision, (*SHARED, *(p for p in paths if p != '@wine')))
+    def source(path):
+        return subprocess.check_output(['git', '-C', str(repo), 'show', revision+':'+path]).decode()
+    selected['arlinux/build/component_inputs.py'] = implementation(source('arlinux/build/component_inputs.py'))
+    selected['declaredPaths'] = paths
+    if stage in ASSEMBLY_CODE:
+        path = 'arlinux/build/runtime_assembly.py'
+        selected[path] = implementation(source(path), ASSEMBLY_CODE[stage])
     if '@wine' in paths:
         selected.update({n: v for n, v in tree_entries(repo, revision).items() if core_path(n)})
     lock = subprocess.check_output(['git', '-C', str(repo), 'show', revision+':arlinux/build/github-inputs.json'])

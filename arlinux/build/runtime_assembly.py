@@ -4,6 +4,28 @@ from pathlib import Path, PurePosixPath
 import shutil
 
 from pipeline_cache import digest, inventory, build_references, support_sources
+from component_inputs import implementation
+
+
+def package_pe(out, framework, wine, fex, dxvk, addons, invoke):
+    out.mkdir()
+    invoke('python3', 'arlinux/package-wine-pe.py', '--wine', wine, '--fex', fex,
+           '--dxvk', dxvk, '--addons', addons, '--output', out/'runtime')
+
+
+def package_bionic(out, framework, compiled, pe, tls, pulse, graphics, adapter, dxvk, paths, invoke):
+    out.mkdir()
+    invoke('python3', 'arlinux/package-wine-bionic.py', '--core', compiled/'core',
+           '--fex', compiled/'fex', '--native-prefix', paths['bionicPrefix'],
+           '--dependency-prefix', tls/'prefix', '--dependency-prefix', pulse/'work/prefix',
+           '--graphics-prefix', graphics/'prefix',
+           '--ndk', paths['ndk']/'toolchains/llvm/prebuilt/linux-x86_64',
+           '--pe-runtime', pe, '--output', out/'runtime',
+           '--wine-source-archive', compiled/'wine-source.tar.gz',
+           '--vulkan-driver', 'system', '--dxvk-runtime', dxvk,
+           '--system-vulkan-adapter', adapter/'libvulkan_android_desktop.so')
+    for source in pe.parent.glob('pe-*-source.tar.gz'):
+        shutil.copyfile(source, out/source.name)
 
 
 def assemble_support(out, framework, bridge, observer, tray, invoke):
@@ -53,7 +75,8 @@ def assemble_product(out, framework, base, support, invoke):
 
 
 def cached_support(cache, framework, bridge, observer, tray, invoke):
-    return cache.stage('runtime-support', dict(engine=digest(__file__),
+    return cache.stage('runtime-support', dict(engine=implementation(Path(__file__).read_text(),
+        ('assemble_support', 'cached_support', 'build_target')),
         sources=support_sources(framework),
         dependencies={name: cache.records[name] for name in
                       ('steamworks', 'windows-accessibility', 'windows-tray')}),
@@ -61,7 +84,8 @@ def cached_support(cache, framework, bridge, observer, tray, invoke):
 
 
 def cached_product(cache, framework, base, support, invoke):
-    return cache.stage('wine-product', dict(engine=digest(__file__),
+    return cache.stage('wine-product', dict(engine=implementation(Path(__file__).read_text(),
+        ('assemble_product', 'cached_product', 'build_target')),
         distribution=inventory(framework/'arlinux/build/runtime_distribution.py'),
         packager=inventory(framework/'arlinux/package-wine-bionic.py'),
         dependencies={name: cache.records[name] for name in ('wine-bionic', 'runtime-support')}),

@@ -11,7 +11,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from wine_graph import ComponentCache, ComponentComplete, required_stages
 from pipeline_cache import Cache, digest, inventory, key, run, source_state, support_sources
-from component_inputs import core_path, RESOURCES
+from component_inputs import core_path, RESOURCES, source_inputs
+import runtime_assembly as assembly
 
 def build_wine(cache, framework, android, paths, common, invoke, env):
     """Build the complete standalone Wine chain, including the Steamworks ABI inputs."""
@@ -34,7 +35,8 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
     def stage(name, command, dependencies=()):
         if not cache.selected(name):
             return None
-        inputs = {k: v for k, v in common.items() if k not in ('sources', 'wineSources', 'pulseRecipe')}
+        inputs = {k: v for k, v in common.items() if k not in ('sources', 'wineSources', 'pulseRecipe', 'engines')}
+        inputs['engine'] = common['engines'][name]
         inputs['toolchain'] = {n: common['toolchain'][n] for n in RESOURCES[name]}
         inputs['sources'] = {p: source_state(framework/p) if (framework/p).is_dir() else inventory(framework/p)
                              for p in recipes.get(name, recipes['wine-pe'])}
@@ -54,7 +56,8 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
         out.mkdir()
         env.update(ARLINUX_PULSE_WORK=str(out / 'work'), ARLINUX_PULSE_OUTPUT=str(out / 'android'))
         try:
-            invoke('bash', android / 'arlinux/components/pulseaudio-android/arlinux/build.sh', android, key(common))
+            invoke('bash', android / 'arlinux/components/pulseaudio-android/arlinux/build.sh', android,
+                   common['engines']['wine-pulse'])
         finally:
             env.pop('ARLINUX_PULSE_WORK', None)
             env.pop('ARLINUX_PULSE_OUTPUT', None)
@@ -82,11 +85,8 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
     fex = stage('fex', lambda out: invoke('bash', 'arlinux/build/fex-windows.sh', paths['mingw'], out))
     dxvk = stage('dxvk', lambda out: invoke('bash', 'arlinux/build/dxvk-windows.sh', paths['mingw'], out))
 
-    def package_pe(out):
-        out.mkdir()
-        invoke('python3', 'arlinux/package-wine-pe.py', '--wine', wine, '--fex', fex,
-               '--dxvk', dxvk, '--addons', paths['addons'], '--output', out / 'runtime')
-    pe_stage = stage('wine-pe-package', package_pe, ('wine-pe', 'fex', 'dxvk'))
+    pe_stage = stage('wine-pe-package', lambda out: assembly.package_pe(out, framework,
+        wine, fex, dxvk, paths['addons'], invoke), ('wine-pe', 'fex', 'dxvk'))
     pe = pe_stage / 'runtime' if pe_stage else None
     tls = stage('wine-tls', lambda out: invoke('bash', 'arlinux/components/bionic-deps/build-tls.sh', paths['ndk'], out))
     graphics = stage('wine-graphics', lambda out: invoke('bash', 'arlinux/build/wine-bionic-graphics.sh',
@@ -104,20 +104,9 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
         paths['mingw'], paths['ndk'], paths['bionicPrefix'], framework / 'arlinux/components/FEX', out),
         ('wine-pe-aarch64', 'bionic-deps', 'wine-tls', 'wine-pulse', 'wine-graphics'))
 
-    def native(out):
-        out.mkdir()
-        invoke('python3', 'arlinux/package-wine-bionic.py', '--core', compiled / 'core',
-               '--fex', compiled / 'fex', '--native-prefix', paths['bionicPrefix'],
-               '--dependency-prefix', tls / 'prefix', '--dependency-prefix', pulse / 'work/prefix',
-               '--graphics-prefix', graphics / 'prefix',
-               '--ndk', paths['ndk'] / 'toolchains/llvm/prebuilt/linux-x86_64',
-               '--pe-runtime', pe, '--output', out / 'runtime',
-               '--wine-source-archive', compiled / 'wine-source.tar.gz',
-               '--vulkan-driver', 'system', '--dxvk-runtime', dxvk,
-               '--system-vulkan-adapter', adapter / 'libvulkan_android_desktop.so')
-        for source in pe.parent.glob('pe-*-source.tar.gz'):
-            shutil.copyfile(source, out / source.name)
-    native = stage('wine-bionic', native, ('wine-bionic-compile', 'wine-pe-package', 'wine-vulkan'))
+    native = stage('wine-bionic', lambda out: assembly.package_bionic(out, framework,
+        compiled, pe, tls, pulse, graphics, adapter, dxvk, paths, invoke),
+        ('wine-bionic-compile', 'wine-pe-package', 'wine-vulkan'))
     if compiled is not None and wine is not None:
         paths.update(wineSource=compiled / 'source', wineBuild=compiled / 'core',
                      wineTools=tools, wineImportLibs=wine / 'files/lib/wine')
@@ -176,7 +165,10 @@ def main():
         resources = {r for name in cache.required for r in RESOURCES[name]}
         toolchain = {name: inventory(paths[name]) for name in resources}
         sources = source_state(framework)
-        common = dict(engine=digest(__file__), config=config, sources=sources,
+        revision = subprocess.check_output(['git', '-C', str(framework), 'rev-parse', 'HEAD'], text=True).strip()
+        from wine_graph import PLAN
+        engines = {name: source_inputs(framework, revision, name, PLAN)['sourceSha256'] for name in cache.required}
+        common = dict(engines=engines, config=config, sources=sources,
                       wineSources={n: v for n, v in sources.items() if core_path(n)}, toolchain=toolchain)
         common['hostTools'] = {name: subprocess.check_output([name, '--version'], text=True)
                                for name in ('gcc', 'g++', 'make', 'cmake', 'ninja', 'meson', 'pkg-config')}
@@ -186,41 +178,32 @@ def main():
             android / 'toolchain.json', android / 'arlinux/components/pulseaudio-android')} if cache.selected('wine-pulse') else {}
         invoke = lambda *command: run(*command, cwd=framework, env=env)
         base = build_wine(cache, framework, android, paths, common, invoke, env)
-        def helper_inputs(*sources, **dependencies):
+        def helper_inputs(stage, *sources, **dependencies):
             inputs = {name: value for name, value in common.items()
-                      if name not in ('sources', 'wineSources', 'pulseRecipe')}
+                      if name not in ('sources', 'wineSources', 'pulseRecipe', 'engines')}
+            inputs['engine'] = engines[stage]
             inputs['sources'] = {name: inventory(framework / name) for name in sources}
             inputs['dependencies'] = dependencies
             inputs['toolchain'] = {'mingw': common['toolchain']['mingw']}
             return inputs
         bridge = observer = tray = None
         if cache.selected('steamworks'):
-            bridge = cache.stage('steamworks', helper_inputs('arlinux/components/steamworks', 'arlinux/components/steamworks/build.sh',
+            bridge = cache.stage('steamworks', helper_inputs('steamworks', 'arlinux/components/steamworks', 'arlinux/components/steamworks/build.sh',
                 wine=cache.records['wine-bionic-compile'], imports=cache.records['wine-pe']), lambda out: invoke('bash', 'arlinux/components/steamworks/build.sh',
                     paths['wineSource'], paths['wineBuild'], paths['wineTools'], paths['mingw'], out))
         if cache.selected('windows-accessibility'):
-            observer = cache.stage('windows-accessibility', helper_inputs('arlinux/components/windows-integration/accessibility',
+            observer = cache.stage('windows-accessibility', helper_inputs('windows-accessibility', 'arlinux/components/windows-integration/accessibility',
                 'arlinux/components/windows-integration/build-accessibility.sh'), lambda out: invoke(
                 'bash', 'arlinux/components/windows-integration/build-accessibility.sh', paths['mingw'], out))
         if cache.selected('windows-tray'):
-            tray = cache.stage('windows-tray', helper_inputs('arlinux/components/windows-integration/tray',
+            tray = cache.stage('windows-tray', helper_inputs('windows-tray', 'arlinux/components/windows-integration/tray',
                 'arlinux/components/windows-integration/build-tray.sh'), lambda out: invoke(
                 'bash', 'arlinux/components/windows-integration/build-tray.sh', paths['mingw'], out))
         import runtime_assembly as assembly
         support = assembly.cached_support(cache, framework, bridge, observer, tray, invoke)
         final = assembly.cached_product(cache, framework, base, support, invoke)
-        output = framework / 'build/artifacts/wine'
-        output.mkdir(parents=True, exist_ok=True)
-        for source in final.iterdir():
-            if source.is_file():
-                shutil.copyfile(source, output / source.name)
-        from runtime_distribution import INDEX
-        target = output / INDEX
-        record = dict(format=1, wineManifestSha256=digest(target), stages=cache.records)
-        pending = output / 'runtime.json.part'
-        pending.write_text(json.dumps(record, indent=2) + '\n')
-        pending.replace(output / 'runtime.json')
-        print('Independent Wine runtime ready: ' + str(target), flush=True)
+        from runtime_distribution import finish
+        finish(final, framework/'build/artifacts/wine', cache.records)
 
 
 if __name__ == '__main__':

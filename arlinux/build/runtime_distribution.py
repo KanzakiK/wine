@@ -2,13 +2,78 @@
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import tarfile
+import tempfile
 
 COMPONENT_TAG = 'arlinux-wine-components'
 COMPONENT_BASE = 'https://github.com/taowen/wine/releases/download/'+COMPONENT_TAG+'/'
 INDEX = 'arlinux-wine-runtime.json'
+
+
+def finish(final, output, records):
+    output.mkdir(parents=True, exist_ok=True)
+    for source in final.iterdir():
+        if source.is_file():
+            shutil.copyfile(source, output/source.name)
+    target = output/INDEX
+    pending = output/'runtime.json.part'
+    pending.write_text(json.dumps(dict(format=1, wineManifestSha256=sha(target), stages=records), indent=2)+'\n')
+    pending.replace(output/'runtime.json')
+    print('Independent Wine runtime ready: '+str(target), flush=True)
+
+
+def publish_distribution(data, record, final):
+    """The completion marker follows every immutable object upload."""
+    index = read_index(final/INDEX)
+    repository = os.environ['GITHUB_REPOSITORY']
+    tag = 'arlinux-wine-product-'+data['identity'][:24]
+    def run(*args):
+        subprocess.run(list(map(str, args)), check=True)
+    def release_assets(name):
+        result = subprocess.run(['gh', 'api', f'repos/{repository}/releases/tags/{name}'],
+                                capture_output=True, text=True)
+        if result.returncode:
+            run('gh', 'release', 'create', name, '--repo', repository, '--prerelease',
+                '--title', name, '--notes', 'Immutable ARLinux build inputs; not a latest runtime promotion.')
+            return {}
+        return {asset['name']: asset for asset in json.loads(result.stdout)['assets']}
+    objects, assets = release_assets(COMPONENT_TAG), release_assets(tag)
+    def upload(path, name, release, existing):
+        checksum, size = sha(path), path.stat().st_size
+        if name in existing:
+            prior = existing[name]
+            if prior.get('digest') != 'sha256:'+checksum or prior['size'] != size:
+                raise ValueError('Immutable product asset conflicts: '+name)
+        else:
+            with tempfile.TemporaryDirectory(prefix='product-asset-') as directory:
+                staged = Path(directory)/name
+                shutil.copyfile(path, staged)
+                run('gh', 'release', 'upload', release, '--repo', repository, staged)
+            existing[name] = dict(digest='sha256:'+checksum, size=size)
+        return checksum, size
+    component_files = {item['file'] for item in index['components']}
+    record['artifacts'], record['parts'] = [], []
+    for path in sorted(final.iterdir()):
+        if not path.is_file():
+            continue
+        role = 'runtime' if path.name in component_files else 'manifest' if path.name == INDEX else 'source'
+        if role == 'source':
+            name, release, existing = 'source-'+sha(path)+'.tar.gz', COMPONENT_TAG, objects
+        elif role == 'runtime':
+            name, release, existing = path.name, COMPONENT_TAG, objects
+        else:
+            name, release, existing = path.name, tag, assets
+        checksum, size = upload(path, name, release, existing)
+        record['artifacts'].append(dict(name=path.name, sha256=checksum, bytes=size, role=role,
+            url=f'https://github.com/{repository}/releases/download/{release}/{name}'))
+    manifest = final.parent/'wine-component.json'
+    manifest.write_text(json.dumps(record, sort_keys=True, indent=2)+'\n')
+    upload(manifest, 'component.json', tag, assets)
 
 
 def sha(path):
