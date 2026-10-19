@@ -661,6 +661,25 @@ This is the recommended branch. What it changes, by subsystem:
   after the drag went through the held DC at the old origin; with the fresh DC the image
   follows the frame and nothing is left behind. The held DC stays as it is, a GL context
   that is not forced to GDI is bound to it
+- **opengl32 (WoW64)**: the Vulkan mapping behind a persistently mappable GL buffer is kept
+  for the lifetime of the buffer instead of being created and destroyed around every
+  `glMapBufferRange()`/`glUnmapBuffer()` pair. 32-bit wined3d does not keep its buffer
+  objects mapped (`wined3d_map_persistent()` is false on 32-bit), so every upload maps and
+  unmaps the 64 MiB allocator chunk; on WoW64 each of these went through `vkMapMemory2KHR`
+  (placed) and `vkUnmapMemory2KHR`, which the NVIDIA driver implements as a full
+  `mmap`/`munmap` of the chunk plus control ioctls. vatSys (PE32, SharpDX Direct2D) made
+  ~1000 such cycles per second, the `wined3d_cs` thread spent 85 % of its time in them, the
+  radar map only appeared after a window move and zooming, resizing and the whole UI lagged
+  by seconds (WineHQ bug 60354 reports the same for 32-bit games). With the mapping retained
+  the chunk is mapped once: `mmap` 5760 → 206 and `ioctl` 17 861 → 2440 in a 3 s sample of
+  the CS thread, no further `/dev/nvidiactl` opens. The 32-bit reservation of the address
+  range was already kept across unmaps, so this costs no additional address space; the
+  retained mappings show up in the process RSS (13 chunks, ~830 MiB for vatSys). The
+  `VkApplicationInfo` of the Vulkan instance that this path creates now carries the right
+  `sType` and `apiVersion = VK_API_VERSION_1_0`; the loader no longer prints
+  `VkInstanceCreateInfo::pApplicationInfo::apiVersion has value of 0` at every GL context
+  creation. Mesa drivers were never affected (upstream MR 11579 adds a driver-side mapping
+  extension for them); upstream 11.20 still re-creates the mapping on every cycle
 - **ole32**: RevokeDragDrop no longer touches drop targets owned by other processes
   (fixes a crash when closing plugin windows)
 - **crypt32**: verifying a signature hashes the signed attributes as they are stored in
