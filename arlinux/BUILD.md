@@ -252,3 +252,22 @@ runtime releases. Historical releases are separate from local cache cleanup.
 The optional diagnostics product builds the standalone Windows observer and probe on
 its own x64 runner and carries the Wine-owned guest capture helper. The Windows
 host diagnostic command downloads this product; it never invokes WSL.
+
+## Pending asynchronous DComp readback validation (2026-10-19)
+
+A Xiaomi 15 Power BI/WebView2 diagnostic launch with the ordinary D3D11 backend
+reported GPU composition and DirectComposition enabled. Its GPU watchdog then
+terminated stalled GPU processes. Temporarily disabling only that watchdog for
+stack collection retained the blocked process; this is not a shipping option.
+CDP SystemInfo.getProcessInfo identified Wine GPU PID 0x290, avoiding guesses
+from child ordering or Android PIDs. WineDbg captured the renderer thread in
+DXVK RecursiveSpinlock::lock (d3d11 RVA 0x1d7fc0). The lock at 0xa56d3c was
+owned by Wine TID 0x67c. That thread's stack contained DComp readback followed
+by D3D11ImmediateContext::MapImage/WaitForResource and a resource wait.
+The proposed generic change submits one staging copy, flushes it, polls Map
+with D3D11_MAP_FLAG_DO_NOT_WAIT, and keeps the previous pixels while busy.
+Pending state follows the retained texture cache and resets on resize.
+Fresh-instance application and game acceptance is still pending. Do not
+publish latest based on this diagnostic or a successful build alone.
+Evidence: Android checkout build/validation-20261019/mouse-game/
+pbi-gpu-real-stacks.txt, pbi-gpu-locks.txt, webview-watchdog-native-stack.txt.
