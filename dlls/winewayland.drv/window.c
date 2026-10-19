@@ -428,6 +428,11 @@ static BOOL is_window_managed(HWND hwnd, UINT swp_flags, BOOL fullscreen)
         !(ex_style & WS_EX_APPWINDOW) && !(style & (WS_CAPTION | WS_THICKFRAME)) &&
         NtUserGetWindowRelative(hwnd, GW_OWNER))
         return FALSE;
+    /* Losing activation does not change a visible window's role. Replacing
+     * its xdg_toplevel with a subsurface destroys compositor state and can
+     * hide a live modal dialog while its owner remains disabled. Structural
+     * child/auxiliary style changes above still allow reclassification. */
+    if ((style & WS_VISIBLE) && is_managed(hwnd)) return TRUE;
     /* activated windows are managed */
     if (!(swp_flags & (SWP_NOACTIVATE|SWP_HIDEWINDOW))) return TRUE;
     if (hwnd == get_active_window()) return TRUE;
