@@ -10,6 +10,22 @@ an enabled child from its toplevel's count when destroyed. Validate held WASD
 with the normal IBus Wayland bridge running, and candidate text input in an
 editor. Stopping IBus is only a diagnostic isolation step, never acceptance.
 
+Device validation on 2026-10-19 used Xiaomi 15 (`3fad759`), package
+`io.taowen.arlinux.dev`, newly installed instance `yibu-6fe7ad34`, and framework
+`b946e9561247a621a8baf823e511655ef81bc803`. The tested runtime archive SHA-256
+was `5095b708bad116de4612f34ab437e9c860d8fe90e64cb80c5eb47ff7c4f003c7`.
+With normal IBus running, LivingBattle entered 3D gameplay; overlay forward
+movement reduced the target distance from 44 to 28 metres, releasing stopped
+movement, and left/right/back/diagonal movement worked. WeChat IME candidate
+selection entered `你好` in Notepad, confirmed through the existing MSAA observer.
+The game exited, but the Steam facade remained alive during observation;
+successful game relaunch and complete task cleanup were not verified. These
+results establish the input fix, not complete game compatibility or approval
+to publish `latest`. Later source commits require their own exact-product
+validation. Evidence is retained in the Android checkout under
+`build/validation-20261019/steam-launch`, including `wasd-fixed-acceptance`,
+`wasd-gameplay-*.png` and `ime-fixed-notepad-msaa.txt`.
+
 This fork owns Bionic Wine integration, its component dependency graph,
 hosted dispatch, assembly, source archives and the `latest` publisher.
 The Linux entry is `./arlinux/build.sh`. Android's `arlinux/build.ps1 wine`
