@@ -12,7 +12,8 @@ output="$(realpath -m "$2")"
     || { echo 'LLVM-MinGW with ARM64X support (LLVM 23+) is required.' >&2; exit 2; }
 revision=5d0ae431fdace5c9ac5cf5b0dde847af67ae446f
 patch_file="$repo/arlinux/patches/dxvk-optional-pipeline-library.patch"
-key="$(printf '%s\n' "$revision" "$compiler" "$(sha256sum "$patch_file")" \
+link_extra="['-Wl,--no-insert-timestamp']"
+key="$(printf '%s\n' "$revision" "$compiler" "$link_extra" "$(sha256sum "$patch_file")" \
     "$("$compiler/aarch64-w64-mingw32-clang" --version)" | sha256sum | cut -c1-24)"
 cache="$repo/build/dxvk-windows/$key"
 mkdir -p "$cache" "$output"
@@ -38,6 +39,11 @@ for arch in aarch64 x86_64 i386; do
         target=i686
         family=x86
     fi
+    if [[ "$extra" == '[]' ]]; then
+        link_args="$link_extra"
+    else
+        link_args="${extra%]}, '-Wl,--no-insert-timestamp']"
+    fi
     cross="$cache/$arch.ini"
     if [[ ! -f "$cross" ]]; then
     cat > "$cross" <<EOF
@@ -50,8 +56,8 @@ windres = '$compiler/$target-w64-mingw32-windres'
 [built-in options]
 c_args = $extra
 cpp_args = $extra
-c_link_args = $extra
-cpp_link_args = $extra
+c_link_args = $link_args
+cpp_link_args = $link_args
 [host_machine]
 system = 'windows'
 cpu_family = '$family'

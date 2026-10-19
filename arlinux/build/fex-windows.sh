@@ -9,6 +9,9 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source="$repo/arlinux/components/FEX"
 output="$(realpath -m "$2")"
 export PATH="$(realpath "$1"):$PATH"
+# CMake appends LDFLAGS to the toolchain's initial linker flags. Preserve its
+# static/alignment options while keeping unchanged DLLs content-addressable.
+export LDFLAGS="${LDFLAGS:-} -Wl,--no-insert-timestamp"
 mkdir -p "$output"
 for entry in arm64ec:arm64ecfex aarch64:wow64fex; do
     triple="${entry%%:*}"
