@@ -167,16 +167,18 @@ out:
 
 static void *export_unicode_text(void *data, size_t size, size_t *ret_size)
 {
+    const WCHAR *text = data;
+    size_t len;
     DWORD byte_count;
     char *bytes;
 
-    /* Wayland apps expect strings to not be zero-terminated, so avoid
-     * zero-terminating the resulting converted string. */
-    if (size >= sizeof(WCHAR) && ((WCHAR *)data)[size / sizeof(WCHAR) - 1] == 0)
-        size -= sizeof(WCHAR);
+    /* CF_UNICODETEXT ends at the first terminator, not the end of its
+     * allocation. Wayland text excludes the terminator and any padding. */
+    for (len = 0; len < size / sizeof(*text) && text[len]; ++len) {}
+    size = len * sizeof(*text);
 
     RtlUnicodeToUTF8N(NULL, 0, &byte_count, data, size);
-    if (!(bytes = malloc(byte_count))) return NULL;
+    if (!(bytes = malloc(byte_count ? byte_count : 1))) return NULL;
     RtlUnicodeToUTF8N(bytes, byte_count, &byte_count, data, size);
 
     *ret_size = byte_count;
