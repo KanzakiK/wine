@@ -695,7 +695,7 @@ static void release_all_keys(HWND hwnd)
  *          Keyboard handling
  */
 
-static HWND wayland_keyboard_get_focused_hwnd(void)
+HWND wayland_keyboard_get_focused_hwnd(void)
 {
     struct wayland_keyboard *keyboard = &process_wayland.keyboard;
     HWND hwnd;

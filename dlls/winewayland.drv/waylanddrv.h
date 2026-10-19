@@ -424,6 +424,7 @@ void wayland_window_init(void);
 
 void wayland_keyboard_init(struct wl_keyboard *wl_keyboard);
 void wayland_keyboard_deinit(void);
+HWND wayland_keyboard_get_focused_hwnd(void);
 const KBDTABLES *WAYLAND_KbdLayerDescriptor(HKL hkl);
 void WAYLAND_ReleaseKbdTables(const KBDTABLES *);
 void activate_keyboard_hkl(HWND hwnd, BOOL ime);
