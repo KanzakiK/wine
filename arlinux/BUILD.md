@@ -1,5 +1,15 @@
 # Bionic Wine build and release
 
+The Wayland IME activation fix adapts Ziia Shi's
+[Wine MR10007 v9](https://list.winehq.org/hyperkitty/list/wine-gitlab@list.winehq.org/thread/HHQJWJIYCKDSLTIFASH4CGNZ5TI6PEDK/)
+directly in this fork. `ImeSetActiveContext` communicates activation to the
+driver; text-input-v3 is enabled only for associated input contexts, rather
+than every focused game window. The adaptation preserves current composition
+cancellation, uses a consistent text-input/window-data lock order, and removes
+an enabled child from its toplevel's count when destroyed. Validate held WASD
+with the normal IBus Wayland bridge running, and candidate text input in an
+editor. Stopping IBus is only a diagnostic isolation step, never acceptance.
+
 This fork owns Bionic Wine integration, its component dependency graph,
 hosted dispatch, assembly, source archives and the `latest` publisher.
 The Linux entry is `./arlinux/build.sh`. Android's `arlinux/build.ps1 wine`

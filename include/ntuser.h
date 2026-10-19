@@ -1213,6 +1213,7 @@ enum
     NtUserCallTwoParam_MonitorFromRect,
     NtUserCallTwoParam_SetIconParam,
     NtUserCallTwoParam_SetIMECompositionRect,
+    NtUserCallTwoParam_SetIMEEnabled,
     NtUserCallTwoParam_AdjustWindowRect,
     NtUserCallTwoParam_GetVirtualScreenRect,
     /* temporary exports */

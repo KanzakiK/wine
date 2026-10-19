@@ -2596,6 +2596,11 @@ BOOL set_ime_composition_rect( HWND hwnd, RECT rect )
     return user_driver->pSetIMECompositionRect( NtUserGetAncestor( hwnd, GA_ROOT ), rect );
 }
 
+BOOL set_ime_enabled( HWND hwnd, BOOL enabled )
+{
+    return user_driver->pSetIMEEnabled( hwnd, enabled );
+}
+
 /*****************************************************************
  *           NtUserSetCaretPos  (win32u.@)
  */

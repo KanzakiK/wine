@@ -537,7 +537,12 @@ BOOL WINAPI ImeSetActiveContext( HIMC himc, BOOL flag )
     INPUTCONTEXT *ctx;
     UINT msg;
 
-    TRACE( "himc %p, flag %#x stub!\n", himc, flag );
+    TRACE( "himc %p, flag %#x\n", himc, flag );
+    if ((ctx = ImmLockIMC( himc )))
+    {
+        NtUserCallTwoParam( (ULONG_PTR)ctx->hWnd, flag, NtUserCallTwoParam_SetIMEEnabled );
+        ImmUnlockIMC( himc );
+    }
     if (!flag && (msg = ime_set_composition_status( himc, FALSE )))
     {
         if ((ctx = ImmLockIMC( himc )))
