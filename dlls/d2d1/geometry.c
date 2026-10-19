@@ -8557,23 +8557,23 @@ static const struct d2d_geometry_ops d2d_rounded_rectangle_geometry_ops =
     .stream = d2d_rounded_rectangle_geometry_stream,
 };
 
-HRESULT d2d_rounded_rectangle_geometry_init(struct d2d_geometry *geometry,
-        ID2D1Factory *factory, const D2D1_ROUNDED_RECT *rounded_rect)
+/* The fill of a rounded rectangle: eight vertices on the straight edges, six
+ * faces between them and an arc triangle per corner. The fill arrays are
+ * reused when they are already there, which is what the reinit below relies
+ * on. v1..v4 receive the corners, the outline tessellation needs them too. */
+static BOOL d2d_rounded_rectangle_geometry_fill(struct d2d_geometry *geometry,
+        const D2D1_ROUNDED_RECT *rounded_rect, D2D1_POINT_2F *corners)
 {
-    D2D1_POINT_2F *v, v1, v2, v3, v4;
+    D2D1_POINT_2F *v, *v1 = &corners[0], *v2 = &corners[1], *v3 = &corners[2], *v4 = &corners[3];
     struct d2d_face *f;
     float l, r, t, b;
     float rx, ry;
 
-    d2d_geometry_init(geometry, factory, &identity, (ID2D1GeometryVtbl *)&d2d_rounded_rectangle_geometry_vtbl,
-            &d2d_rounded_rectangle_geometry_ops);
-    geometry->u.rounded_rectangle.rounded_rect = *rounded_rect;
-
-    if (!(geometry->fill.vertices = malloc(8 * sizeof(*geometry->fill.vertices))))
-        goto fail;
+    if (!geometry->fill.vertices && !(geometry->fill.vertices = malloc(8 * sizeof(*geometry->fill.vertices))))
+        return FALSE;
     if (!d2d_array_reserve((void **)&geometry->fill.faces,
             &geometry->fill.faces_size, 6, sizeof(*geometry->fill.faces)))
-        goto fail;
+        return FALSE;
 
     l = min(rounded_rect->rect.left, rounded_rect->rect.right);
     r = max(rounded_rect->rect.left, rounded_rect->rect.right);
@@ -8583,10 +8583,10 @@ HRESULT d2d_rounded_rectangle_geometry_init(struct d2d_geometry *geometry,
     rx = min(rounded_rect->radiusX, 0.5f * (r - l));
     ry = min(rounded_rect->radiusY, 0.5f * (b - t));
 
-    d2d_point_set(&v1, r, t);
-    d2d_point_set(&v2, r, b);
-    d2d_point_set(&v3, l, b);
-    d2d_point_set(&v4, l, t);
+    d2d_point_set(v1, r, t);
+    d2d_point_set(v2, r, b);
+    d2d_point_set(v3, l, b);
+    d2d_point_set(v4, l, t);
 
     v = geometry->fill.vertices;
     d2d_point_set(&v[0], l + rx, t);
@@ -8608,30 +8608,73 @@ HRESULT d2d_rounded_rectangle_geometry_init(struct d2d_geometry *geometry,
     d2d_face_set(&f[5], 1, 3, 2);
     geometry->fill.face_count = 6;
 
-    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[1], &v1, &v[2]))
+    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[1], v1, &v[2]))
+        return FALSE;
+    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[3], v2, &v[4]))
+        return FALSE;
+    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[5], v3, &v[6]))
+        return FALSE;
+    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[7], v4, &v[0]))
+        return FALSE;
+
+    return TRUE;
+}
+
+/* Re-initialises a rounded rectangle geometry for another rounded rectangle,
+ * fill only: the outline is left empty, so the geometry can only be filled.
+ * FillRoundedRectangle() keeps one such geometry per device context instead
+ * of building a factory object, with its outline tessellation, for every call
+ * (Cymatics Hotline draws its LCD dot matrix as 1931 rounded rectangles per
+ * frame). The geometry has to have been initialised as a rounded rectangle. */
+void d2d_rounded_rectangle_geometry_reinit_fill(struct d2d_geometry *geometry,
+        const D2D1_ROUNDED_RECT *rounded_rect)
+{
+    D2D1_POINT_2F corners[4];
+
+    geometry->fill.vertex_count = 0;
+    geometry->fill.face_count = 0;
+    geometry->fill.bezier_vertex_count = 0;
+    geometry->fill.arc_vertex_count = 0;
+    geometry->outline.vertex_count = 0;
+    geometry->outline.face_count = 0;
+    geometry->outline.bezier_count = 0;
+    geometry->outline.bezier_face_count = 0;
+    geometry->outline.arc_count = 0;
+    geometry->outline.arc_face_count = 0;
+
+    geometry->u.rounded_rectangle.rounded_rect = *rounded_rect;
+    /* The arrays are sized from the first initialisation, so this cannot fail. */
+    d2d_rounded_rectangle_geometry_fill(geometry, rounded_rect, corners);
+}
+
+HRESULT d2d_rounded_rectangle_geometry_init(struct d2d_geometry *geometry,
+        ID2D1Factory *factory, const D2D1_ROUNDED_RECT *rounded_rect)
+{
+    D2D1_POINT_2F *v, corners[4], *v1 = &corners[0], *v2 = &corners[1], *v3 = &corners[2], *v4 = &corners[3];
+
+    d2d_geometry_init(geometry, factory, &identity, (ID2D1GeometryVtbl *)&d2d_rounded_rectangle_geometry_vtbl,
+            &d2d_rounded_rectangle_geometry_ops);
+    geometry->u.rounded_rectangle.rounded_rect = *rounded_rect;
+
+    if (!d2d_rounded_rectangle_geometry_fill(geometry, rounded_rect, corners))
         goto fail;
-    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[3], &v2, &v[4]))
-        goto fail;
-    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[5], &v3, &v[6]))
-        goto fail;
-    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[7], &v4, &v[0]))
-        goto fail;
+    v = geometry->fill.vertices;
 
     if (!d2d_geometry_outline_add_line_segment(geometry, &v[0], &v[1]))
         goto fail;
-    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[1], &v1, &v[2]))
+    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[1], v1, &v[2]))
         goto fail;
     if (!d2d_geometry_outline_add_line_segment(geometry, &v[2], &v[3]))
         goto fail;
-    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[3], &v2, &v[4]))
+    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[3], v2, &v[4]))
         goto fail;
     if (!d2d_geometry_outline_add_line_segment(geometry, &v[4], &v[5]))
         goto fail;
-    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[5], &v3, &v[6]))
+    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[5], v3, &v[6]))
         goto fail;
     if (!d2d_geometry_outline_add_line_segment(geometry, &v[6], &v[7]))
         goto fail;
-    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[7], &v4, &v[0]))
+    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[7], v4, &v[0]))
         goto fail;
 
     return S_OK;
