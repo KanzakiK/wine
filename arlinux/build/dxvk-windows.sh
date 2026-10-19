@@ -10,7 +10,7 @@ compiler="$(realpath "$1")"
 output="$(realpath -m "$2")"
 "$compiler/aarch64-w64-mingw32-clang" -marm64x -shared -x c /dev/null -o /dev/null -### 2>/dev/null \
     || { echo 'LLVM-MinGW with ARM64X support (LLVM 23+) is required.' >&2; exit 2; }
-revision=6be588b2a57eb28659907834cdeb46bc5f2f69ad
+revision=65d76237fa19b0f784642228ef1df20ee6b403f6
 patch_file="$repo/arlinux/patches/dxvk-optional-pipeline-library.patch"
 key="$(printf '%s\n' "$revision" "$compiler" "$(sha256sum "$patch_file")" \
     "$("$compiler/aarch64-w64-mingw32-clang" --version)" | sha256sum | cut -c1-24)"
