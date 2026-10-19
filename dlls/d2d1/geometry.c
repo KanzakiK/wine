@@ -4705,10 +4705,322 @@ static HRESULT d2d_geometry_resolve_beziers(struct d2d_geometry *geometry)
     return S_OK;
 }
 
+
+/* Cache of closed path tessellations, keyed by the figure data.
+ *
+ * Native Direct2D keeps the glyph tessellation per font and size; JUCE 8
+ * applications that draw their text as path outlines (Cymatics Hotline, and
+ * every JUCE 8 renderer that does not take the glyph run route) rebuild the
+ * same geometries every frame: Hotline's editor closes 27 paths per frame
+ * with about 1000 quadratic Béziers between them, and only 37 distinct paths
+ * recur over hundreds of frames. Closing a path means resolving self
+ * intersections and overlapping control triangles and a constrained Delaunay
+ * triangulation, about 0.2 ms per glyph path; that was 40 % of the main
+ * thread. Identical input produces identical output, so the result of
+ * Close() is kept by its input and copied back on the next identical path.
+ * The key is the fill mode and every figure's flags, vertices, vertex types
+ * and control points, compared bit for bit; the value is the figure state
+ * after Close() (intersections and split pieces are inserted into the
+ * figures) and the fill arrays. Entries are evicted least recently used
+ * when the cache exceeds its size; WINE_D2D_FILL_CACHE=0 disables it. */
+
+#define D2D_FILL_CACHE_BUCKETS 256
+#define D2D_FILL_CACHE_MAX_ENTRY_SIZE (256 * 1024)
+#define D2D_FILL_CACHE_MAX_SIZE (8 * 1024 * 1024)
+
+struct d2d_fill_cache_entry
+{
+    struct list lru_entry;
+    struct list bucket_entry;
+    uint32_t hash;
+    size_t key_size;
+    size_t value_size;
+    uint8_t *data;
+};
+
+struct d2d_blob
+{
+    uint8_t *data;
+    size_t size;
+    size_t capacity;
+    BOOL failed;
+};
+
+static CRITICAL_SECTION d2d_fill_cache_cs;
+static CRITICAL_SECTION_DEBUG d2d_fill_cache_cs_debug =
+{
+    0, 0, &d2d_fill_cache_cs,
+    { &d2d_fill_cache_cs_debug.ProcessLocksList, &d2d_fill_cache_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": d2d_fill_cache_cs") }
+};
+static CRITICAL_SECTION d2d_fill_cache_cs = { &d2d_fill_cache_cs_debug, -1, 0, 0, 0, 0 };
+
+static struct
+{
+    struct list lru;
+    struct list buckets[D2D_FILL_CACHE_BUCKETS];
+    size_t size;
+    BOOL initialised;
+} d2d_fill_cache;
+
+static BOOL d2d_fill_cache_enabled(void)
+{
+    static int enabled = -1;
+    char buf[8];
+
+    if (enabled < 0)
+        enabled = !(GetEnvironmentVariableA("WINE_D2D_FILL_CACHE", buf, sizeof(buf)) && !strcmp(buf, "0"));
+    return enabled;
+}
+
+static void d2d_blob_write(struct d2d_blob *blob, const void *data, size_t size)
+{
+    if (blob->failed || !size)
+        return;
+    if (!d2d_array_reserve((void **)&blob->data, &blob->capacity, blob->size + size, 1))
+    {
+        blob->failed = TRUE;
+        return;
+    }
+    memcpy(blob->data + blob->size, data, size);
+    blob->size += size;
+}
+
+#define d2d_blob_write_value(blob, v) d2d_blob_write(blob, &(v), sizeof(v))
+
+static void d2d_blob_read(const uint8_t **p, void *dst, size_t size)
+{
+    memcpy(dst, *p, size);
+    *p += size;
+}
+
+#define d2d_blob_read_value(p, v) d2d_blob_read(p, &(v), sizeof(v))
+
+/* Replaces *array with a copy of count elements from the blob; count 0 leaves
+ * NULL. Returns FALSE on allocation failure. */
+static BOOL d2d_blob_read_array(const uint8_t **p, void **array, size_t *capacity, size_t count, size_t size)
+{
+    void *copy = NULL;
+
+    if (count && !(copy = malloc(count * size)))
+        return FALSE;
+    if (count)
+        memcpy(copy, *p, count * size);
+    *p += count * size;
+    free(*array);
+    *array = copy;
+    *capacity = count;
+    return TRUE;
+}
+
+static uint32_t d2d_fill_cache_hash(const uint8_t *data, size_t size)
+{
+    uint32_t h = 2166136261u, w;
+    size_t i;
+
+    for (i = 0; i + sizeof(w) <= size; i += sizeof(w))
+    {
+        memcpy(&w, data + i, sizeof(w));
+        h ^= w;
+        h *= 0x9e3779b1u;
+        h ^= h >> 15;
+    }
+    for (; i < size; ++i)
+        h = (h ^ data[i]) * 16777619u;
+    return h;
+}
+
+static void d2d_path_geometry_fill_cache_key(const struct d2d_geometry *geometry, struct d2d_blob *key)
+{
+    uint32_t fill_mode = geometry->u.path.fill_mode;
+    size_t i;
+
+    d2d_blob_write_value(key, fill_mode);
+    d2d_blob_write_value(key, geometry->u.path.figure_count);
+    for (i = 0; i < geometry->u.path.figure_count; ++i)
+    {
+        const struct d2d_figure *figure = &geometry->u.path.figures[i];
+
+        d2d_blob_write_value(key, figure->flags);
+        d2d_blob_write_value(key, figure->vertex_count);
+        d2d_blob_write_value(key, figure->bezier_control_count);
+        d2d_blob_write(key, figure->vertices, figure->vertex_count * sizeof(*figure->vertices));
+        d2d_blob_write(key, figure->vertex_types, figure->vertex_count * sizeof(*figure->vertex_types));
+        d2d_blob_write(key, figure->bezier_controls, figure->bezier_control_count * sizeof(*figure->bezier_controls));
+    }
+}
+
+static void d2d_path_geometry_fill_cache_value(const struct d2d_geometry *geometry, struct d2d_blob *value)
+{
+    size_t i;
+
+    for (i = 0; i < geometry->u.path.figure_count; ++i)
+    {
+        const struct d2d_figure *figure = &geometry->u.path.figures[i];
+
+        d2d_blob_write_value(value, figure->flags);
+        d2d_blob_write_value(value, figure->bounds);
+        d2d_blob_write_value(value, figure->vertex_count);
+        d2d_blob_write_value(value, figure->bezier_control_count);
+        d2d_blob_write(value, figure->vertices, figure->vertex_count * sizeof(*figure->vertices));
+        d2d_blob_write(value, figure->vertex_types, figure->vertex_count * sizeof(*figure->vertex_types));
+        d2d_blob_write(value, figure->bezier_controls, figure->bezier_control_count * sizeof(*figure->bezier_controls));
+    }
+    d2d_blob_write_value(value, geometry->fill.vertex_count);
+    d2d_blob_write(value, geometry->fill.vertices, geometry->fill.vertex_count * sizeof(*geometry->fill.vertices));
+    d2d_blob_write_value(value, geometry->fill.face_count);
+    d2d_blob_write(value, geometry->fill.faces, geometry->fill.face_count * sizeof(*geometry->fill.faces));
+    d2d_blob_write_value(value, geometry->fill.bezier_vertex_count);
+    d2d_blob_write(value, geometry->fill.bezier_vertices,
+            geometry->fill.bezier_vertex_count * sizeof(*geometry->fill.bezier_vertices));
+    d2d_blob_write_value(value, geometry->fill.arc_vertex_count);
+    d2d_blob_write(value, geometry->fill.arc_vertices,
+            geometry->fill.arc_vertex_count * sizeof(*geometry->fill.arc_vertices));
+}
+
+static BOOL d2d_path_geometry_fill_cache_restore(struct d2d_geometry *geometry, const uint8_t *p)
+{
+    size_t i, count;
+
+    for (i = 0; i < geometry->u.path.figure_count; ++i)
+    {
+        struct d2d_figure *figure = &geometry->u.path.figures[i];
+        size_t vertex_count, control_count;
+
+        d2d_blob_read_value(&p, figure->flags);
+        d2d_blob_read_value(&p, figure->bounds);
+        d2d_blob_read_value(&p, vertex_count);
+        d2d_blob_read_value(&p, control_count);
+        if (!d2d_blob_read_array(&p, (void **)&figure->vertices, &figure->vertices_size,
+                vertex_count, sizeof(*figure->vertices)))
+            return FALSE;
+        if (!d2d_blob_read_array(&p, (void **)&figure->vertex_types, &figure->vertex_types_size,
+                vertex_count, sizeof(*figure->vertex_types)))
+            return FALSE;
+        figure->vertex_count = vertex_count;
+        if (!d2d_blob_read_array(&p, (void **)&figure->bezier_controls, &figure->bezier_controls_size,
+                control_count, sizeof(*figure->bezier_controls)))
+            return FALSE;
+        figure->bezier_control_count = control_count;
+    }
+
+    d2d_blob_read_value(&p, count);
+    if (!d2d_blob_read_array(&p, (void **)&geometry->fill.vertices, &count, count, sizeof(*geometry->fill.vertices)))
+        return FALSE;
+    geometry->fill.vertex_count = count;
+    d2d_blob_read_value(&p, count);
+    if (!d2d_blob_read_array(&p, (void **)&geometry->fill.faces, &geometry->fill.faces_size,
+            count, sizeof(*geometry->fill.faces)))
+        return FALSE;
+    geometry->fill.face_count = count;
+    d2d_blob_read_value(&p, count);
+    if (!d2d_blob_read_array(&p, (void **)&geometry->fill.bezier_vertices, &geometry->fill.bezier_vertices_size,
+            count, sizeof(*geometry->fill.bezier_vertices)))
+        return FALSE;
+    geometry->fill.bezier_vertex_count = count;
+    d2d_blob_read_value(&p, count);
+    if (!d2d_blob_read_array(&p, (void **)&geometry->fill.arc_vertices, &geometry->fill.arc_vertices_size,
+            count, sizeof(*geometry->fill.arc_vertices)))
+        return FALSE;
+    geometry->fill.arc_vertex_count = count;
+    return TRUE;
+}
+
+static void d2d_fill_cache_init(void)
+{
+    size_t i;
+
+    if (d2d_fill_cache.initialised)
+        return;
+    list_init(&d2d_fill_cache.lru);
+    for (i = 0; i < D2D_FILL_CACHE_BUCKETS; ++i)
+        list_init(&d2d_fill_cache.buckets[i]);
+    d2d_fill_cache.initialised = TRUE;
+}
+
+static struct d2d_fill_cache_entry *d2d_fill_cache_find(const struct d2d_blob *key, uint32_t hash)
+{
+    struct d2d_fill_cache_entry *entry;
+
+    LIST_FOR_EACH_ENTRY(entry, &d2d_fill_cache.buckets[hash % D2D_FILL_CACHE_BUCKETS],
+            struct d2d_fill_cache_entry, bucket_entry)
+    {
+        if (entry->hash == hash && entry->key_size == key->size && !memcmp(entry->data, key->data, key->size))
+            return entry;
+    }
+    return NULL;
+}
+
+/* Returns TRUE if the geometry was filled from the cache; *hr then says whether
+ * copying the entry succeeded. */
+static BOOL d2d_fill_cache_lookup(struct d2d_geometry *geometry, const struct d2d_blob *key,
+        uint32_t hash, HRESULT *hr)
+{
+    struct d2d_fill_cache_entry *entry;
+    BOOL found = FALSE;
+
+    EnterCriticalSection(&d2d_fill_cache_cs);
+    d2d_fill_cache_init();
+    if ((entry = d2d_fill_cache_find(key, hash)))
+    {
+        list_remove(&entry->lru_entry);
+        list_add_head(&d2d_fill_cache.lru, &entry->lru_entry);
+        *hr = d2d_path_geometry_fill_cache_restore(geometry, entry->data + entry->key_size) ? S_OK : E_OUTOFMEMORY;
+        found = TRUE;
+    }
+    LeaveCriticalSection(&d2d_fill_cache_cs);
+    return found;
+}
+
+static void d2d_fill_cache_insert(const struct d2d_blob *key, uint32_t hash, const struct d2d_blob *value)
+{
+    struct d2d_fill_cache_entry *entry;
+    size_t size = key->size + value->size;
+
+    if (size > D2D_FILL_CACHE_MAX_ENTRY_SIZE)
+        return;
+    if (!(entry = malloc(sizeof(*entry))) || !(entry->data = malloc(size)))
+    {
+        free(entry);
+        return;
+    }
+    memcpy(entry->data, key->data, key->size);
+    memcpy(entry->data + key->size, value->data, value->size);
+    entry->hash = hash;
+    entry->key_size = key->size;
+    entry->value_size = value->size;
+
+    EnterCriticalSection(&d2d_fill_cache_cs);
+    d2d_fill_cache_init();
+    if (d2d_fill_cache_find(key, hash))
+    {
+        /* Another thread closed the same path meanwhile. */
+        LeaveCriticalSection(&d2d_fill_cache_cs);
+        free(entry->data);
+        free(entry);
+        return;
+    }
+    list_add_head(&d2d_fill_cache.buckets[hash % D2D_FILL_CACHE_BUCKETS], &entry->bucket_entry);
+    list_add_head(&d2d_fill_cache.lru, &entry->lru_entry);
+    d2d_fill_cache.size += size;
+    while (d2d_fill_cache.size > D2D_FILL_CACHE_MAX_SIZE)
+    {
+        entry = LIST_ENTRY(list_tail(&d2d_fill_cache.lru), struct d2d_fill_cache_entry, lru_entry);
+        list_remove(&entry->lru_entry);
+        list_remove(&entry->bucket_entry);
+        d2d_fill_cache.size -= entry->key_size + entry->value_size;
+        free(entry->data);
+        free(entry);
+    }
+    LeaveCriticalSection(&d2d_fill_cache_cs);
+}
+
 static HRESULT STDMETHODCALLTYPE d2d_geometry_sink_Close(ID2D1GeometrySink *iface)
 {
     struct d2d_geometry *geometry = impl_from_ID2D1GeometrySink(iface);
+    struct d2d_blob key = {0}, value = {0};
     HRESULT hr = E_FAIL;
+    uint32_t hash = 0;
     size_t i;
 
     TRACE("iface %p.\n", iface);
@@ -4766,6 +5078,17 @@ static HRESULT STDMETHODCALLTYPE d2d_geometry_sink_Close(ID2D1GeometrySink *ifac
         }
     }
 
+    if (d2d_fill_cache_enabled())
+    {
+        d2d_path_geometry_fill_cache_key(geometry, &key);
+        if (!key.failed)
+        {
+            hash = d2d_fill_cache_hash(key.data, key.size);
+            if (d2d_fill_cache_lookup(geometry, &key, hash, &hr))
+                goto done;
+        }
+    }
+
     if (!d2d_geometry_intersect_self(geometry))
         goto done;
     if (FAILED(hr = d2d_geometry_resolve_beziers(geometry)))
@@ -4773,7 +5096,16 @@ static HRESULT STDMETHODCALLTYPE d2d_geometry_sink_Close(ID2D1GeometrySink *ifac
     if (FAILED(hr = d2d_path_geometry_triangulate(geometry)))
         goto done;
 
+    if (SUCCEEDED(hr) && key.data && !key.failed)
+    {
+        d2d_path_geometry_fill_cache_value(geometry, &value);
+        if (!value.failed)
+            d2d_fill_cache_insert(&key, hash, &value);
+    }
+
 done:
+    free(key.data);
+    free(value.data);
     if (FAILED(hr))
     {
         free(geometry->fill.bezier_vertices);
