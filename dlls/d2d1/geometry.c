@@ -4333,6 +4333,20 @@ static BOOL d2d_geometry_check_bezier_overlap(struct d2d_geometry *geometry,
     b[1] = &figure->bezier_controls[idx_q->control_idx];
     b[2] = &figure->vertices[idx_q->vertex_idx + 1];
 
+    /* Two control triangles whose bounding boxes lie strictly apart share no
+     * point, so neither the edge crossings nor the containment tests below
+     * can find one. The caller tries every pair of Bézier segments in the
+     * geometry against each other; for the glyph outlines a JUCE application
+     * draws as paths that is up to several thousand pairs per path, nearly
+     * all of them far apart, and the full test below took half of Close().
+     * Boxes that touch keep the full test, as does a non-finite coordinate,
+     * for which no comparison here holds. */
+    if (max(a[0]->x, max(a[1]->x, a[2]->x)) < min(b[0]->x, min(b[1]->x, b[2]->x))
+            || max(b[0]->x, max(b[1]->x, b[2]->x)) < min(a[0]->x, min(a[1]->x, a[2]->x))
+            || max(a[0]->y, max(a[1]->y, a[2]->y)) < min(b[0]->y, min(b[1]->y, b[2]->y))
+            || max(b[0]->y, max(b[1]->y, b[2]->y)) < min(a[0]->y, min(a[1]->y, a[2]->y)))
+        return FALSE;
+
     /* Degenerate control triangles can't overlap in a way that splitting them
      * would resolve.  Note that a non-finite area needs to be rejected here as
      * well: every comparison against a NaN is false, so none of the tests below
