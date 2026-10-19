@@ -102,7 +102,12 @@ def source_inputs(repo, revision, stage, plan):
         selected.update({n: v for n, v in tree_entries(repo, revision).items() if core_path(n)})
     lock = subprocess.check_output(['git', '-C', str(repo), 'show', revision+':arlinux/build/github-inputs.json'])
     versions = json.loads(lock)
+    recipe = dict(selected)
+    adapter = 'arlinux/build/github-component.py'
+    recipe[adapter] = implementation(source(adapter),
+        ('run', 'sha', 'request', 'prepare', 'toolchains', 'import_dependency', 'restore_seed', 'build'))
     return dict(sourceSha256=hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest(),
+                recipeSha256=hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest(),
                 tools={n: versions[n] for n in RESOURCES[stage]},
                 runner=plan['stages'][stage]['runner'],
                 artifactInputsOnly=plan['stages'][stage].get('artifactInputsOnly', False))

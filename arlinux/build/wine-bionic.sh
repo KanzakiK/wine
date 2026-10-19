@@ -126,5 +126,6 @@ for source in files:
     shutil.copy2(source, target)
 shutil.copytree(stage/'fex', output/'fex', ignore=shutil.ignore_patterns('*.cpp', '*.h', '*.o'))
 COMPILE_OUTPUT
-tar -czf "$output/wine-source.tar.gz" -C "$stage" source
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu \
+    -czf "$output/wine-source.tar.gz" -C "$stage" source
 echo "Compiled Bionic Wine: $output"

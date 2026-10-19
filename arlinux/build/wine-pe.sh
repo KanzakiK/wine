@@ -124,12 +124,18 @@ if [[ -f "$stage/source/arlinux-vkd3d.json" ]]; then
     cp "$stage/source/arlinux-vkd3d.json" "$stage/output/arlinux-vkd3d.json"
 fi
 cp "$stage/source/arlinux-dcomp.json" "$stage/output/arlinux-dcomp.json"
-tar -czf "$stage/output/wine-source.tar.gz" -C "$stage" source
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu \
+    -czf "$stage/output/wine-source.tar.gz" -C "$stage" source
 python3 - "$stage" <<'BUILD_STATE'
-import json, sys
+import json, shutil, sys
 from pathlib import Path
 stage = Path(sys.argv[1])
-(stage/'output/build-state.json').write_text(json.dumps({'tools': str(stage/'tools')}) + '\n')
+# Configure logs contain runner hostnames and timestamps, not tool inputs.
+# Keep diagnostics in the private builder and export the usable tools separately.
+exported = stage/'host-tools'
+shutil.copytree(stage/'tools', exported, symlinks=True, dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns('*.log'))
+(stage/'output/build-state.json').write_text(json.dumps({'tools': str(exported)}) + '\n')
 BUILD_STATE
 else
     # The merge consumes only these modules. Common data, source archives and

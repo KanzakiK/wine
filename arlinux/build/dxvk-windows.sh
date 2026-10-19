@@ -72,4 +72,5 @@ EOF
     done
 done
 printf '%s\n' "$revision" > "$output/source-commit"
-tar -czf "$output/source.tar.gz" --exclude=.git -C "$cache" source
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu \
+    -czf "$output/source.tar.gz" --exclude=.git -C "$cache" source

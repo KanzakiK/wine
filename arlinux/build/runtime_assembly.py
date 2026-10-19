@@ -42,7 +42,8 @@ def assemble_support(out, framework, bridge, observer, tray, invoke):
     shutil.copyfile(observer / 'windows-accessibility.exe', out / 'windows-accessibility.exe')
     if tray is not None:
         shutil.copyfile(tray / 'windows-tray.exe', out / 'windows-tray.exe')
-    invoke('tar', '--exclude=.git', '-czf', out / 'arlinux-support-source.tar.gz',
+    invoke('tar', '--sort=name', '--mtime=@0', '--owner=0', '--group=0',
+           '--numeric-owner', '--format=gnu', '--exclude=.git', '-czf', out / 'arlinux-support-source.tar.gz',
            'arlinux/components/steamworks', 'arlinux/components/windows-integration/accessibility',
            'arlinux/components/windows-integration/tray', 'arlinux/components/steamworks/build.sh',
            'arlinux/components/windows-integration/build-accessibility.sh',

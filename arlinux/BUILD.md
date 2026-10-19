@@ -91,6 +91,20 @@ Subsequent warm cache restoration and complete product acceptance remain separat
 verification tasks. A later sole-entry invocation at framework c8309fc reused
 all three published PE components rather than dispatching new PE jobs; this
 checks recipe reuse, not warm compiler performance.
+
+Attempt 2 restored the 393,743,578-byte ARM64 cache in about 3 seconds and
+completed its build step in about 124 seconds, but failed the strict repeated-
+output check at publication. Do not count it as a successful reproducible build.
+Source archives previously retained checkout/generated file mtimes, and exported
+host-tool trees included runner-specific configure logs. The follow-up recipes
+normalize source archive ordering, ownership and timestamps, and export usable
+host tools without diagnostic logs (the private builder retains those logs).
+Reproducibility verification of these follow-ups is pending. On a mismatch the
+publisher now compares checksum-bound receipts and reports bounded changed paths;
+it never replaces a conflicting immutable asset or relaxes output validation.
+Transport/publication code also has a separate recipe fingerprint: changing a
+capsule publisher can dispatch a new publication without invalidating unchanged
+compiler-stage receipts.
 FEX is pinned to an unmodified upstream FEX-Emu/FEX commit. The taowen/FEX
 fork hosts standalone CI only; do not maintain translator or ARM64EC behavior
 patches there. Keep product integration and diagnostic recipes outside FEX.

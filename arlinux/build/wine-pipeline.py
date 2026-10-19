@@ -167,7 +167,7 @@ def main():
         sources = source_state(framework)
         revision = subprocess.check_output(['git', '-C', str(framework), 'rev-parse', 'HEAD'], text=True).strip()
         from wine_graph import PLAN
-        engines = {name: source_inputs(framework, revision, name, PLAN)['sourceSha256'] for name in cache.required}
+        engines = {name: source_inputs(framework, revision, name, PLAN)['recipeSha256'] for name in cache.required}
         common = dict(engines=engines, config=config, sources=sources,
                       wineSources={n: v for n, v in sources.items() if core_path(n)}, toolchain=toolchain)
         common['hostTools'] = {name: subprocess.check_output([name, '--version'], text=True)

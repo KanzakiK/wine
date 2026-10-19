@@ -291,8 +291,8 @@ def build(data, framework):
         prefix = root/dependency['pipelineOutput']/'prefix'
         source = framework/'arlinux/components/gfxreconstruct'
         source_commit = subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
-        inputs = dict(source=data['sourceInputs'], dependency=dependency['outputIdentity'],
-                      toolchain=sha(framework/'arlinux/build/github-inputs.json'), engine=sha(__file__))
+        inputs = dict(source=data['sourceInputs']['recipeSha256'], dependency=dependency['outputIdentity'],
+                      toolchain=sha(framework/'arlinux/build/github-inputs.json'))
         def compile_capture(output):
             build_dir = framework/'build/gfxreconstruct-bionic'/source_commit
             staged = output/'tools'
@@ -318,7 +318,7 @@ def build(data, framework):
             framework/'arlinux/components/windows-integration/diagnostics/exception-observer.c',
             framework/'arlinux/components/windows-integration/diagnostics/exception-observer-probe.c')}
         inputs['toolchainLock'] = sha(framework/'arlinux/build/github-inputs.json')
-        inputs['engine'] = sha(__file__)
+        inputs['engine'] = data['sourceInputs']['recipeSha256']
         inputs['compiler'] = inventory(Path(tools['mingw'])/'aarch64-w64-mingw32-clang')
         def compile(output):
             run('bash', framework/'arlinux/build/windows-debug.sh', tools['mingw'], output)
@@ -397,6 +397,9 @@ def publish(data, framework):
             saved = download(completed['browser_download_url'], output/'previous.json', expected)
             prior = json.loads(saved.read_text())
             if prior['identity'] != data['identity'] or prior.get('outputIdentity') != record['outputIdentity']:
+                if stage != 'windows-fonts' and prior['identity'] == data['identity']:
+                    from artifact_download import explain_component_difference
+                    explain_component_difference(prior, contents, output/'comparison')
                 raise ValueError('Published component differs from the verified rerun outputs')
             print('OK identical published component '+stage, flush=True)
             return

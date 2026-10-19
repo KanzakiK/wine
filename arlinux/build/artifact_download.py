@@ -162,3 +162,35 @@ def download_capsule(record, directory):
     for file in set(pieces):
         file.unlink()
     return archive
+
+
+def explain_component_difference(prior, current, directory):
+    """On a reproducibility failure, compare declared receipts, never file contents."""
+    import json
+    import tarfile
+    import zstandard
+    receipt_name = (Path(prior['pipelineOutput']).parent.parent/'receipt.json').as_posix()
+    archive = download_capsule(prior, directory)
+    with archive.open('rb') as compressed, zstandard.ZstdDecompressor().stream_reader(compressed) as decoded:
+        with tarfile.open(fileobj=decoded, mode='r|') as bundle:
+            for member in bundle:
+                if member.name != receipt_name:
+                    continue
+                if not member.isfile() or member.size > 64*1024*1024:
+                    raise ValueError('Invalid published build receipt')
+                original = json.load(bundle.extractfile(member))
+                reported = 0
+                def compare(before, after, path):
+                    nonlocal reported
+                    if before == after or reported >= 64:
+                        return
+                    if isinstance(before, dict) and isinstance(after, dict):
+                        for key in sorted(before.keys() | after.keys()):
+                            compare(before.get(key), after.get(key), path+'/'+key)
+                    else:
+                        print('Changed declared build output: '+path, flush=True)
+                        reported += 1
+                for field in ('outputs', 'references'):
+                    compare(original[field], current[field], field)
+                return
+    raise ValueError('Published capsule has no declared receipt')
