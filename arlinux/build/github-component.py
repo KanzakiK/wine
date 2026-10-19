@@ -280,7 +280,9 @@ def build(data, framework):
     if stage == 'windows-fonts':
         output = root / 'vendor/fonts'
         output.mkdir(parents=True, exist_ok=True)
-        for name in ('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf'):
+        sys.path.insert(0, str(framework/'arlinux'))
+        from wine_fonts import FILES
+        for name in FILES:
             shutil.copyfile(Path(os.environ['WINDIR'])/'Fonts'/name, output/name)
         return
     if stage == 'wine-capture':

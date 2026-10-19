@@ -35,7 +35,7 @@ SOURCES = {
     'wine-product': ('arlinux/package-wine-bionic.py', 'arlinux/build/runtime_assembly.py',
                      'arlinux/build/runtime_distribution.py'),
     'wine-capture': ('arlinux/components/gfxreconstruct', 'arlinux/vulkan-capture.py'),
-    'windows-fonts': (),
+    'windows-fonts': ('arlinux/wine_fonts.py',),
 }
 RESOURCES = {name: ('mingw',) for name in SOURCES}
 for name in ('bionic-deps', 'bionic-x11', 'wine-pulse', 'wine-tls', 'wine-graphics', 'wine-vulkan'):

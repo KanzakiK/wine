@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Copy the builder's Windows Arial family into the Bionic Wine runtime."""
+"""Copy the builder's Windows Latin and CJK fallback fonts into Bionic Wine."""
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 
-FILES = ('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf')
+FILES = ('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf', 'msyh.ttc')
 
 
 def source_directory():
@@ -24,7 +24,8 @@ def install(destination):
         shutil.copyfile(source/name, destination/name)
         hashes[name] = hashlib.sha256((destination/name).read_bytes()).hexdigest()
     (destination/'arlinux-fonts.json').write_text(json.dumps(dict(
-        family='Arial', source='Windows build host', modified=False, files=hashes), indent=2)+'\n')
+        families=['Arial', 'Microsoft YaHei', 'Microsoft YaHei UI'],
+        source='Windows build host', modified=False, files=hashes), indent=2)+'\n')
 
 
 if __name__ == '__main__':
