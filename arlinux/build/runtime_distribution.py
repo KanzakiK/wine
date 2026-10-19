@@ -53,7 +53,17 @@ def publish_distribution(data, record, final):
             with tempfile.TemporaryDirectory(prefix='product-asset-') as directory:
                 staged = Path(directory)/name
                 shutil.copyfile(path, staged)
-                run('gh', 'release', 'upload', release, '--repo', repository, staged)
+                try:
+                    run('gh', 'release', 'upload', release, '--repo', repository, staged)
+                except subprocess.CalledProcessError:
+                    # Another product may publish the same content-addressed
+                    # object after our release inventory was fetched. Never
+                    # clobber it; accept only its exact verified bytes.
+                    concurrent = release_assets(release).get(name)
+                    if (not concurrent or concurrent.get('digest') != 'sha256:'+checksum
+                            or concurrent['size'] != size):
+                        raise
+                    print('Verified concurrent immutable upload: '+name, flush=True)
             existing[name] = dict(digest='sha256:'+checksum, size=size)
         return checksum, size
     component_files = {item['file'] for item in index['components']}
