@@ -348,6 +348,64 @@ def build(data, framework):
         '--target', stage, '--require-dependencies', env=env)
 
 
+def publish_distribution(data, record, final):
+    """Publish independent immutable runtime/source assets, not one transport capsule."""
+    from runtime_distribution import COMPONENT_TAG, INDEX, read_index
+    index = read_index(final/INDEX)
+    repository = os.environ['GITHUB_REPOSITORY']
+    tag = 'arlinux-wine-product-'+data['identity'][:24]
+
+    def release_assets(name):
+        result = subprocess.run(['gh', 'api', f'repos/{repository}/releases/tags/{name}'],
+                                capture_output=True, text=True)
+        if result.returncode:
+            run('gh', 'release', 'create', name, '--repo', repository, '--prerelease',
+                '--title', name, '--notes', 'Immutable ARLinux build inputs; not a latest runtime promotion.')
+            return {}
+        return {asset['name']: asset for asset in json.loads(result.stdout)['assets']}
+
+    objects = release_assets(COMPONENT_TAG)
+    assets = release_assets(tag)
+
+    def upload(path, name, release, existing):
+        checksum, size = sha(path), path.stat().st_size
+        if name in existing:
+            prior = existing[name]
+            if prior.get('digest') != 'sha256:'+checksum or prior['size'] != size:
+                raise ValueError('Immutable product asset conflicts: '+name)
+        else:
+            staged = Path(tempfile.mkdtemp(prefix='product-asset-'))/name
+            try:
+                shutil.copyfile(path, staged)
+                run('gh', 'release', 'upload', release, '--repo', repository, staged)
+            finally:
+                staged.unlink(missing_ok=True)
+                staged.parent.rmdir()
+            existing[name] = dict(digest='sha256:'+checksum, size=size)
+        return checksum, size
+
+    component_files = {item['file'] for item in index['components']}
+    record['artifacts'] = []
+    record['parts'] = []
+    for path in sorted(final.iterdir()):
+        if not path.is_file():
+            continue
+        role = 'runtime' if path.name in component_files else 'manifest' if path.name == INDEX else 'source'
+        if role == 'source':
+            name, release, existing = 'source-'+sha(path)+'.tar.gz', COMPONENT_TAG, objects
+        elif role == 'runtime':
+            name, release, existing = path.name, COMPONENT_TAG, objects
+        else:
+            name, release, existing = path.name, tag, assets
+        checksum, size = upload(path, name, release, existing)
+        record['artifacts'].append(dict(name=path.name, sha256=checksum, bytes=size, role=role,
+            url=f'https://github.com/{repository}/releases/download/{release}/{name}'))
+    # This checksum-bound completion marker is uploaded only after every object.
+    manifest = final.parent/'wine-component.json'
+    manifest.write_text(json.dumps(record, sort_keys=True, indent=2)+'\n')
+    upload(manifest, 'component.json', tag, assets)
+
+
 def publish(data, framework):
     root = Path(os.environ['ARLINUX_WORKSPACE'])
     stage = data['stage']
@@ -397,6 +455,9 @@ def publish(data, framework):
                 raise ValueError('Published component differs from the verified rerun outputs')
             print('OK identical published component '+stage, flush=True)
             return
+    if stage == 'wine-product':
+        publish_distribution(data, record, final)
+        return
     archive = output / 'capsule.tar'
     # Compiler tools can point at generated source/header trees outside the
     # output directory. Preserve those references at the same absolute path.

@@ -1,9 +1,7 @@
 """Final Wine assembly recipes; changing these does not change compiler recipes."""
-import importlib.util
 import json
 from pathlib import Path, PurePosixPath
 import shutil
-import sys
 
 from pipeline_cache import digest, inventory, build_references, support_sources
 
@@ -50,11 +48,8 @@ def assemble_product(out, framework, base, support, invoke):
     (runtime / 'bionic-runtime.json').write_text(json.dumps(metadata, indent=2)+'\n')
     for source in base.glob('*.tar.gz'):
         shutil.copyfile(source, out / source.name)
-    spec = importlib.util.spec_from_file_location('wine_packager', framework / 'arlinux/package-wine-bionic.py')
-    module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(framework / 'arlinux'))
-    spec.loader.exec_module(module)
-    module.archive_runtime(runtime, out / 'arlinux-wine-bionic.tar.gz')
+    from runtime_distribution import assemble
+    assemble(runtime, out)
 
 
 def cached_support(cache, framework, bridge, observer, tray, invoke):
@@ -67,6 +62,7 @@ def cached_support(cache, framework, bridge, observer, tray, invoke):
 
 def cached_product(cache, framework, base, support, invoke):
     return cache.stage('wine-product', dict(engine=digest(__file__),
+        distribution=inventory(framework/'arlinux/build/runtime_distribution.py'),
         packager=inventory(framework/'arlinux/package-wine-bionic.py'),
         dependencies={name: cache.records[name] for name in ('wine-bionic', 'runtime-support')}),
         lambda out: assemble_product(out, framework, base, support, invoke))

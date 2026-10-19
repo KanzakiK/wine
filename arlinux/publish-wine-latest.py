@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish the tested Bionic Wine archive and its reproducibility source asset."""
+"""Promote an exact tested component manifest; never replace the legacy bundle."""
 import argparse
 import hashlib
 import json
@@ -9,6 +9,11 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent/'build'))
+from artifact_download import download
+from runtime_distribution import INDEX, COMPONENT_BASE, read_index
 
 
 def component_source_archives(metadata, directory):
@@ -45,7 +50,7 @@ def verify_uploaded_asset(command, asset, checksum, size):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('archive', type=Path, help='Exact archive already tested on devices')
+    parser.add_argument('archive', type=Path, help='Exact component manifest already tested on devices')
     parser.add_argument('--source-archive', type=Path,
                         help='wine-source-<commit>.tar.gz produced by wine-pe.sh')
     parser.add_argument('--manifest', type=Path,
@@ -54,21 +59,39 @@ def main():
     args = parser.parse_args()
     archive = args.archive.resolve(strict=True)
     checksum = hashlib.file_digest(archive.open('rb'), 'sha256').hexdigest()
-    with tarfile.open(archive) as packed:
-        metadata = json.load(packed.extractfile('bionic-runtime.json'))
-        if metadata.get('protocol') != 1 or metadata.get('libc') != 'bionic':
-            raise ValueError('Expected the project Bionic Wine runtime')
-        expected = dict(metadata['files'])
-        for member in packed:
-            name = member.name.removeprefix('./')
-            if name in expected:
-                if not (member.isfile() or member.islnk()):
-                    raise ValueError('Expected a runtime file or archive hard link: ' + name)
-                actual = hashlib.file_digest(packed.extractfile(member), 'sha256').hexdigest()
-                if actual != expected.pop(name):
-                    raise ValueError('Runtime checksum mismatch: ' + name)
-        if expected:
-            raise ValueError('Missing runtime files')
+    index = read_index(archive)
+    metadata = index['runtime']
+    if metadata.get('protocol') != 1:
+        raise ValueError('Expected the project Bionic Wine runtime')
+    expected = dict(metadata['files'])
+    seen = set()
+    for component in index['components']:
+        with tarfile.open(archive.parent/component['file']) as packed:
+            for member in packed:
+                # Apply the same archive path/link policy as the guest installer.
+                tarfile.data_filter(member, str(archive.parent/'validation'))
+                name = member.name
+                if name in seen:
+                    raise ValueError('Duplicate runtime archive path: '+name)
+                seen.add(name)
+                if name in expected:
+                    if not (member.isfile() or member.islnk()):
+                        raise ValueError('Expected a runtime file: '+name)
+                    actual = hashlib.file_digest(packed.extractfile(member), 'sha256').hexdigest()
+                    if actual != expected.pop(name):
+                        raise ValueError('Runtime checksum mismatch: '+name)
+    if expected:
+        raise ValueError('Missing runtime files')
+    # Reproducibility sources are deliberately absent from normal device/dev
+    # transfers. Fetch and verify them only when promoting a tested runtime.
+    for item in index['sources']:
+        name, checksum_source = item['file'], item['sha256']
+        if (Path(name).name != name or '\\' in name or ':' in name
+                or item['url'] != COMPONENT_BASE+'source-'+checksum_source+'.tar.gz'):
+            raise ValueError('Invalid component source archive')
+        downloaded = download(item['url'], archive.parent/name, checksum_source)
+        if downloaded.stat().st_size != item['bytes']:
+            raise ValueError('Component source size mismatch: '+name)
     source = metadata.get('wineSource')
     if not isinstance(source, dict) or not source.get('commit') or not source.get('archiveSHA256') \
             or not source.get('archiveName') or not source.get('archiveURL'):
@@ -86,10 +109,10 @@ def main():
     # The PE packager also records the Wine, FEX and DXVK source inputs.
     # Validate every one before changing any public release asset.
     component_sources = component_source_archives(metadata, archive.parent)
-    asset = 'arlinux-wine-bionic.tar.gz'
+    asset = INDEX
     url = 'https://github.com/taowen/wine/releases/download/latest/' + asset
     manifest = f'Wine {metadata["wine"]} Bionic latest\t{checksum}\t{url}\n'
-    print('Validated Bionic Wine archive SHA-256:', checksum, flush=True)
+    print('Validated Bionic Wine manifest SHA-256:', checksum, flush=True)
     print('Validated Wine source archive SHA-256:', source_checksum, flush=True)
     if args.check:
         return
@@ -117,7 +140,8 @@ def main():
             shutil.copyfile(source_archive, staged_source)
             subprocess.run(command + ['upload', source_tag, '-R', 'taowen/wine',
                                       str(staged_source)], check=True)
-    # Keep the stable latest runtime asset for existing clients.
+    # The legacy arlinux-wine-bionic.tar.gz stays frozen. New clients resolve
+    # only this manifest, whose immutable component URLs are already published.
     view = subprocess.run(['gh', 'api', 'repos/taowen/wine/releases/tags/latest'],
                           capture_output=True, text=True)
     if view.returncode:
@@ -127,13 +151,6 @@ def main():
             'Downloads are pinned and verified by SHA-256.', '--latest'], check=True)
     assets = json.loads(subprocess.check_output(['gh', 'api',
                         'repos/taowen/wine/releases/tags/latest'], text=True))['assets']
-    for path, expected in component_sources:
-        existing = next((item for item in assets if item['name'] == path.name), None)
-        if existing:
-            if existing.get('digest') != 'sha256:' + expected or existing.get('size') != path.stat().st_size:
-                raise RuntimeError('Component source asset already differs: ' + path.name)
-        else:
-            subprocess.run(command + ['upload', 'latest', '-R', 'taowen/wine', str(path)], check=True)
     existing = next((item for item in assets if item['name'] == asset), None)
     if not existing or existing.get('digest') != 'sha256:' + checksum or existing.get('size') != archive.stat().st_size:
         with tempfile.TemporaryDirectory(prefix='arlinux-wine-latest-') as directory:

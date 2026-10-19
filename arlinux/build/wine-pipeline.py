@@ -214,8 +214,9 @@ def main():
         for source in final.iterdir():
             if source.is_file():
                 shutil.copyfile(source, output / source.name)
-        target = output / 'arlinux-wine-bionic.tar.gz'
-        record = dict(format=1, wineArchiveSha256=digest(target), stages=cache.records)
+        from runtime_distribution import INDEX
+        target = output / INDEX
+        record = dict(format=1, wineManifestSha256=digest(target), stages=cache.records)
         pending = output / 'runtime.json.part'
         pending.write_text(json.dumps(record, indent=2) + '\n')
         pending.replace(output / 'runtime.json')

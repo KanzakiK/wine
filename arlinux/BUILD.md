@@ -110,7 +110,7 @@ and Wine preparation cannot overwrite each other's reports.
 The next optimization recipes remove intermediate PE gzip creation/extraction:
 `package-wine-pe.py` produces the declared runtime directory directly; the
 component capsule remains responsible for transport compression and verification.
-Only `wine-product` creates the downloadable Bionic runtime archive. The native
+Only `wine-product` creates the downloadable Bionic runtime components. The native
 component exports Steamworks headers and ntdll ABI inputs instead of its complete
 object/source work tree. License source archives are retained. x64/i386 PE jobs
 export their Windows modules; common data and host tools come from ARM64.
@@ -192,22 +192,22 @@ python arlinux/build/install-github-workflows.py
 ./arlinux/build.sh github --framework-ref COMMIT --product wine --output build/products
 ./arlinux/build.sh github --framework-ref COMMIT --product audio --output build/products
 ./arlinux/build.sh github --framework-ref COMMIT --product diagnostics --output build/products
-./arlinux/build.sh publish-wine build/products/wine/arlinux-wine-bionic.tar.gz --check
-./arlinux/build.sh publish-wine build/products/wine/arlinux-wine-bionic.tar.gz
+./arlinux/build.sh publish-wine build/products/wine/arlinux-wine-runtime.json --check
+./arlinux/build.sh publish-wine build/products/wine/arlinux-wine-runtime.json
 ```
 
 ## Publishing the public latest runtime
 
 Publishing `latest` makes the runtime available to ordinary ARLinux users. Both
 the Windows launcher and Steam's Bionic compatibility tool resolve the
-`arlinux-wine-bionic.tar.gz` asset in
+`arlinux-wine-runtime.json` asset in
 [taowen/wine's latest release](https://github.com/taowen/wine/releases/tag/latest).
 This is a public promotion, not a private device deployment or merely a successful
 runner build. Existing instances cache a successful release lookup for up to one
 hour; an already running Windows application is not replaced during execution.
 
 Use the Android checkout's sole Windows entry, with the full pushed Wine
-integration commit and the exact archive path reported by that build:
+integration commit and the exact component manifest path reported by that build:
 
 ```powershell
 .\build.ps1 wine -WineRef COMMIT -Serial SERIAL -Instance INSTANCE
@@ -226,13 +226,26 @@ with their corresponding Wine product; a previously tested older candidate is
 not evidence for the new pair. Do not publish a candidate whose required journey
 has not passed.
 
-`-Check` verifies the archive's declared hashes and matching Wine/FEX/DXVK/support
-source archives without changing the public release. The final command uploads
-those sources, preserves the immutable Wine source release, and replaces the
-stable latest runtime asset only with the exact tested bytes. It does not rebuild,
+`-Check` verifies the component manifest, archives, declared file hashes and
+matching Wine/FEX/DXVK/support sources without changing the public release.
+Sources are downloaded on demand for this promotion step, not ordinary device
+testing. The final command preserves the immutable Wine source release and replaces
+only the new latest JSON manifest with the exact tested bytes. It does not rebuild,
 repack, or modify a rootfs. It verifies GitHub's uploaded asset digest and size;
 retain that result and compare it with the accepted local archive SHA-256.
 The publisher's optional `--manifest` output is a consumer pin, not another build.
+
+The legacy `latest/arlinux-wine-bionic.tar.gz` stays frozen for old APKs. New
+builds neither generate it nor publish a compatibility bundle. Runtime groups
+(native Wine, each PE architecture, FEX, DXVK, fonts, integration and common data)
+are deterministic archives named by SHA-256 in the immutable
+`arlinux-wine-components` release. Sources are separate content-addressed assets.
+The small latest manifest binds every component URL, size and hash and carries
+the runtime metadata. The workstation and guest reuse verified compressed objects
+across integration versions; first installation still downloads all runtime
+components. Runtime trees are assembled and validated before atomic selection.
+The shared download cache is outside instances; it contains no Wine prefix.
+This format's runner and fresh-instance device acceptance are pending.
 
 After promotion, remove the Debug candidate selection through the documented
 instance maintenance flow and validate the ordinary latest download in another
