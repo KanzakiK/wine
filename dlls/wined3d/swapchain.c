@@ -1102,6 +1102,41 @@ static void comp_buffer_scroll(DWORD *bits, unsigned int stride, int buf_w, int 
     }
 }
 
+/* A window below a top level of another process: FL Studio's bit bridge parents the
+ * plug-in's popup into FL's frame, a WebView2 child sits under the browser process's
+ * top level.  swapchain->dc, held since the swapchain was created, keeps the device
+ * origin and visible region of the window's position at that time: invalidate_dce()
+ * runs in the process that moves a window, so a move of the foreign ancestor never
+ * marks the held DC dirty in this process, and every present after the move lands
+ * where the window was (issue 479: the plug-in image stays at the old position and
+ * the frame at the new one gets nothing).  Blit through a fresh cache DC in that
+ * case; NtUserGetDCEx() fetches the visible region from the server on every call.
+ * The held DC stays as it is: a GL context that is not forced to GDI is bound to it. */
+static HDC swapchain_get_blit_dc(struct wined3d_swapchain *swapchain, BOOL *fresh)
+{
+    HWND root = GetAncestor(swapchain->win_handle, GA_ROOT);
+    DWORD pid = 0;
+    HDC dc;
+
+    *fresh = FALSE;
+    if (root && root != swapchain->win_handle)
+    {
+        GetWindowThreadProcessId(root, &pid);
+        if (pid != GetCurrentProcessId()
+                && (dc = GetDCEx(swapchain->win_handle, 0, DCX_USESTYLE | DCX_CACHE)))
+        {
+            *fresh = TRUE;
+            return dc;
+        }
+    }
+    return swapchain->dc;
+}
+
+static void swapchain_release_blit_dc(struct wined3d_swapchain *swapchain, HDC dc, BOOL fresh)
+{
+    if (fresh) ReleaseDC(swapchain->win_handle, dc);
+}
+
 static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
         struct wined3d_context *context, const RECT *src_rect, const RECT *dst_rect)
 {
@@ -1480,9 +1515,15 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
              * it cannot be the window rect; it has to be the geometry the
              * target is actually composed at, which nothing publishes today. */
             /* Always BitBlt full comp buffer to window — survives any surface reset. */
-            if (!BitBlt(swapchain->dc, dst_rect->left, dst_rect->top, dst_w, dst_h,
-                    swapchain->comp_dc, 0, 0, SRCCOPY))
-                WARN("Failed to blit composition buffer to window.\n");
+            {
+                BOOL fresh;
+                HDC blit_dc = swapchain_get_blit_dc(swapchain, &fresh);
+
+                if (!BitBlt(blit_dc, dst_rect->left, dst_rect->top, dst_w, dst_h,
+                        swapchain->comp_dc, 0, 0, SRCCOPY))
+                    WARN("Failed to blit composition buffer to window.\n");
+                swapchain_release_blit_dc(swapchain, blit_dc, fresh);
+            }
         }
 
         /* Store comp_dc as window property so WM_PAINT can re-blit. Don't
@@ -1514,11 +1555,17 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
         if (composited_layer)
             GdiFlush();
 
-        if (!StretchBlt(swapchain->dc, dst_rect->left, dst_rect->top,
-                dst_rect->right - dst_rect->left, dst_rect->bottom - dst_rect->top,
-                src_dc, src_rect->left, src_rect->top,
-                src_rect->right - src_rect->left, src_rect->bottom - src_rect->top, SRCCOPY))
-            ERR("Failed to blit.\n");
+        {
+            BOOL fresh;
+            HDC blit_dc = swapchain_get_blit_dc(swapchain, &fresh);
+
+            if (!StretchBlt(blit_dc, dst_rect->left, dst_rect->top,
+                    dst_rect->right - dst_rect->left, dst_rect->bottom - dst_rect->top,
+                    src_dc, src_rect->left, src_rect->top,
+                    src_rect->right - src_rect->left, src_rect->bottom - src_rect->top, SRCCOPY))
+                ERR("Failed to blit.\n");
+            swapchain_release_blit_dc(swapchain, blit_dc, fresh);
+        }
 
         /* Do not leave the leaves in that copy: a later present skipping the
          * download would blit them a second time and the leaf would trail. */

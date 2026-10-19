@@ -647,6 +647,20 @@ This is the recommended branch. What it changes, by subsystem:
   under the foreign parent blocks and attaches on both. The editor at 0,0 that
   giang17/wine issue 23 reports is the parent-relative origin of a window that was
   un-parented again, the position Windows gives it too
+- **wined3d**: a GDI present of a window below a top level of another process blits
+  through a fresh cache DC instead of the one held since the swap chain was created.
+  That DC keeps the device origin and visible region of the window's position at that
+  time: `invalidate_dce()` runs in the process that moves a window, so a move of the
+  foreign ancestor never marks it dirty in the presenting process. FL Studio's bit bridge
+  (`ilbridge.exe`) parents the plug-in's popup into FL's frame; after the frame was
+  dragged, every present of the plug-in's Direct2D swap chain (the GDI readback path, the
+  window has no X window of its own) still landed at the old position — the plug-in
+  image stayed there while the frame at the new position showed only the borders FL
+  copies along at each drag step (dense vertical lines with a mouse drag, the "stripes"
+  of issue 479). Measured on `:99` with a 400×150 px drag in 40 px steps: all presents
+  after the drag went through the held DC at the old origin; with the fresh DC the image
+  follows the frame and nothing is left behind. The held DC stays as it is, a GL context
+  that is not forced to GDI is bound to it
 - **ole32**: RevokeDragDrop no longer touches drop targets owned by other processes
   (fixes a crash when closing plugin windows)
 - **crypt32**: verifying a signature hashes the signed attributes as they are stored in
