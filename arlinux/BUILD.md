@@ -85,12 +85,17 @@ so it can build alongside runtime assembly. ARM64/ARM64EC cross-linked modules
 remain in the same PE job. The compiled payload carries headers and actual
 binaries, not compiler objects or references to a private native build tree.
 All tasks remain independent dispatches in their owning repositories and are
-scheduled by the same product graph. Hosted validation of this split is pending.
+scheduled by the same product graph. Hosted validation passed for
+[native compilation](https://github.com/taowen/wine/actions/runs/39178328531),
+[Steamworks](https://github.com/taowen/arlinux-steamworks/actions/runs/39178857778)
+and the [final product](https://github.com/taowen/wine/actions/runs/39179797837).
+This does not replace fresh-instance device acceptance.
 
 Steamworks native C++ files now invoke ccache directly. Its server and launch
 helper compile to cached objects before linking, and intermediate objects are
 removed from the exported capsule. The recipe remains in the pinned Steamworks
-repository; hosted validation of its new compiler-cache coverage is pending.
+repository. Its first hosted build passed and recorded 896 cacheable calls;
+this populated the cache and does not measure a warm Steamworks rebuild.
 
 Workstation product downloads retain manifests, partial transfers and verified
 capsules under the shared `github-state/downloads/COMPONENT_ID` directory, not
@@ -110,6 +115,14 @@ therefore does not require downloading an unchanged product again. Changed
 component contents still need their first download. Existing capsules currently
 bundle distributables and source archives, so reducing a new candidate's first
 transfer further requires separate published download assets.
+
+The actual 992,832,136-byte final capsule was interrupted after 737,935,360
+bytes. A second sole-entry invocation resumed at that exact offset and verified
+SHA-256 `7bdeeef3079082fd2760447111a9e82ce3472e1896cae1481fd7f99082c06a60`.
+Changing to another integration pin with the same final component then completed
+in 16.1 seconds by copying verified local outputs, without binary downloads.
+The persistent transfer was consumed by the normal product extractor; no
+synthetic archive or alternative download command was used.
 
 All three incremental PE builds passed with actual compiler invocations:
 
