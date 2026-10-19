@@ -18,14 +18,12 @@
 #include "wine/hwnd_dmabuf.h"
 #include "wine/server.h"
 
-#define WM_WINE_HWND_DMABUF_FRAME (WM_WINE_FIRST_DRIVER_MSG + 3)
-
 /* Wake the toplevel so winewayland recomposites dmabuf children. */
 void hwnd_dmabuf_post_wake( HWND hwnd )
 {
     HWND toplevel = NtUserGetAncestor( hwnd, GA_ROOT );
 
-    if (toplevel) NtUserPostMessage( toplevel, WM_WINE_HWND_DMABUF_FRAME, 0, 0 );
+    if (toplevel) NtUserPostMessage( toplevel, WM_WINE_HWND_GDI_FRAME, 0, 0 );
 }
 
 /* Open the producer end of hwnd's channel. */

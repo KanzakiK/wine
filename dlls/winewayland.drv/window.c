@@ -32,6 +32,7 @@
 #include "waylanddrv.h"
 
 #include "wine/debug.h"
+#include "wine/hwnd_dmabuf.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
 
@@ -586,6 +587,8 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
             xdg_toplevel_set_parent(data->wayland_surface->xdg_toplevel,
                 owner_surface && wayland_surface_is_toplevel(owner_surface) ? owner_surface->xdg_toplevel : NULL);
         wayland_win_data_update_wayland_state(data);
+        if (!wl_list_empty(&data->wayland_surface->hwnd_dmabuf_surfaces))
+            wayland_hwnd_gdi_update(data->wayland_surface);
     }
 
     if (owner_data) wayland_win_data_release(owner_data);
@@ -773,7 +776,7 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_WAYLAND_SET_FOREGROUND:
         NtUserSetForegroundWindowInternal(hwnd);
         return 0;
-    case WM_WINE_FIRST_DRIVER_MSG + 3:
+    case WM_WINE_HWND_GDI_FRAME:
     {
         struct wayland_win_data *data = wayland_win_data_get(hwnd);
         if (data)

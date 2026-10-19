@@ -2499,6 +2499,7 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
         user_driver->pWindowPosChanged( hwnd, insert_after, owner_hint, swp_flags, &monitor_rects,
                                         get_driver_window_surface( new_surface, raw_dpi ) );
         update_client_surfaces( toplevel );
+        refresh_foreign_gdi_surface( hwnd );
     }
 
     return ret;

@@ -9,6 +9,8 @@
 
 #include <wine/server.h>
 
+#define WM_WINE_HWND_GDI_FRAME (WM_WINE_FIRST_DRIVER_MSG + 3)
+
 #define HWND_DMABUF_MOD_LINEAR                 0
 #define HWND_DMABUF_MOD_INVALID                0x00ffffffffffffffull
 

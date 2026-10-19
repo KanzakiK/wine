@@ -742,6 +742,8 @@ void wayland_hwnd_gdi_update(struct wayland_surface *surface)
         if (attached_frame)
             InterlockedIncrement(&dmabuf_surface->current->ref);
         wl_surface_commit(dmabuf_surface->wl_surface);
+        /* Geometry wakes also need a parent commit to apply subsurface moves. */
+        any_new = TRUE;
         above = dmabuf_surface->wl_surface;
     }
 

@@ -72,7 +72,7 @@ struct foreign_gdi_surface
 {
     struct window_surface header;
     struct list entry;
-    HWND hwnd;
+    HWND hwnd, owner_root;
     int channel_fd;
     UINT64 producer_unique_id;
     UINT64 next_release_token;
@@ -394,6 +394,7 @@ static struct foreign_gdi_surface *foreign_gdi_surface_create( HWND hwnd, int wi
 
     surface = foreign_gdi_surface_from_window_surface( window_surface );
     surface->hwnd = hwnd;
+    surface->owner_root = NtUserGetAncestor( hwnd, GA_ROOT );
     surface->channel_fd = -1;
     surface->width = width;
     surface->height = height;
@@ -488,6 +489,25 @@ static void foreign_gdi_surface_flush_hwnd( HWND hwnd )
     }
 }
 
+void refresh_foreign_gdi_surface( HWND hwnd )
+{
+    struct foreign_gdi_surface *surface;
+    HWND prior = 0, root;
+
+    pthread_mutex_lock( &foreign_gdi_lock );
+    LIST_FOR_EACH_ENTRY( surface, &foreign_gdi_surfaces, struct foreign_gdi_surface, entry )
+        if (surface->hwnd == hwnd) { prior = surface->owner_root; break; }
+    pthread_mutex_unlock( &foreign_gdi_lock );
+    if (!prior) return;
+    root = NtUserGetAncestor( hwnd, GA_ROOT );
+    pthread_mutex_lock( &foreign_gdi_lock );
+    LIST_FOR_EACH_ENTRY( surface, &foreign_gdi_surfaces, struct foreign_gdi_surface, entry )
+        if (surface->hwnd == hwnd) { surface->owner_root = root; break; }
+    pthread_mutex_unlock( &foreign_gdi_lock );
+    if (prior != root) NtUserPostMessage( prior, WM_WINE_HWND_GDI_FRAME, 0, 0 );
+    if (root) NtUserPostMessage( root, WM_WINE_HWND_GDI_FRAME, 0, 0 );
+}
+
 void forget_foreign_gdi_surface( HWND hwnd )
 {
     struct foreign_gdi_surface *surface, *found = NULL;
@@ -506,6 +526,7 @@ void forget_foreign_gdi_surface( HWND hwnd )
     window_surface_lock( &found->header );
     found->lost = TRUE;
     foreign_gdi_surface_close_channel( found );
+    if (found->owner_root) NtUserPostMessage( found->owner_root, WM_WINE_HWND_GDI_FRAME, 0, 0 );
     window_surface_unlock( &found->header );
     register_window_surface( &found->header, NULL );
     window_surface_release( &found->header );
