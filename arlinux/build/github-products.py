@@ -305,9 +305,9 @@ def main():
         transfer_started=time.monotonic()
         fetch_product(reference,args.output/name)
         transfers[name]=dict(seconds=round(time.monotonic()-transfer_started,3))
-    (args.output/'products.json').write_text(json.dumps(dict(format=1,
+    (args.output/('products-'+args.product+'.json')).write_text(json.dumps(dict(format=1,
         framework=framework_sha,products=result),indent=2)+'\n')
-    (args.output/'build-timing.json').write_text(json.dumps(dict(format=1,
+    (args.output/('build-timing-'+args.product+'.json')).write_text(json.dumps(dict(format=1,
         framework=framework_sha, totalSeconds=round(time.monotonic()-started,3),
         graphSeconds=round(graph_seconds,3), components=coordinator.timings,
         productTransfers=transfers),indent=2)+'\n')

@@ -84,12 +84,28 @@ When Actions has restored stage receipts, older release seeds cannot overwrite
 those output generations. The pipeline still verifies current inputs and output
 hashes before reuse; a receipt alone does not authorize a cache hit.
 
-Runtime-support assembly still imports transitive compiler and toolchain inputs.
-The [current check](https://github.com/taowen/wine/actions/runs/39150836195)
-took 354 seconds overall, including a 265-second build step. Further reduction
-needs direct artifact contracts and component-specific engine identities before
-changing the shared pipeline engine; otherwise an assembly-only change can
-invalidate unrelated compiler caches. Keep assembly in the single product graph.
+The graph marks support and final-product assembly with `artifactInputsOnly`.
+These jobs import and validate only their direct component outputs and receipts;
+compiler toolchains and transitive compiler work trees are not assembly inputs.
+The support job archives its own sources, so final assembly needs no component
+source checkout. Both still use the same assembly recipes and component cache.
+Hosted preparation installs the capsule decoder without APT or compiler setup.
+The first migration changes shared dispatcher identities; later recipe edits
+remain isolated in `runtime_assembly.py`.
+
+Actual hosted builds on 2026-10-19 measured:
+
+| Stage | Previous workflow | Direct-artifact workflow | Build step before / after |
+|---|---:|---:|---:|
+| [Support](https://github.com/taowen/wine/actions/runs/39196742489) | 232s | 34s | 143s / 3s |
+| [Final product](https://github.com/taowen/wine/actions/runs/39196808346) | 565s | 121s | 359s / 55s |
+
+Baselines were runs 39189815033 and 39190172799. Workflow times include
+preparation, transfer and publication; they are not complete Wine build times
+and vary with runner/network load. Workstation `build-timing-PRODUCT.json`
+records component waits, product transfer and total duration. Both timing and
+`products-PRODUCT.json` are scoped by requested product, so concurrent audio
+and Wine preparation cannot overwrite each other's reports.
 
 The next optimization recipes remove intermediate PE gzip creation/extraction:
 `package-wine-pe.py` produces the declared runtime directory directly; the
@@ -102,8 +118,8 @@ export their Windows modules; common data and host tools come from ARM64.
 Final support/product assembly implementation lives in `build/runtime_assembly.py`
 and is a direct input of those two stages. Subsequent assembly-only edits do not
 change the shared compiler engine. Initial migration still changes shared inputs.
-These recipe changes require hosted builds and fresh-instance acceptance; they
-are not yet measured speedup or compatibility results.
+Hosted assembly is measured above; fresh-instance acceptance remains a separate
+requirement from those build-time results.
 
 Native compilation is now the `wine-bionic-compile` component. It depends on
 ARM64 PE host tools, native dependencies, TLS, Pulse and graphics, without waiting
