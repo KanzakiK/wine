@@ -293,8 +293,50 @@ could similarly restore an architecture compiler cache. Pure merge/package/
 runtime assembly jobs now skip the irrelevant compiler cache entirely. New
 v4 keys delimit stage names with `--`; remaining compiler jobs may use v3/v2
 as migration seeds. The key-only wrapper update does not alter product input
-identities or rebuild outputs. Its first natural hosted cache save is pending;
-do not report a warm v4 compiler measurement before it occurs.
+identities or rebuild outputs. DXVK run 39334026482 saved the first observed
+v4 cache (57,071,146 bytes); PE package run 39335034205 skipped the compiler
+cache while restoring MinGW/addons. This establishes the new key and assembly
+behavior, not a warm v4 compiler timing.
+
+Two further transfer defects were confirmed during this follow-up:
+
+- Pure assemblers imported an old runtime capsule and its parents as a release
+  seed even though they had no compiler work to reuse. The coordinator no longer
+  requests seeds for PE merge/package, runtime/support and final assembly.
+  Verified runtime record `5752dc93` (run 39335786746) has no `cacheSeed`.
+- Unchanged FEX/DXVK links embedded wall-clock timestamps. Their Wine-owned
+  recipes now pass `--no-insert-timestamp`; FEX upstream source is unchanged.
+  FEX's existing static/alignment options and DXVK's ARM64X option are retained.
+  DXVK includes the link policy in its build-directory identity so an existing
+  cross file cannot silently retain the old flags.
+
+In the final product, both FEX DLLs differ from the preceding build only in the
+eight bytes of their PE/debug timestamps; both header timestamps are now zero.
+All 15 DXVK DLL header timestamps are zero as well. DXVK also changed its source/
+build-cache directory in this migration and several binaries changed beyond
+timestamps; complete repeated-build byte reproducibility is not established.
+Do not equate removal of this confirmed timestamp cause with all possible
+reproducibility defects being solved.
+
+Concurrent final-product jobs also raced when uploading identical shared
+objects: run 39336555736 failed after another job uploaded the same integration
+archive at 22:41:33 UTC, between inventory and upload. The publisher now re-reads
+the release after an upload failure and reuses the asset only when both GitHub
+SHA-256 and byte count match. It never clobbers a conflicting asset.
+
+Final build verification used integration
+`47fe73d1dc2bad3825813d81c42ac1d53e402f51`, successful product run 39337031482,
+and runtime manifest SHA-256
+`35ab8527496a954f00d59f4513e1fbf46de5d120cbc842cb910816f8c28def2d`.
+The complete sole-entry warm invocation took 4.93 seconds, verifying all 20
+component references and the local product without hosted jobs or binary
+downloads. The coordinator itself took 4.094 seconds. Unchanged common data,
+fonts and configuration from the previous accepted product reused about
+374 MB of objects; source archives remain on-demand publication inputs.
+Two obsolete v2 compiler caches and six misclassified PE-merge caches were
+removed (about 7.49 GB compressed, regenerable). Current compiler seeds,
+immutable releases and user/device data were retained. Public latest was not
+promoted, and this newly packaged runtime has not had fresh-device acceptance.
 
 All three incremental PE builds passed with actual compiler invocations:
 
