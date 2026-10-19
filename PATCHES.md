@@ -328,6 +328,11 @@ This is the recommended branch. What it changes, by subsystem:
   `RtlWaitOnAddress()` entry is unlinked with release semantics and re-checked with acquire
   semantics, so a waiter cannot see its address cleared before the unlink is visible
   (ntdll, the queue the loader-lock wake above runs through)
+- **winemenubuilder**: a shortcut without arguments no longer produces a desktop entry whose
+  `Exec` line ends in an empty `""` argument (backport of 1977760e374 from Wine 11.19). vatSys,
+  which registers the `vatsys://` URL protocol, exited silently during its .NET start-up when
+  launched with that argument from the desktop icon Wine had generated: no window, no crash,
+  nothing in its own error log
 - **ntdll**: MADV_FREE for MEM_RESET (improved page reclaim behaviour)
 - **ntdll**: the heap enabled the LFH frontend only for size classes up to 1K; blocks between
   1K and 16K stayed in the backend heap, whose free path writes the free-list links over the
