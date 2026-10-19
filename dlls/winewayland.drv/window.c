@@ -496,7 +496,9 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     /* Get the managed state with win_data unlocked, as is_window_managed
      * may need to query win_data information about other HWNDs and thus
      * acquire the lock itself internally. */
-    if (!(managed = is_window_managed(hwnd, swp_flags, fullscreen)) && surface) owner = owner_hint;
+    if ((managed = is_window_managed(hwnd, swp_flags, fullscreen)))
+        owner = NtUserGetWindowRelative(hwnd, GW_OWNER);
+    else if (surface) owner = owner_hint;
 
     if (!(data = wayland_win_data_get(hwnd))) return;
     owner_data = owner && owner != hwnd ? wayland_win_data_get(owner) : NULL;
@@ -515,8 +517,13 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
             data->wayland_surface = NULL;
         }
     }
-    else if (wayland_win_data_create_wayland_surface(data, owner_surface))
+    else if (wayland_win_data_create_wayland_surface(data, managed ? NULL : owner_surface))
     {
+        /* Managed owned windows are independent toplevels, not subsurfaces,
+         * but the compositor still needs their Win32 transient relationship. */
+        if (managed && wayland_surface_is_toplevel(data->wayland_surface))
+            xdg_toplevel_set_parent(data->wayland_surface->xdg_toplevel,
+                owner_surface && wayland_surface_is_toplevel(owner_surface) ? owner_surface->xdg_toplevel : NULL);
         wayland_win_data_update_wayland_state(data);
     }
 
