@@ -368,6 +368,40 @@ static void wayland_shm_buffer_copy_shape(struct wayland_shm_buffer *buffer, con
 /***********************************************************************
  *           wayland_window_surface_flush
  */
+static HRGN input_region_from_shape(const RECT *rect, const BITMAPINFO *info, const BYTE *bits)
+{
+    UINT width = info->bmiHeader.biWidth, height = abs(info->bmiHeader.biHeight);
+    UINT stride = info->bmiHeader.biSizeImage / height;
+    UINT x, y, end_y, start;
+    HRGN region = NtGdiCreateRectRgn(0, 0, 0, 0), run = NtGdiCreateRectRgn(0, 0, 0, 0);
+
+    if (!region || !run) goto failed;
+    for (y = 0; y < height; y = end_y)
+    {
+        const BYTE *row = bits + y * stride;
+        /* Coalesce identical scanlines before adding runs. Rectangular and
+         * empty windows need at most one region operation, not one per pixel. */
+        for (end_y = y + 1; end_y < height; ++end_y)
+            if (memcmp(row, bits + end_y * stride, stride)) break;
+        for (x = 0; x < width;)
+        {
+            while (x < width && !(row[x / 8] & (0x80 >> (x % 8)))) ++x;
+            start = x;
+            while (x < width && (row[x / 8] & (0x80 >> (x % 8)))) ++x;
+            if (start == x) continue;
+            NtGdiSetRectRgn(run, rect->left + start, rect->top + y, rect->left + x, rect->top + end_y);
+            if (NtGdiCombineRgn(region, region, run, RGN_OR) == ERROR) goto failed;
+        }
+    }
+    NtGdiDeleteObjectApp(run);
+    return region;
+
+failed:
+    if (run) NtGdiDeleteObjectApp(run);
+    if (region) NtGdiDeleteObjectApp(region);
+    return NULL;
+}
+
 static BOOL wayland_window_surface_flush(struct window_surface *window_surface, const RECT *rect, const RECT *dirty,
                                          const BITMAPINFO *color_info, const void *color_bits, BOOL shape_changed,
                                          const BITMAPINFO *shape_info, const void *shape_bits)
@@ -378,6 +412,7 @@ static BOOL wayland_window_surface_flush(struct window_surface *window_surface, 
     BOOL layered = InterlockedCompareExchange(&wws->layered, 0, 0);
     BOOL flushed = FALSE;
     HRGN surface_damage_region = NULL;
+    HRGN input_region = NULL;
     HRGN copy_from_window_region;
     uint32_t buffer_format;
 
@@ -446,10 +481,14 @@ static BOOL wayland_window_surface_flush(struct window_surface *window_surface, 
 
     NtGdiSetRectRgn(shm_buffer->damage_region, 0, 0, 0, 0);
 
-    flushed = set_window_surface_contents(window_surface->hwnd, shm_buffer, surface_damage_region);
+    if (shape_changed && shape_bits &&
+        !(input_region = input_region_from_shape(rect, shape_info, shape_bits))) goto done;
+    flushed = set_window_surface_contents(window_surface->hwnd, shm_buffer, surface_damage_region,
+                                          shape_changed, input_region);
     wl_display_flush(process_wayland.wl_display);
 
 done:
+    if (input_region) NtGdiDeleteObjectApp(input_region);
     if (surface_damage_region) NtGdiDeleteObjectApp(surface_damage_region);
     return flushed;
 }

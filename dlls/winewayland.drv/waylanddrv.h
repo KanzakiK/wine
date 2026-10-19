@@ -309,6 +309,7 @@ struct wayland_surface
 
     struct wayland_surface_config pending, requested, processing, current;
     BOOL resizing;
+    double input_scale;
     struct wayland_window_config window;
     int content_width, content_height;
     HCURSOR hcursor;
@@ -386,6 +387,9 @@ struct wayland_win_data
     HWND hwnd;
     /* last buffer that was set as window contents */
     struct wayland_shm_buffer *window_contents;
+    /* Pixel input shape, retained even while WS_EX_TRANSPARENT is set. */
+    HRGN input_region;
+    BOOL input_dirty;
     /* wayland surface (if any) for this window */
     struct wayland_surface *wayland_surface;
     /* wayland client surface (if any) for this window */
@@ -406,7 +410,8 @@ void wayland_win_data_release(struct wayland_win_data *data);
 
 struct wayland_client_surface *get_client_surface(HWND hwnd);
 void set_client_surface(HWND hwnd, struct wayland_client_surface *client);
-BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffer, HRGN damage_region);
+BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffer, HRGN damage_region,
+                                 BOOL input_changed, HRGN input_region);
 struct wayland_shm_buffer *get_window_surface_contents(HWND hwnd);
 void wayland_window_init(void);
 

@@ -103,6 +103,7 @@ static void wayland_win_data_destroy(struct wayland_win_data *data)
 
     if (data->wayland_surface) wayland_surface_destroy(data->wayland_surface);
     if (data->window_contents) wayland_shm_buffer_unref(data->window_contents);
+    if (data->input_region) NtGdiDeleteObjectApp(data->input_region);
     free(data);
 }
 
@@ -188,13 +189,39 @@ static void reapply_cursor_clipping(void)
     NtUserSetThreadDpiAwarenessContext(context);
 }
 
+static void wayland_win_data_update_input(struct wayland_win_data *data, struct wayland_surface *surface)
+{
+    DWORD exstyle = NtUserGetWindowLongW(data->hwnd, GWL_EXSTYLE);
+    struct wl_region *region = NULL;
+    RGNDATA *shape;
+    UINT i;
+
+    if ((exstyle & (WS_EX_LAYERED | WS_EX_TRANSPARENT)) == (WS_EX_LAYERED | WS_EX_TRANSPARENT))
+        region = wl_compositor_create_region(process_wayland.wl_compositor);
+    else if (data->input_region && (shape = get_region_data(data->input_region)))
+    {
+        RECT *rects = (RECT *)shape->Buffer;
+        region = wl_compositor_create_region(process_wayland.wl_compositor);
+        for (i = 0; i < shape->rdh.nCount; ++i)
+        {
+            RECT rect = map_rect_to_surface(surface, rects[i]);
+            if (!IsRectEmpty(&rect))
+                wl_region_add(region, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+        }
+        free(shape);
+    }
+    wl_surface_set_input_region(surface->wl_surface, region);
+    if (region) wl_region_destroy(region);
+    surface->input_scale = surface->window.scale;
+    data->input_dirty = FALSE;
+}
+
 static BOOL wayland_win_data_create_wayland_surface(struct wayland_win_data *data, struct wayland_surface *owner_surface)
 {
     struct wayland_surface *surface;
     enum wayland_surface_role role;
     BOOL visible;
     DWORD exstyle = NtUserGetWindowLongW(data->hwnd, GWL_EXSTYLE);
-    struct wl_region *input_region;
 
     TRACE("hwnd=%p\n", data->hwnd);
 
@@ -218,13 +245,7 @@ static BOOL wayland_win_data_create_wayland_surface(struct wayland_win_data *dat
 
     if (!(surface = data->wayland_surface) && !(surface = wayland_surface_create(data->hwnd))) return FALSE;
 
-    /* Pass through mouse events for layered, transparent windows, to match
-     * Windows behavior. */
-    input_region = ((exstyle & WS_EX_TRANSPARENT) && (exstyle & WS_EX_LAYERED)) ?
-                   wl_compositor_create_region(process_wayland.wl_compositor) :
-                   NULL;
-    wl_surface_set_input_region(surface->wl_surface, input_region);
-    if (input_region) wl_region_destroy(input_region);
+    wayland_win_data_update_input(data, surface);
 
     /* If the window is a visible toplevel make it a wayland
      * xdg_toplevel. Otherwise keep it role-less to avoid polluting the
@@ -393,11 +414,11 @@ static BOOL is_window_managed(HWND hwnd, UINT swp_flags, BOOL fullscreen)
     style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
     if ((style & (WS_CHILD|WS_POPUP)) == WS_CHILD) return FALSE;
     ex_style = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
-    /* An owned, non-activating transparent tool surface decorates another
+    /* An owned, frameless, non-activating surface decorates another
      * window; it must not acquire an independently focusable xdg_toplevel.
-     * Keep genuine application windows and framed palettes managed. */
-    if ((ex_style & (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW)) ==
-        (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW) &&
+     * Keep genuine application windows and framed palettes managed. Do not
+     * depend on the layered style: applications can toggle it while painting. */
+    if ((ex_style & WS_EX_NOACTIVATE) &&
         !(ex_style & WS_EX_APPWINDOW) && !(style & (WS_CAPTION | WS_THICKFRAME)) &&
         NtUserGetWindowRelative(hwnd, GW_OWNER))
         return FALSE;
@@ -887,7 +908,8 @@ void set_client_surface(HWND hwnd, struct wayland_client_surface *new_client)
     wayland_win_data_release(data);
 }
 
-BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffer, HRGN damage_region)
+BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffer, HRGN damage_region,
+                                 BOOL input_changed, HRGN input_region)
 {
     struct wayland_surface *wayland_surface;
     struct wayland_win_data *data;
@@ -895,10 +917,32 @@ BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffe
 
     if (!(data = wayland_win_data_get(hwnd))) return FALSE;
 
+    if (input_changed)
+    {
+        data->input_dirty = TRUE;
+        if (input_region)
+        {
+            if (!data->input_region) data->input_region = NtGdiCreateRectRgn(0, 0, 0, 0);
+            if (!data->input_region ||
+                NtGdiCombineRgn(data->input_region, input_region, 0, RGN_COPY) == ERROR)
+            {
+                wayland_win_data_release(data);
+                return FALSE;
+            }
+        }
+        else if (data->input_region)
+        {
+            NtGdiDeleteObjectApp(data->input_region);
+            data->input_region = NULL;
+        }
+    }
+
     if ((wayland_surface = data->wayland_surface))
     {
         if (wayland_surface_reconfigure(wayland_surface))
         {
+            if (data->input_dirty || wayland_surface->input_scale != wayland_surface->window.scale)
+                wayland_win_data_update_input(data, wayland_surface);
             wayland_surface_attach_shm(wayland_surface, shm_buffer, damage_region);
             wl_surface_commit(wayland_surface->wl_surface);
             committed = TRUE;
