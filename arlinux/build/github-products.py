@@ -167,7 +167,11 @@ class Coordinator:
             # Capsules contain verified build receipts, including references.
             # They can seed a new run after an unrelated framework commit; the
             # producer's input hashes, not this coordinator, decide cache hits.
-            if stage not in ('yibu','debian','arch','omarchy','plasma','lxqt','windows-fonts','wine-product'):
+            # Pure assemblers have no compiler work to seed. Importing an old
+            # runtime plus its dependency closure just to rebuild a new runtime
+            # duplicates large downloads; current declared inputs are sufficient.
+            if stage not in ('yibu','debian','arch','omarchy','plasma','lxqt','windows-fonts',
+                             'wine-pe','wine-pe-package','wine-bionic','runtime-support','wine-product'):
                 releases=api(f'repos/{repository}/releases?per_page=100')
                 candidate=next((r for r in releases if re.fullmatch(re.escape('arlinux-'+stage+'-')+'[0-9a-f]{24}',r['tag_name']) and
                                 any(a['name']=='component.json' for a in r['assets'])),None)
