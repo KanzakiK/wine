@@ -73,6 +73,24 @@ reduced path list changes Actions' cache version, so its first migration can be
 cold despite legacy restore-key prefixes; subsequent saves contain the compact
 payload. This migration changes identities once and requires hosted verification;
 do not present the first migration build as steady-state incremental performance.
+
+The first v3 hosted runs produced these compressed cache payloads (bytes from
+GitHub's cache API, matched to the exact component request identities):
+
+| PE stage | Representative previous v2 payload | First v3 payload |
+|---|---:|---:|
+| [ARM64](https://github.com/taowen/wine/actions/runs/39266884035) | 3,099,938,526 | 393,743,578 |
+| [x64](https://github.com/taowen/wine/actions/runs/39266900110) | 2,198,182,206 | 193,124,750 |
+| [x86](https://github.com/taowen/wine/actions/runs/39266880380) | 2,199,750,003 | 187,674,728 |
+
+ARM64's cache-save step took 11 seconds, compared with 111 seconds in the
+previous run 39262239615. This is an observed cache-I/O comparison, not an
+end-to-end compiler speedup: the v3 migration had a cold cache and its compiler
+cache has not accumulated the same history as v2. Its build step took 838 seconds.
+Subsequent warm cache restoration and complete product acceptance remain separate
+verification tasks. A later sole-entry invocation at framework c8309fc reused
+all three published PE components rather than dispatching new PE jobs; this
+checks recipe reuse, not warm compiler performance.
 FEX is pinned to an unmodified upstream FEX-Emu/FEX commit. The taowen/FEX
 fork hosts standalone CI only; do not maintain translator or ARM64EC behavior
 patches there. Keep product integration and diagnostic recipes outside FEX.
