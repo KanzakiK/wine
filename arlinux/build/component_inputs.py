@@ -95,6 +95,13 @@ def source_inputs(repo, revision, stage, plan):
         return subprocess.check_output(['git', '-C', str(repo), 'show', revision+':'+path]).decode()
     selected['arlinux/build/component_inputs.py'] = implementation(source('arlinux/build/component_inputs.py'))
     selected['declaredPaths'] = paths
+    adapter = 'arlinux/build/github-component.py'
+    handlers = ('build_'+stage.replace('-', '_'),) if stage in (
+        'windows-fonts', 'wine-capture', 'wine-diagnostics') else ()
+    selected[adapter] = implementation(source(adapter),
+        ('run', 'sha', 'request', 'prepare', 'toolchains', 'import_dependency', 'restore_seed', 'build', *handlers))
+    selected['arlinux/build/artifact_download.py'] = implementation(
+        source('arlinux/build/artifact_download.py'), ('download', 'sha256_file', 'download_capsule'))
     if stage in ASSEMBLY_CODE:
         path = 'arlinux/build/runtime_assembly.py'
         selected[path] = implementation(source(path), ASSEMBLY_CODE[stage])
@@ -103,11 +110,9 @@ def source_inputs(repo, revision, stage, plan):
     lock = subprocess.check_output(['git', '-C', str(repo), 'show', revision+':arlinux/build/github-inputs.json'])
     versions = json.loads(lock)
     recipe = dict(selected)
-    adapter = 'arlinux/build/github-component.py'
-    recipe[adapter] = implementation(source(adapter),
-        ('run', 'sha', 'request', 'prepare', 'toolchains', 'import_dependency', 'restore_seed', 'build'))
     return dict(sourceSha256=hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest(),
                 recipeSha256=hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest(),
+                publicationSha256=implementation(source(adapter), ('publish', 'publish_distribution')),
                 tools={n: versions[n] for n in RESOURCES[stage]},
                 runner=plan['stages'][stage]['runner'],
                 artifactInputsOnly=plan['stages'][stage].get('artifactInputsOnly', False))

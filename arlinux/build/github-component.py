@@ -13,7 +13,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
-from artifact_download import download
+from artifact_download import download, download_capsule
 from component_inputs import requirements, request_identity, source_inputs
 
 
@@ -142,7 +142,11 @@ def prepare(data, framework):
         # capsules. Retain only ccache here, not a second multi-GB output copy.
         with Path(os.environ['GITHUB_OUTPUT']).open('a') as out:
             out.write('cache-paths<<ARLINUX_CACHE_PATHS\n'+'\n'.join(paths)+'\nARLINUX_CACHE_PATHS\n')
-            out.write('vendor-key='+sha(framework/'arlinux/build/github-inputs.json')+'\n')
+            lock = json.loads((framework/'arlinux/build/github-inputs.json').read_text())
+            _, resources = requirements(data['stage'], plan)
+            for name in sorted(resources):
+                identity = hashlib.sha256(json.dumps(lock[name], sort_keys=True).encode()).hexdigest()
+                out.write('vendor-'+name+'-key='+identity+'\n')
 
 
 def toolchains(root, framework):
@@ -155,7 +159,7 @@ def toolchains(root, framework):
     tools.mkdir(exist_ok=True)
     for name in sorted(resources - {'addons'}):
         item = lock[name]
-        archive = download(item['url'], cache / item['file'], item['sha256'])
+        archive = download(item['url'], cache / name / item['file'], item['sha256'])
         destination = tools / name
         if not destination.exists():
             temporary = tools / (name+'-extract')
@@ -173,7 +177,7 @@ def toolchains(root, framework):
     addons = root / 'vendor/addons'
     addons.mkdir(parents=True, exist_ok=True)
     for item in (lock['addons'] if 'addons' in resources else []):
-        archive = download(item['url'], cache / item['file'], item['sha256'])
+        archive = download(item['url'], cache / 'addons' / item['file'], item['sha256'])
         destination = addons / item['directory']
         destination.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive) as source:
@@ -222,15 +226,7 @@ def import_dependency(root, dependency, visited=None, *, recursive=True):
     if recursive:
         for parent in record.get('dependencies', []):
             import_dependency(root, parent, visited)
-    for part in record['parts']:
-        download(part['url'], directory/part['name'], part['sha256'])
-    archive = directory / 'capsule.tar.zst'
-    with archive.open('wb') as dest:
-        for part in record['parts']:
-            with (directory/part['name']).open('rb') as source:
-                shutil.copyfileobj(source, dest)
-    if sha(archive) != record['archiveSha256']:
-        raise ValueError('Reassembled component checksum mismatch')
+    archive = download_capsule(record, directory)
     def capsule_filter(member, destination):
         original_link = None
         if member.issym() and member.linkname.startswith('/'):
@@ -259,8 +255,6 @@ def import_dependency(root, dependency, visited=None, *, recursive=True):
         with tarfile.open(fileobj=decoded, mode='r|') as source:
             source.extractall(root, members=checked_members(source), filter=capsule_filter)
     archive.unlink()
-    for part in record['parts']:
-        (directory/part['name']).unlink()
     return record
 
 
@@ -274,61 +268,72 @@ def restore_seed(root, framework, data, visited, *, recursive=True):
     import_dependency(root, data['cacheSeed'], visited, recursive=recursive)
 
 
+def build_windows_fonts(data, framework):
+    root = Path(os.environ['ARLINUX_WORKSPACE'])
+    output = root / 'vendor/fonts'
+    output.mkdir(parents=True, exist_ok=True)
+    sys.path.insert(0, str(framework/'arlinux'))
+    from wine_fonts import FILES
+    for name in FILES:
+        shutil.copyfile(Path(os.environ['WINDIR'])/'Fonts'/name, output/name)
+
+
+def build_wine_capture(data, framework):
+    root = Path(os.environ['ARLINUX_WORKSPACE'])
+    stage = data['stage']
+    tools = toolchains(root, framework)
+    from pipeline_cache import Cache, inventory
+    cache = Cache(framework/'build/pipeline')
+    dependency = import_dependency(root, data['dependencies'][0], set(), recursive=False)
+    prefix = root/dependency['pipelineOutput']/'prefix'
+    source = framework/'arlinux/components/gfxreconstruct'
+    source_commit = subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+    inputs = dict(source=data['sourceInputs']['recipeSha256'], dependency=dependency['outputIdentity'],
+                  toolchain=sha(framework/'arlinux/build/github-inputs.json'))
+    def compile_capture(output):
+        build_dir = framework/'build/gfxreconstruct-bionic'/source_commit
+        staged = output/'tools'
+        run('bash', source/'arlinux/build-bionic.sh', tools['ndk'], prefix, build_dir, staged,
+            env=dict(os.environ, JOBS='4', CCACHE_DIR=str(root/'cache/ccache')))
+        archive = output/'arlinux-wine-capture.tar.gz'
+        with tarfile.open(archive,'w:gz') as target:
+            target.add(staged,arcname='capture-tools')
+        (output/(archive.name+'.sha256')).write_text(sha(archive)+'  '+archive.name+'\n')
+        shutil.rmtree(staged)
+        shutil.copyfile(framework/'arlinux/vulkan-capture.py', output/'vulkan-capture.py')
+    output = cache.stage(stage, inputs, compile_capture)
+    descriptor = framework/'build/artifacts/components'/f'{stage}.json'
+    descriptor.parent.mkdir(parents=True,exist_ok=True)
+    descriptor.write_text(json.dumps(dict(output=str(output),records=cache.records))+'\n')
+
+
+def build_wine_diagnostics(data, framework):
+    root = Path(os.environ['ARLINUX_WORKSPACE'])
+    stage = data['stage']
+    tools = toolchains(root, framework)
+    from pipeline_cache import Cache, inventory
+    cache = Cache(framework/'build/pipeline')
+    inputs = {str(path.relative_to(framework)): inventory(path) for path in (
+        framework/'arlinux/build/windows-debug.sh', framework/'arlinux/windows-debug.py',
+        framework/'arlinux/components/windows-integration/diagnostics/exception-observer.c',
+        framework/'arlinux/components/windows-integration/diagnostics/exception-observer-probe.c')}
+    inputs['toolchainLock'] = sha(framework/'arlinux/build/github-inputs.json')
+    inputs['engine'] = data['sourceInputs']['recipeSha256']
+    inputs['compiler'] = inventory(Path(tools['mingw'])/'aarch64-w64-mingw32-clang')
+    def compile(output):
+        run('bash', framework/'arlinux/build/windows-debug.sh', tools['mingw'], output)
+        shutil.copyfile(framework/'arlinux/windows-debug.py', output/'windows-debug.py')
+    output = cache.stage(stage, inputs, compile)
+    descriptor = framework/'build/artifacts/components'/f'{stage}.json'
+    descriptor.parent.mkdir(parents=True, exist_ok=True)
+    descriptor.write_text(json.dumps(dict(output=str(output), records=cache.records))+'\n')
+
+
 def build(data, framework):
     root = Path(os.environ['ARLINUX_WORKSPACE'])
     stage = data['stage']
-    if stage == 'windows-fonts':
-        output = root / 'vendor/fonts'
-        output.mkdir(parents=True, exist_ok=True)
-        sys.path.insert(0, str(framework/'arlinux'))
-        from wine_fonts import FILES
-        for name in FILES:
-            shutil.copyfile(Path(os.environ['WINDIR'])/'Fonts'/name, output/name)
-        return
-    if stage == 'wine-capture':
-        tools = toolchains(root, framework)
-        from pipeline_cache import Cache, inventory
-        cache = Cache(framework/'build/pipeline')
-        dependency = import_dependency(root, data['dependencies'][0], set(), recursive=False)
-        prefix = root/dependency['pipelineOutput']/'prefix'
-        source = framework/'arlinux/components/gfxreconstruct'
-        source_commit = subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
-        inputs = dict(source=data['sourceInputs']['recipeSha256'], dependency=dependency['outputIdentity'],
-                      toolchain=sha(framework/'arlinux/build/github-inputs.json'))
-        def compile_capture(output):
-            build_dir = framework/'build/gfxreconstruct-bionic'/source_commit
-            staged = output/'tools'
-            run('bash', source/'arlinux/build-bionic.sh', tools['ndk'], prefix, build_dir, staged,
-                env=dict(os.environ, JOBS='4', CCACHE_DIR=str(root/'cache/ccache')))
-            archive = output/'arlinux-wine-capture.tar.gz'
-            with tarfile.open(archive,'w:gz') as target:
-                target.add(staged,arcname='capture-tools')
-            (output/(archive.name+'.sha256')).write_text(sha(archive)+'  '+archive.name+'\n')
-            shutil.rmtree(staged)
-            shutil.copyfile(framework/'arlinux/vulkan-capture.py', output/'vulkan-capture.py')
-        output = cache.stage(stage, inputs, compile_capture)
-        descriptor = framework/'build/artifacts/components'/f'{stage}.json'
-        descriptor.parent.mkdir(parents=True,exist_ok=True)
-        descriptor.write_text(json.dumps(dict(output=str(output),records=cache.records))+'\n')
-        return
-    if stage == 'wine-diagnostics':
-        tools = toolchains(root, framework)
-        from pipeline_cache import Cache, inventory
-        cache = Cache(framework/'build/pipeline')
-        inputs = {str(path.relative_to(framework)): inventory(path) for path in (
-            framework/'arlinux/build/windows-debug.sh', framework/'arlinux/windows-debug.py',
-            framework/'arlinux/components/windows-integration/diagnostics/exception-observer.c',
-            framework/'arlinux/components/windows-integration/diagnostics/exception-observer-probe.c')}
-        inputs['toolchainLock'] = sha(framework/'arlinux/build/github-inputs.json')
-        inputs['engine'] = data['sourceInputs']['recipeSha256']
-        inputs['compiler'] = inventory(Path(tools['mingw'])/'aarch64-w64-mingw32-clang')
-        def compile(output):
-            run('bash', framework/'arlinux/build/windows-debug.sh', tools['mingw'], output)
-            shutil.copyfile(framework/'arlinux/windows-debug.py', output/'windows-debug.py')
-        output = cache.stage(stage, inputs, compile)
-        descriptor = framework/'build/artifacts/components'/f'{stage}.json'
-        descriptor.parent.mkdir(parents=True, exist_ok=True)
-        descriptor.write_text(json.dumps(dict(output=str(output), records=cache.records))+'\n')
+    if stage in ('windows-fonts', 'wine-capture', 'wine-diagnostics'):
+        globals()['build_'+stage.replace('-', '_')](data, framework)
         return
     visited = set()
     plan = json.loads((framework/'arlinux/build/github-components.json').read_text())

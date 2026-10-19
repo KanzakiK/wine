@@ -238,6 +238,42 @@ in 16.1 seconds by copying verified local outputs, without binary downloads.
 The persistent transfer was consumed by the normal product extractor; no
 synthetic archive or alternative download command was used.
 
+### Runner transfer and invalidation follow-up (2026-10-20)
+
+The font-fallback build exposed a shared-adapter invalidation: the adapter's
+entire Git blob contributed to `sourceSha256`, despite its compiler recipe
+having a scoped AST hash. Font/capture/diagnostic handlers now have separate
+functions, and each stage fingerprints only its selected handler and common
+bootstrap. Publication has a separate fingerprint, so publisher-only changes
+still dispatch verification without changing compiler recipe inputs. The
+download helper's actual transfer functions are declared inputs as well.
+This migration changes identities once; it is not itself a warm-build speedup.
+
+The old vendor cache used one key for the entire tool lock across tasks needing
+different resources. Its first writer could save only one tool, while other
+tasks restored that immutable partial cache and downloaded the missing tools
+again. NDK, MinGW and addons now have independent version-hashed archive caches
+and directories. They do not cache a second extracted toolchain copy. Component
+imports use the same bounded, resumable, checksum-verified multipart downloader
+as workstation products. Final runtime groups compress concurrently on up to
+four cores, preserving group order and tar/gzip metadata.
+
+Baseline hosted runs from integration `8057e24`:
+
+| Stage / run | Prepare | Build dispatcher | Publication |
+|---|---:|---:|---:|
+| Native compile / 39322933771 | 302s | 172s | 10s |
+| Runtime assembly / 39324150346 | 80s | 324s | 49s |
+| Final product / 39325357855 | 2s | 58s | 43s |
+
+The dispatcher includes dependency download/extraction, tool provisioning and
+receipt verification, not just compiler time. Cache restoration in those runs
+took only a few seconds. At inspection the Wine repository retained
+9,568,047,988 bytes in 39 Actions caches, including superseded v2 PE entries of
+3,188,395,602 and 2,282,767,553 bytes; do not attribute that pressure to the
+current compact v3 compiler cache. New hosted timings and device acceptance
+remain separate from these baseline observations.
+
 All three incremental PE builds passed with actual compiler invocations:
 
 | Architecture | Cache population build step | Incremental build step | Added ccache hits | Added misses |

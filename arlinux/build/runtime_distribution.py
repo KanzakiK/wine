@@ -113,8 +113,8 @@ def assemble(root, output):
         if name == 'bionic-runtime.json':
             continue
         groups.setdefault(component_name(name), []).append(path)
-    components = []
-    for group, paths in sorted(groups.items()):
+    def archive_group(item):
+        group, paths = item
         pending = output/(group+'.tar.gz.part')
         with pending.open('wb') as target, gzip.GzipFile(filename='', mode='wb', fileobj=target,
                                                         compresslevel=1, mtime=0) as zipped:
@@ -132,8 +132,13 @@ def assemble(root, output):
         name = group+'-'+checksum+'.tar.gz'
         archive = output/name
         pending.rename(archive)
-        components.append(dict(name=group, file=name, sha256=checksum,
-                               bytes=archive.stat().st_size, url=COMPONENT_BASE+name))
+        return dict(name=group, file=name, sha256=checksum,
+                    bytes=archive.stat().st_size, url=COMPONENT_BASE+name)
+    # gzip releases the GIL. Independent archives can use the runner's cores
+    # without changing group ordering, tar metadata or compressed output bytes.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as pool:
+        components = list(pool.map(archive_group, sorted(groups.items())))
     sources = []
     for path in sorted(output.glob('*.tar.gz')):
         if path.name in {item['file'] for item in components}:
