@@ -740,11 +740,13 @@ static HRESULT WINAPI token_category_GetDefaultTokenId( ISpObjectTokenCategory *
 {
     struct token_category *This = impl_from_ISpObjectTokenCategory( iface );
     struct data_key *this_data_key;
-    LONG res;
+    const WCHAR *sub_key;
+    HKEY root;
+    LONG res = ERROR_FILE_NOT_FOUND;
     WCHAR regvalue[512];
     DWORD regvalue_size = sizeof( regvalue );
 
-    FIXME( "(%p)->(%p): semi-stub\n", iface, id );
+    TRACE( "(%p)->(%p)\n", iface, id );
 
     if (!This->data_key)
         return SPERR_UNINITIALIZED;
@@ -752,22 +754,32 @@ static HRESULT WINAPI token_category_GetDefaultTokenId( ISpObjectTokenCategory *
     if (!id)
         return E_POINTER;
 
-    /* todo: check HKCU's DefaultTokenId before */
+    /* The user's choice (DefaultTokenId under HKCU) wins over the machine's
+     * (DefaultTokenId under HKLM), and the DefaultDefaultTokenId is the last resort. */
+    if (parse_cat_id( This->id, &root, &sub_key ) == S_OK && root == HKEY_LOCAL_MACHINE)
+        res = RegGetValueW( HKEY_CURRENT_USER, sub_key, L"DefaultTokenId", RRF_RT_REG_SZ,
+                            NULL, regvalue, &regvalue_size );
 
     this_data_key = impl_from_ISpRegDataKey( This->data_key );
 
-    res = RegGetValueW( this_data_key->key, NULL, L"DefaultDefaultTokenId", RRF_RT_REG_SZ,
-                        NULL, &regvalue, &regvalue_size);
-    if (res == ERROR_FILE_NOT_FOUND) {
-        return SPERR_NOT_FOUND;
-    } else if (res != ERROR_SUCCESS) {
-        /* probably not the correct return value */
-        FIXME( "returning %08lx\n", res );
-        return res;
+    if (res != ERROR_SUCCESS)
+    {
+        regvalue_size = sizeof( regvalue );
+        res = RegGetValueW( this_data_key->key, NULL, L"DefaultTokenId", RRF_RT_REG_SZ,
+                            NULL, regvalue, &regvalue_size );
     }
+    if (res != ERROR_SUCCESS)
+    {
+        regvalue_size = sizeof( regvalue );
+        res = RegGetValueW( this_data_key->key, NULL, L"DefaultDefaultTokenId", RRF_RT_REG_SZ,
+                            NULL, regvalue, &regvalue_size );
+    }
+    if (res == ERROR_FILE_NOT_FOUND)
+        return SPERR_NOT_FOUND;
+    if (res != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32( res );
 
-    *id = CoTaskMemAlloc( regvalue_size );
-    if (!*id)
+    if (!(*id = CoTaskMemAlloc( regvalue_size )))
         return E_OUTOFMEMORY;
     wcscpy( *id, regvalue );
 
