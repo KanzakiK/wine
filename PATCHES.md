@@ -198,7 +198,16 @@ This is the recommended branch. What it changes, by subsystem:
   The per-fontface glyph cache used to die with the fontface, and text layout creates one
   per run: 17 208 fontfaces and 111 598 re-rasterisations of 196 distinct glyphs during a
   25 s SynthEdit resize. The cache now outlives the fontface, keyed by font file and face
-  index
+  index.
+  For a family that is not installed, JUCE 8 asks GDI for its substitute
+  (`CreateFontFaceFromHdc()`) and maps that face back with `GetFontFromFontFace()`. DWrite
+  referenced the file by win32u's NT path (`\??\Z:\...`), while the system collection holds
+  the DOS path from the `Fonts` key, so the lookup always failed with `DWRITE_E_NOFONT` —
+  even for Wine's own Tahoma. Cymatics Hotline (JUCE 8.0.4, asks for Helvetica Neue, which it
+  does not embed) drew no button labels and retried about 19 times per second, each retry
+  walking the whole collection; with ~3750 host fonts in the prefix its editor froze and the
+  host stopped answering `Ctrl+Q`. The NT prefix is now stripped: Hotline asks twice, finds
+  GDI's choice (Arial) and shows its labels
 - **ClearType-style subpixel text** (from Cade / @shibco, `shibco/ableton-linux`):
   a glyph run asking for `DWRITE_TEXTURE_CLEARTYPE_3x1` used to be rendered once in
   greyscale and copied into all three subpixels. DWrite now rasterises the outline scaled
