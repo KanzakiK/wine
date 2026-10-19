@@ -236,30 +236,6 @@ def fetch_product(reference, output):
         record=json.loads(manifest.read_text())
         if record['identity']!=reference['identity']:
             raise ValueError('Product identity mismatch')
-        if record.get('artifacts'):
-            # Device testing needs only the runtime. Source archives are fetched
-            # by the publisher on demand, using the same verified component record.
-            output.mkdir(parents=True, exist_ok=True)
-            files = {}
-            object_cache = directory.parent/'objects'
-            for item in record['artifacts']:
-                if item['role'] not in ('runtime', 'manifest'):
-                    continue
-                name = item['name']
-                if Path(name).name != name or '\\' in name or ':' in name:
-                    raise ValueError('Unsafe product artifact name')
-                cached = download(item['url'], object_cache/item['sha256'], item['sha256'], label=name)
-                if cached.stat().st_size != item['bytes']:
-                    raise ValueError('Product artifact size mismatch')
-                import shutil
-                shutil.copyfile(cached, output/name)
-                files[name] = item['sha256']
-            from runtime_distribution import INDEX, read_index
-            read_index(output/INDEX)
-            (output/'github-component.json').write_text(json.dumps(record, indent=2)+'\n')
-            files['github-component.json'] = sha256_file(output/'github-component.json')
-            cache_receipt.write_text(json.dumps(dict(format=1, reference=reference, files=files), indent=2)+'\n')
-            return
         archive=download_capsule(record, directory)
         audio=record['stage']=='wine-pulse'
         product=('audio' if audio else 'diagnostics' if record['stage']=='wine-diagnostics'

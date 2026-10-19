@@ -30,8 +30,7 @@ SOURCES = {
                          'arlinux/components/windows-integration'),
     'runtime-support': ('arlinux/components/steamworks', 'arlinux/components/windows-integration',
                         'arlinux/build/runtime_assembly.py'),
-    'wine-product': ('arlinux/package-wine-bionic.py', 'arlinux/build/runtime_assembly.py',
-                     'arlinux/build/runtime_distribution.py'),
+    'wine-product': ('arlinux/package-wine-bionic.py', 'arlinux/build/runtime_assembly.py'),
     'wine-capture': ('arlinux/components/gfxreconstruct',),
     'windows-fonts': (),
 }
