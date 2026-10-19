@@ -80,6 +80,7 @@ class Coordinator:
         state.mkdir(parents=True,exist_ok=True)
         self.stopped = Event()
         self.timings = {}
+        self.local_manifests = set()
 
     def runs(self, repository):
         return json.loads(gh('run','list','--repo',repository,'--workflow',self.plan['workflow'],
@@ -88,6 +89,29 @@ class Coordinator:
     def existing(self, request):
         repository = self.plan['stages'][request['stage']]['repository']
         tag = 'arlinux-'+request['stage']+'-'+request['identity'][:24]
+        directory = self.state/request['identity']
+        manifest = directory/'component.json'
+        reference_file = directory/'reference.json'
+        url = f'https://github.com/{repository}/releases/download/{tag}/component.json'
+        def validate(record):
+            for name in ('stage','identity','android','dependencies', 'sourceInputs'):
+                if record.get(name) != request.get(name):
+                    raise ValueError('Component release differs from the requested inputs: '+name)
+        # Only immutable, checksum-bound completion records are reusable here.
+        # Mutable latest selections deliberately never use this cache.
+        try:
+            reference = json.loads(reference_file.read_text())
+            if (set(reference) != {'repository','identity','manifestUrl','manifestSha256'}
+                    or reference['repository'] != repository or reference['identity'] != request['identity']
+                    or reference['manifestUrl'] != url
+                    or not re.fullmatch('[0-9a-f]{64}', reference['manifestSha256'])
+                    or sha256_file(manifest) != reference['manifestSha256']):
+                raise ValueError('Invalid cached component reference')
+            validate(json.loads(manifest.read_text()))
+            self.local_manifests.add(request['stage'])
+            return reference
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
         release = api(f'repos/{repository}/releases/tags/{tag}',optional=True)
         if not release:
             return None
@@ -97,17 +121,20 @@ class Coordinator:
         digest = asset.get('digest','')
         if not digest.startswith('sha256:'):
             raise ValueError('GitHub did not supply the component manifest SHA-256')
-        manifest = self.state/request['identity']/'component.json'
         download(asset['browser_download_url'],manifest,digest[7:])
         record = json.loads(manifest.read_text())
-        for name in ('stage','identity','android','dependencies', 'sourceInputs'):
-            if record.get(name) != request.get(name):
-                raise ValueError('Component release differs from the requested inputs: '+name)
+        validate(record)
         names={a['name'] for a in release['assets']}
         if any(part['name'] not in names for part in record['parts']):
             return None
-        return dict(repository=repository,identity=request['identity'],
+        reference = dict(repository=repository,identity=request['identity'],
             manifestUrl=asset['browser_download_url'],manifestSha256=digest[7:])
+        if reference['manifestUrl'] != url:
+            raise ValueError('Unexpected immutable component manifest URL')
+        pending = reference_file.with_suffix('.tmp')
+        pending.write_text(json.dumps(reference, sort_keys=True)+'\n')
+        pending.replace(reference_file)
+        return reference
 
     def component(self, stage, dependencies):
         started = time.monotonic()
@@ -118,7 +145,8 @@ class Coordinator:
         with request_lock(self.state/request['identity']/'dispatch.lock', self.stopped):
             result = self._component(request)
         self.timings[stage] = dict(seconds=round(time.monotonic()-started, 3),
-                                  repository=result['repository'], identity=result['identity'])
+                                  repository=result['repository'], identity=result['identity'],
+                                  manifestSource='local' if stage in self.local_manifests else 'github')
         return result
 
     def _component(self, request):

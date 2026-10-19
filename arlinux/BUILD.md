@@ -113,6 +113,14 @@ identical requests share one hosted workflow rather than queueing duplicate jobs
 Locks are released by the operating system on process exit. Full commit pins
 skip redundant commit-resolution API calls; source and artifact hashes still
 determine reuse.
+The workstation retains the verified immutable component reference beside its
+completion manifest. A repeat checks the reference's repository/identity/URL,
+the manifest SHA-256 and all requested input fields locally before reuse. Missing
+or damaged metadata is resolved again from GitHub. This avoids repeat release-API
+lookups without caching mutable latest selections or accepting unverified outputs;
+binary downloads and final product receipts retain their separate hash checks.
+Each component timing records `manifestSource` (`local` or `github`) so a local
+metadata hit cannot be presented as a faster hosted compilation.
 After successful publication, workflows remove obsolete pipeline input identities
 and generations before saving Actions caches. Current generations and directories
 referenced by current receipts remain at their original paths. This bounds cache
