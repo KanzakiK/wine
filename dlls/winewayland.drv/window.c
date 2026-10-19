@@ -675,7 +675,8 @@ static void wayland_configure_window(HWND hwnd)
      * the compositor is requesting, don't force a resize, since some applications
      * are very insistent on a particular fullscreen size (which may not match
      * the monitor size). */
-    if ((surface->window.state & WAYLAND_SURFACE_CONFIG_STATE_FULLSCREEN) &&
+    if ((state & WAYLAND_SURFACE_CONFIG_STATE_FULLSCREEN) &&
+        (surface->window.state & WAYLAND_SURFACE_CONFIG_STATE_FULLSCREEN) &&
         wayland_surface_config_is_compatible(&surface->processing, surface_rect,
                                              surface->window.state))
     {
