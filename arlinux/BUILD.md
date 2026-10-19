@@ -92,6 +92,19 @@ helper compile to cached objects before linking, and intermediate objects are
 removed from the exported capsule. The recipe remains in the pinned Steamworks
 repository; hosted validation of its new compiler-cache coverage is pending.
 
+Workstation product downloads retain manifests, partial transfers and verified
+capsules under the shared `github-state/downloads/COMPONENT_ID` directory, not
+a per-invocation temporary directory. Concurrent consumers lock that component.
+A restarted transfer resumes its verified parts; successful assembly removes
+redundant part copies while retaining the verified complete capsule.
+Before transferring, the coordinator also finds identical component references
+in canonical per-commit product caches, verifies every output hash, and copies
+the exact verified files into the new isolated output. An integration pin change
+therefore does not require downloading an unchanged product again. Changed
+component contents still need their first download. Existing capsules currently
+bundle distributables and source archives, so reducing a new candidate's first
+transfer further requires separate published download assets.
+
 All three incremental PE builds passed with actual compiler invocations:
 
 | Architecture | Cache population build step | Incremental build step | Added ccache hits | Added misses |
