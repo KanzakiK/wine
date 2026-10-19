@@ -111,13 +111,22 @@ static void wayland_win_data_destroy(struct wayland_win_data *data)
  *
  * Lock and return the data structure associated with a window.
  */
-struct wayland_win_data *wayland_win_data_get(HWND hwnd)
+/* The caller must already hold win_data_mutex through wayland_win_data_get(). */
+struct wayland_win_data *wayland_win_data_get_nolock(HWND hwnd)
 {
     struct rb_entry *entry;
 
-    pthread_mutex_lock(&win_data_mutex);
     if ((entry = rb_get(&win_data_rb, hwnd)))
         return RB_ENTRY_VALUE(entry, struct wayland_win_data, entry);
+    return NULL;
+}
+
+struct wayland_win_data *wayland_win_data_get(HWND hwnd)
+{
+    struct wayland_win_data *data;
+
+    pthread_mutex_lock(&win_data_mutex);
+    if ((data = wayland_win_data_get_nolock(hwnd))) return data;
     pthread_mutex_unlock(&win_data_mutex);
 
     return NULL;
