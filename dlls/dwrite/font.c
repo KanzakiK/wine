@@ -888,6 +888,55 @@ static BOOL is_same_fontfile(IDWriteFontFile *left, IDWriteFontFile *right)
     return !memcmp(left_key, right_key, left_key_size);
 }
 
+static HRESULT get_local_fontfile_path(IDWriteFontFile *file, WCHAR **path)
+{
+    IDWriteLocalFontFileLoader *local_loader;
+    IDWriteFontFileLoader *loader;
+    UINT32 key_size, length;
+    const void *key;
+    HRESULT hr;
+
+    *path = NULL;
+
+    if (FAILED(hr = IDWriteFontFile_GetLoader(file, &loader)))
+        return hr;
+    hr = IDWriteFontFileLoader_QueryInterface(loader, &IID_IDWriteLocalFontFileLoader, (void **)&local_loader);
+    IDWriteFontFileLoader_Release(loader);
+    if (FAILED(hr))
+        return hr;
+
+    if (SUCCEEDED(hr = IDWriteFontFile_GetReferenceKey(file, &key, &key_size))
+            && SUCCEEDED(hr = IDWriteLocalFontFileLoader_GetFilePathLengthFromKey(local_loader, key, key_size, &length)))
+    {
+        if (!(*path = malloc((length + 1) * sizeof(**path))))
+            hr = E_OUTOFMEMORY;
+        else if (FAILED(hr = IDWriteLocalFontFileLoader_GetFilePathFromKey(local_loader, key, key_size, *path, length + 1)))
+        {
+            free(*path);
+            *path = NULL;
+        }
+    }
+    IDWriteLocalFontFileLoader_Release(local_loader);
+
+    return hr;
+}
+
+/* Local file references compare by write time and path. The system collection takes its
+   paths from the Fonts key, a face created from an HDC takes the file GDI loaded; when a
+   fonts directory holds one file under two spellings the keys differ, while the Windows
+   path is one and the same. */
+static BOOL is_same_local_path(IDWriteFontFile *file, const WCHAR *path)
+{
+    WCHAR *file_path;
+    BOOL ret;
+
+    if (FAILED(get_local_fontfile_path(file, &file_path)))
+        return FALSE;
+    ret = !wcsicmp(file_path, path);
+    free(file_path);
+    return ret;
+}
+
 static HRESULT WINAPI dwritefontface_QueryInterface(IDWriteFontFace5 *iface, REFIID riid, void **obj)
 {
     struct dwrite_fontface *fontface = impl_from_IDWriteFontFace5(iface);
@@ -3493,6 +3542,7 @@ static HRESULT WINAPI dwritefontcollection_GetFontFromFontFace(IDWriteFontCollec
     struct dwrite_fontfamily *family;
     BOOL found_font = FALSE;
     IDWriteFontFile *file;
+    WCHAR *path;
     UINT32 face_index, count;
     size_t i, j;
     HRESULT hr;
@@ -3527,6 +3577,32 @@ static HRESULT WINAPI dwritefontcollection_GetFontFromFontFace(IDWriteFontCollec
 
         if (found_font)
             break;
+    }
+
+    /* Second pass by path alone, see is_same_local_path(). */
+    if (!found_font && SUCCEEDED(get_local_fontfile_path(file, &path)))
+    {
+        for (i = 0; i < collection->count; ++i)
+        {
+            struct dwrite_fontfamily_data *family_data = collection->family_data[i];
+
+            for (j = 0; j < family_data->count; ++j)
+            {
+                struct dwrite_font_data *font_data = family_data->fonts[j];
+
+                if (face_index == font_data->face_index && is_same_local_path(font_data->file, path))
+                {
+                    found_font = TRUE;
+                    break;
+                }
+            }
+
+            if (found_font)
+                break;
+        }
+        if (found_font)
+            TRACE("Matched %s by path only.\n", debugstr_w(path));
+        free(path);
     }
     IDWriteFontFile_Release(file);
 
