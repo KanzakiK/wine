@@ -682,19 +682,22 @@ This is the recommended branch. What it changes, by subsystem:
   structures, got `ERROR_BUFFER_OVERFLOW`, and crashed on Studio > ADR API network setup.
   The lease times in `IP_ADAPTER_INFO` stay 32-bit in 32-bit code, so the structure keeps
   Windows' 640 bytes there after `time_t` became 64-bit on i386 in Wine 11.19
-- **sapi**: the placeholder voice token `Wine Default Voice` carried neither attributes
-  nor a CLSID, so a .NET Framework application enumerating voices got an `InstalledVoice`
-  with `Name == null` and `Culture == null`, and every `SpeechSynthesizer.Speak()` ended in
-  `NullReferenceException` in `System.Speech.Internal.Helpers.CompareInvariantCulture()`
-  once the voice matching ran over the list: with Wine's sapi for any prompt, because the
-  category's `GetDefaultTokenId()` found no default and the synthesizer fell back to a
-  culture match, and with any sapi.dll for an SSML prompt whose `xml:lang` differs from
-  the default voice's culture. The token now carries a name, `Language=409`, gender, age,
-  vendor and the msttsengine CLSID; `ISpObjectTokenCategory::GetDefaultTokenId()` reads
-  `DefaultTokenId` under HKCU and HKLM before `DefaultDefaultTokenId`; and
+- **sapi**: the placeholder voice token `Wine Default Voice` carried no attributes, so a
+  .NET Framework application enumerating voices got an `InstalledVoice` with `Name == null`
+  and `Culture == null`, and every `SpeechSynthesizer.Speak()` failed in the voice matching
+  of System.Speech 4.8: `NullReferenceException` in `Helpers.CompareInvariantCulture()`
+  (from `InstalledVoice.FirstEnabled()`, when no default voice is resolvable, as with
+  Wine's sapi whose category reported no default) or `ArgumentNullException` from
+  `String.IndexOf(null)` in `VoiceSynthesis.MatchVoice()` (when one is). The token now
+  carries a name, `Language=409`, gender, age and vendor, but deliberately no CLSID: Wine's
+  engine is a stub, and a token pointing at it captured the output silently (0 bytes even
+  for an SSML prompt that names another voice), whereas without it System.Speech disables
+  the token on first use and a real voice wins, or reports "No voice installed on the
+  system" when there is none. `ISpObjectTokenCategory::GetDefaultTokenId()` reads
+  `DefaultTokenId` under HKCU and HKLM before `DefaultDefaultTokenId`, and
   `ISpDataKey::EnumValues()` is implemented (upstream MR 9733). vatSys 1.4.20's ATIS
   plugin (System.Speech into a 48 kHz stream) synthesises with the MS Speech SDK 5.1
-  voices; Wine's own engine is still a stub, so a native voice remains necessary for audio
+  voices; a native voice remains necessary for audio
 - **msvcp**: the stream classes' move constructors and move assignment were exported as
   stubs, so a C++ application calling one aborted with "Call to unimplemented function" —
   Ableton Live's indexer did, on startup in a fresh prefix, so Live restarted it in a loop
