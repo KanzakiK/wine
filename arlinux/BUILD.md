@@ -271,3 +271,22 @@ Fresh-instance application and game acceptance is still pending. Do not
 publish latest based on this diagnostic or a successful build alone.
 Evidence: Android checkout build/validation-20261019/mouse-game/
 pbi-gpu-real-stacks.txt, pbi-gpu-locks.txt, webview-watchdog-native-stack.txt.
+
+## Optional Bionic Vulkan capture
+
+Build the separate diagnostic product from the Android checkout:
+
+```powershell
+.\build.ps1 wine-capture -WineRef FULL_PUSHED_WINE_COMMIT
+```
+
+The Wine component graph dispatches `wine-capture` independently in
+`taowen/gfxreconstruct` on an x64 GitHub runner, using the pinned NDK and Bionic
+Wayland headers. Its cache is owned by that repository. This is separate from
+the rootfs/glibc `capture` product and is not a dependency of normal Wine builds.
+The result is `wine-capture/arlinux-wine-capture.tar.gz` with a SHA-256 receipt;
+its internal provenance records the GFXReconstruct commit and per-file hashes.
+The ARM64 Bionic capture layer and conversion/info tools use process environment
+settings, avoiding Android-wide capture properties. Keep normal graphics layers
+and ICD selection intact when opting one owned application job into capture.
+Device capture, conversion and cleanup validation are pending.

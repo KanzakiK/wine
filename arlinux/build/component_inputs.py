@@ -30,14 +30,16 @@ SOURCES = {
                          'arlinux/components/windows-integration'),
     'runtime-support': ('arlinux/components/steamworks', 'arlinux/components/windows-integration',
                         'arlinux/build/runtime_assembly.py'),
-    'wine-product': ('arlinux/package-wine-bionic.py', 'arlinux/build/runtime_assembly.py'),
+    'wine-product': ('arlinux/package-wine-bionic.py', 'arlinux/build/runtime_assembly.py',
+                     'arlinux/build/runtime_distribution.py'),
+    'wine-capture': ('arlinux/components/gfxreconstruct',),
     'windows-fonts': (),
 }
 RESOURCES = {name: ('mingw',) for name in SOURCES}
 for name in ('bionic-deps', 'bionic-x11', 'wine-pulse', 'wine-tls', 'wine-graphics', 'wine-vulkan'):
     RESOURCES[name] = ('ndk',)
 RESOURCES.update({'wine-pe-package': ('addons',), 'wine-bionic-compile': ('mingw', 'ndk'), 'wine-bionic': ('ndk',),
-                  'runtime-support': (), 'wine-product': (), 'windows-fonts': ()})
+                  'runtime-support': (), 'wine-product': (), 'wine-capture': ('ndk',), 'windows-fonts': ()})
 SHARED = ('arlinux/build/component_inputs.py', 'arlinux/build/github-component.py',
           'arlinux/build/wine-pipeline.py', 'arlinux/build/pipeline_cache.py',
           'arlinux/build/wine_graph.py', 'arlinux/build.sh')

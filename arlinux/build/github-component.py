@@ -98,7 +98,7 @@ def prepare(data, framework):
             'libxcb-xfixes0-dev', 'libxcb-randr0-dev', 'libxdamage-dev', 'libxext-dev',
             'libelf-dev', 'libudev-dev', 'libgbm-dev', 'gperf', 'libglib2.0-dev', 'libglib2.0-dev-bin',
             'ccache', 'gettext', 'libgettextpo-dev', 'libssl-dev', 'unzip', 'autopoint', 'intltool', 'python-is-python3']
-        if data['stage'] in ('wine-diagnostics', 'windows-accessibility', 'windows-tray', 'runtime-support', 'wine-product', 'wine-bionic',
+        if data['stage'] in ('wine-capture', 'wine-diagnostics', 'windows-accessibility', 'windows-tray', 'runtime-support', 'wine-product', 'wine-bionic',
                              'wine-pe', 'wine-pe-package', 'wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386'):
             packages = ['build-essential', 'bison', 'flex', 'ccache', 'gettext', 'libfreetype-dev',
                         'cmake', 'ninja-build', 'pkg-config', 'git', 'curl', 'unzip',
@@ -117,6 +117,9 @@ def prepare(data, framework):
         modules, _ = requirements(data['stage'], plan)
         if modules:
             run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1', '--', *modules)
+        if 'arlinux/components/gfxreconstruct' in modules:
+            run('git', '-C', framework/'arlinux/components/gfxreconstruct', 'submodule', 'update', '--init', '--depth', '1',
+                '--', 'external/Vulkan-Headers', 'external/SPIRV-Headers', 'external/SPIRV-Reflect')
         if 'arlinux/components/FEX' in modules:
             run('git', '-C', framework/'arlinux/components/FEX', 'submodule', 'update', '--init', '--recursive', '--depth', '1')
         for marker in [framework/'.git', *framework.glob('arlinux/components/*/.git')]:
@@ -133,6 +136,8 @@ def prepare(data, framework):
         # hold bounded compiler results and small component outputs.
         if not data['stage'].startswith('wine-pe') and data['stage'] not in ('wine-bionic-compile','wine-bionic','wine-product'):
             paths.append(str(framework/'build/pipeline'/data['stage']))
+        if data['stage'] == 'wine-capture':
+            paths.append(str(framework/'build/gfxreconstruct-bionic'))
         if data['stage'].startswith('wine-pe-'):
             paths.append(str(framework/'build/wine-pe/*/tools'))
             paths.append(str(framework/'build/wine-pe/*/source'))
@@ -281,6 +286,31 @@ def build(data, framework):
         for name in ('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf'):
             shutil.copyfile(Path(os.environ['WINDIR'])/'Fonts'/name, output/name)
         return
+    if stage == 'wine-capture':
+        tools = toolchains(root, framework)
+        from pipeline_cache import Cache, inventory
+        cache = Cache(framework/'build/pipeline')
+        dependency = import_dependency(root, data['dependencies'][0], set(), recursive=False)
+        prefix = root/dependency['pipelineOutput']/'prefix'
+        source = framework/'arlinux/components/gfxreconstruct'
+        source_commit = subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+        inputs = dict(source=data['sourceInputs'], dependency=dependency['outputIdentity'],
+                      toolchain=sha(framework/'arlinux/build/github-inputs.json'), engine=sha(__file__))
+        def compile_capture(output):
+            build_dir = framework/'build/gfxreconstruct-bionic'/source_commit
+            staged = output/'tools'
+            run('bash', source/'arlinux/build-bionic.sh', tools['ndk'], prefix, build_dir, staged,
+                env=dict(os.environ, JOBS='4', CCACHE_DIR=str(root/'cache/ccache')))
+            archive = output/'arlinux-wine-capture.tar.gz'
+            with tarfile.open(archive,'w:gz') as target:
+                target.add(staged,arcname='capture-tools')
+            (output/(archive.name+'.sha256')).write_text(sha(archive)+'  '+archive.name+'\n')
+            shutil.rmtree(staged)
+        output = cache.stage(stage, inputs, compile_capture)
+        descriptor = framework/'build/artifacts/components'/f'{stage}.json'
+        descriptor.parent.mkdir(parents=True,exist_ok=True)
+        descriptor.write_text(json.dumps(dict(output=str(output),records=cache.records))+'\n')
+        return
     if stage == 'wine-diagnostics':
         tools = toolchains(root, framework)
         from pipeline_cache import Cache, inventory
@@ -318,6 +348,64 @@ def build(data, framework):
         '--target', stage, '--require-dependencies', env=env)
 
 
+def publish_distribution(data, record, final):
+    """Publish independent immutable runtime/source assets, not one transport capsule."""
+    from runtime_distribution import COMPONENT_TAG, INDEX, read_index
+    index = read_index(final/INDEX)
+    repository = os.environ['GITHUB_REPOSITORY']
+    tag = 'arlinux-wine-product-'+data['identity'][:24]
+
+    def release_assets(name):
+        result = subprocess.run(['gh', 'api', f'repos/{repository}/releases/tags/{name}'],
+                                capture_output=True, text=True)
+        if result.returncode:
+            run('gh', 'release', 'create', name, '--repo', repository, '--prerelease',
+                '--title', name, '--notes', 'Immutable ARLinux build inputs; not a latest runtime promotion.')
+            return {}
+        return {asset['name']: asset for asset in json.loads(result.stdout)['assets']}
+
+    objects = release_assets(COMPONENT_TAG)
+    assets = release_assets(tag)
+
+    def upload(path, name, release, existing):
+        checksum, size = sha(path), path.stat().st_size
+        if name in existing:
+            prior = existing[name]
+            if prior.get('digest') != 'sha256:'+checksum or prior['size'] != size:
+                raise ValueError('Immutable product asset conflicts: '+name)
+        else:
+            staged = Path(tempfile.mkdtemp(prefix='product-asset-'))/name
+            try:
+                shutil.copyfile(path, staged)
+                run('gh', 'release', 'upload', release, '--repo', repository, staged)
+            finally:
+                staged.unlink(missing_ok=True)
+                staged.parent.rmdir()
+            existing[name] = dict(digest='sha256:'+checksum, size=size)
+        return checksum, size
+
+    component_files = {item['file'] for item in index['components']}
+    record['artifacts'] = []
+    record['parts'] = []
+    for path in sorted(final.iterdir()):
+        if not path.is_file():
+            continue
+        role = 'runtime' if path.name in component_files else 'manifest' if path.name == INDEX else 'source'
+        if role == 'source':
+            name, release, existing = 'source-'+sha(path)+'.tar.gz', COMPONENT_TAG, objects
+        elif role == 'runtime':
+            name, release, existing = path.name, COMPONENT_TAG, objects
+        else:
+            name, release, existing = path.name, tag, assets
+        checksum, size = upload(path, name, release, existing)
+        record['artifacts'].append(dict(name=path.name, sha256=checksum, bytes=size, role=role,
+            url=f'https://github.com/{repository}/releases/download/{release}/{name}'))
+    # This checksum-bound completion marker is uploaded only after every object.
+    manifest = final.parent/'wine-component.json'
+    manifest.write_text(json.dumps(record, sort_keys=True, indent=2)+'\n')
+    upload(manifest, 'component.json', tag, assets)
+
+
 def publish(data, framework):
     root = Path(os.environ['ARLINUX_WORKSPACE'])
     stage = data['stage']
@@ -338,9 +426,9 @@ def publish(data, framework):
         paths = [path.parent, path.parent.parent/'receipt.json',
                  *(Path(name) for name in state['references'])]
         record['pipelineOutput'] = path.relative_to(root).as_posix()
-        if stage in ('wine-product', 'wine-diagnostics'):
+        if stage in ('wine-product', 'wine-diagnostics', 'wine-capture'):
             # Consumers need distributable archives, not the native compiler work tree.
-            final = framework/('build/artifacts/'+('diagnostics' if stage == 'wine-diagnostics' else 'wine'))
+            final = framework/('build/artifacts/'+('diagnostics' if stage == 'wine-diagnostics' else 'wine-capture' if stage == 'wine-capture' else 'wine'))
             final.mkdir(parents=True, exist_ok=True)
             for source in path.iterdir():
                 if source.is_file():
@@ -367,6 +455,9 @@ def publish(data, framework):
                 raise ValueError('Published component differs from the verified rerun outputs')
             print('OK identical published component '+stage, flush=True)
             return
+    if stage == 'wine-product':
+        publish_distribution(data, record, final)
+        return
     archive = output / 'capsule.tar'
     # Compiler tools can point at generated source/header trees outside the
     # output directory. Preserve those references at the same absolute path.

@@ -6,7 +6,8 @@
   "products": {
     "wine": "wine-product",
     "audio": "wine-pulse",
-    "diagnostics": "wine-diagnostics"
+    "diagnostics": "wine-diagnostics",
+    "wine-capture": "wine-capture"
   },
   "stages": {
     "bionic-deps": {
@@ -190,6 +191,15 @@
       ],
       "product": "wine",
       "compilerCacheMiB": 1024
+    },
+    "wine-capture": {
+      "repository": "taowen/gfxreconstruct",
+      "runner": "ubuntu-24.04",
+      "dependencies": [
+        "bionic-deps"
+      ],
+      "product": "wine-capture",
+      "compilerCacheMiB": 2048
     }
   }
 }

@@ -28,3 +28,6 @@
 [submodule "arlinux/components/libhybris"]
 	path = arlinux/components/libhybris
 	url = https://github.com/taowen/libhybris.git
+[submodule "arlinux/components/gfxreconstruct"]
+	path = arlinux/components/gfxreconstruct
+	url = https://github.com/taowen/gfxreconstruct.git
