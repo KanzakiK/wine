@@ -426,10 +426,22 @@ static int set_parent_window( struct window *win, struct window *parent )
 
     if (parent)
     {
-        attach_parent_thread( win, false );
+        /* Windows attaches the thread input of a cross-thread parent for WS_CHILD
+         * windows only: a WS_POPUP window given a parent through SetParent() keeps
+         * its own input, and its activation deactivates the other thread's window
+         * through the foreground switch without waiting for that thread.  Attached,
+         * that window became the "previous" of set_active_window() and the
+         * deactivation a synchronous send -- FL Studio's ilbridge.exe reparents its
+         * plug-in window into FL's frame while FL's main thread waits for the
+         * bridge, and both sat there forever (WineHQ 44827).  Attach and detach are
+         * gated alike, so a popup that was never attached is not detached either
+         * (detach_thread_input would set an error on the request). */
+        bool child = (win->style & (WS_CHILD | WS_POPUP)) == WS_CHILD;
+
+        if (child) attach_parent_thread( win, false );
         if (win->parent) release_object( win->parent );
         win->parent = (struct window *)grab_object( parent );
-        attach_parent_thread( win, true );
+        if (child) attach_parent_thread( win, true );
         link_window( win, WINPTR_TOP );
 
         if (is_desktop_window( parent )) set_window_monitor_dpi( win );

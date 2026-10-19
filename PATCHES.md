@@ -629,6 +629,24 @@ This is the recommended branch. What it changes, by subsystem:
   open at start with the Sounds tab, went black for ~0.5 s after every activation change
   until it was hidden and shown once, because Chromium's child grew into it after FL had
   taken the region
+- **wineserver**: a window that is given a parent of another thread through `SetParent()`
+  shares that thread's input only when it is a `WS_CHILD` window, as on Windows. A
+  `WS_POPUP` window reparented this way keeps its own thread input: its activation
+  deactivates the other thread's window through the foreground switch (a notify,
+  `WM_WINE_SETACTIVEWINDOW`) instead of making that window the "previous" of
+  `set_active_window()` and sending it `WM_NCACTIVATE`/`WM_ACTIVATE` synchronously. FL
+  Studio's bit bridge (`ilbridge.exe`, a 32-bit plug-in in the 64-bit host) reparents the
+  plug-in's popup window into FL's frame while FL's main thread waits for the bridge in a
+  plain `WaitForMultipleObjects()`; the synchronous send never returned and both processes
+  sat there (WineHQ bug 44827, the soft lock on showing the GUI of a bit-bridged plug-in;
+  the same hang on un-parenting the window again, with "External window" enabled).
+  Measured against Windows 10 with `projects/setparent-bridge-probe` (host blocking in
+  `WaitForSingleObject()`, client reparenting across processes): `SetParent()` returns in
+  50 ms there with the host's thread input left separate, and the host gets the same
+  four deactivation messages once its own thread pumps again; a `WS_CHILD` window created
+  under the foreign parent blocks and attaches on both. The editor at 0,0 that
+  giang17/wine issue 23 reports is the parent-relative origin of a window that was
+  un-parented again, the position Windows gives it too
 - **ole32**: RevokeDragDrop no longer touches drop targets owned by other processes
   (fixes a crash when closing plugin windows)
 - **crypt32**: verifying a signature hashes the signed attributes as they are stored in
