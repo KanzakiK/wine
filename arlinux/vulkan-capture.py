@@ -11,6 +11,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import re
+import tarfile
+import tempfile
 import time
 
 
@@ -21,7 +24,10 @@ def digest(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--tools', required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--tools', type=Path)
+    source.add_argument('--archive', type=Path)
+    parser.add_argument('--archive-sha256')
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--seconds', type=int, default=30)
     parser.add_argument('--max-mib', type=int, default=512)
@@ -35,7 +41,29 @@ def main():
         parser.error('Use 1..120 seconds and 1..512 MiB')
     sys.path.insert(0, '/usr/lib/arlinux')
     import windows
-    tools = args.tools.expanduser().resolve(strict=True)
+    if args.archive:
+        archive = args.archive.expanduser().resolve(strict=True)
+        expected = args.archive_sha256 or ''
+        if not re.fullmatch('[0-9a-f]{64}', expected) or digest(archive) != expected:
+            raise ValueError('Use the verified capture archive SHA-256 printed by the build entry')
+        cache = Path.home()/'.cache/arlinux/bionic-capture'
+        cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destination = cache/expected
+        if not destination.exists():
+            with tempfile.TemporaryDirectory(dir=cache) as stage:
+                stage = Path(stage)
+                with tarfile.open(archive) as bundle:
+                    def members():
+                        for member in bundle:
+                            if (member.name.startswith('/') or '\\' in member.name
+                                    or ':' in member.name or '..' in Path(member.name).parts):
+                                raise ValueError('Unsafe capture archive path')
+                            yield member
+                    bundle.extractall(stage, members=members(), filter='data')
+                (stage/'capture-tools').rename(destination)
+        tools = destination.resolve(strict=True)
+    else:
+        tools = args.tools.expanduser().resolve(strict=True)
     provenance = json.loads((tools/'provenance.json').read_text())
     if provenance['abi'] != 'aarch64-bionic':
         raise ValueError('Use the Bionic capture product, not the glibc tools')
@@ -118,6 +146,8 @@ def main():
                 result = subprocess.run([str(converter), str(capture)], stdout=output,
                                         stderr=errors, timeout=120)
             metadata['conversions'][capture.name] = result.returncode
+        metadata['files'] = {p.name:dict(sha256=digest(p),bytes=p.stat().st_size)
+                             for p in report.iterdir() if p.is_file() and p.name != 'metadata.json'}
         (report/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
         if any(metadata['conversions'].values()):
             raise RuntimeError('Capture conversion failed; inspect conversion logs')
