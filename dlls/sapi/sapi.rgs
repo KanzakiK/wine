@@ -35,7 +35,6 @@ HKLM
                         NoRemove 'Wine Default Voice' = s 'Wine Default Voice'
                         {
                             val '409' = s 'Wine Default Voice'
-                            val CLSID = s '{C64501F6-E6E6-451F-A150-25D0839BC510}'
                             NoRemove Attributes
                             {
                                 val Age = s 'Adult'
