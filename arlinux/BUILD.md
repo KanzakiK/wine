@@ -95,8 +95,14 @@ repository; hosted validation of its new compiler-cache coverage is pending.
 Workstation product downloads retain manifests, partial transfers and verified
 capsules under the shared `github-state/downloads/COMPONENT_ID` directory, not
 a per-invocation temporary directory. Concurrent consumers lock that component.
-A restarted transfer resumes its verified parts; successful assembly removes
+Missing parts download concurrently (up to four); a restarted transfer resumes
+its verified parts. A completed partial file is verified and promoted without
+another request. Successful assembly removes
 redundant part copies while retaining the verified complete capsule.
+The audio product was verified through the sole workstation entry after changing
+the integration pin: the first run reused the identical component in 6.5 seconds
+and the repeat verified its local output in 2.0 seconds, without binary downloads.
+This is not a first-download bandwidth measurement.
 Before transferring, the coordinator also finds identical component references
 in canonical per-commit product caches, verifies every output hash, and copies
 the exact verified files into the new isolated output. An integration pin change
