@@ -296,18 +296,20 @@ static BOOL wayland_hwnd_dmabuf_surface_configure(struct wayland_surface *parent
                                                   const hwnd_dmabuf_frame_info_t *info,
                                                   struct wl_surface *above)
 {
+    struct wayland_win_data *parent_data = wayland_win_data_get_nolock(parent->hwnd);
     RECT rect = wine_server_get_rect(info->client), clipped, client;
     double source_x, source_y, source_width, source_height;
     int rect_width, rect_height;
     int x, y, width, height;
 
+    if (!parent_data) return FALSE;
     rect_width = rect.right - rect.left;
     rect_height = rect.bottom - rect.top;
     if (rect_width <= 0 || rect_height <= 0) return FALSE;
 
     client.left = client.top = 0;
-    client.right = parent->window.client_rect.right - parent->window.client_rect.left;
-    client.bottom = parent->window.client_rect.bottom - parent->window.client_rect.top;
+    client.right = parent_data->rects.client.right - parent_data->rects.client.left;
+    client.bottom = parent_data->rects.client.bottom - parent_data->rects.client.top;
 
     clipped.left = max(rect.left, client.left);
     clipped.top = max(rect.top, client.top);
@@ -321,8 +323,8 @@ static BOOL wayland_hwnd_dmabuf_surface_configure(struct wayland_surface *parent
     source_height = (double)(clipped.bottom - clipped.top) * surface->current->height / rect_height;
 
     rect = clipped;
-    OffsetRect(&rect, parent->window.client_rect.left - parent->window.rect.left,
-               parent->window.client_rect.top - parent->window.rect.top);
+    OffsetRect(&rect, parent_data->rects.client.left - parent->window.rect.left,
+               parent_data->rects.client.top - parent->window.rect.top);
 
     wayland_surface_coords_from_window(parent, rect.left, rect.top, &x, &y);
     wayland_surface_coords_from_window(parent, rect.right - rect.left,
