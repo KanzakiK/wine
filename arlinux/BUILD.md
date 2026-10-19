@@ -121,6 +121,12 @@ lookups without caching mutable latest selections or accepting unverified output
 binary downloads and final product receipts retain their separate hash checks.
 Each component timing records `manifestSource` (`local` or `github`) so a local
 metadata hit cannot be presented as a faster hosted compilation.
+Hosted audio validation at framework da7a673 passed in run 39276739956. Its first
+coordinator invocation took 193.422 seconds including hosted work and transfer;
+the next sole-entry invocation took 0.976 seconds overall, with 0.204 seconds
+for its locally verified component manifest and 0.015 seconds for verified product
+reuse. The timing recorded `manifestSource: local`. This establishes metadata and
+product cache reuse, not a compiler speedup or Wine application acceptance.
 After successful publication, workflows remove obsolete pipeline input identities
 and generations before saving Actions caches. Current generations and directories
 referenced by current receipts remain at their original paths. This bounds cache
