@@ -494,6 +494,7 @@ static void wayland_configure_window(HWND hwnd)
     BOOL needs_enter_size_move = FALSE;
     BOOL needs_exit_size_move = FALSE;
     BOOL restoring_from_minimize = FALSE;
+    BOOL restoring_from_maximize;
     struct wayland_win_data *data;
     RECT rect, surface_rect;
 
@@ -522,6 +523,11 @@ static void wayland_configure_window(HWND hwnd)
     memset(&surface->requested, 0, sizeof(surface->requested));
 
     state = surface->processing.state;
+    restoring_from_maximize =
+        (surface->current.state & WAYLAND_SURFACE_CONFIG_STATE_MAXIMIZED) &&
+        !(state & (WAYLAND_SURFACE_CONFIG_STATE_MAXIMIZED |
+                   WAYLAND_SURFACE_CONFIG_STATE_FULLSCREEN |
+                   WAYLAND_SURFACE_CONFIG_STATE_TILED));
     /* Ignore size hints if we don't have a state that requires strict
      * size adherence, in order to avoid spurious resizes. */
     if (state)
@@ -604,6 +610,25 @@ static void wayland_configure_window(HWND hwnd)
     if (rect.left == rect.right || rect.bottom == rect.top) flags |= SWP_NOSIZE;
 
     style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+    if ((state & WAYLAND_SURFACE_CONFIG_STATE_MAXIMIZED) && !(style & WS_MAXIMIZE))
+    {
+        /* A compositor-initiated maximize bypasses ShowWindow. Snapshot the
+         * normal Win32 placement before changing the style or the size. */
+        NtUserGetInternalWindowPos(hwnd, NULL, NULL);
+    }
+    else if (restoring_from_maximize && (style & WS_MAXIMIZE))
+    {
+        RECT normal;
+        /* A normal-state configure can legally provide no size. Keeping the
+         * maximized size in that case makes the restored window overflow.
+         * Use Win32's saved placement, not an application-specific size. */
+        NtUserGetInternalWindowPos(hwnd, &normal, NULL);
+        if (!IsRectEmpty(&normal))
+        {
+            rect = normal;
+            flags &= ~(SWP_NOSIZE | SWP_NOMOVE);
+        }
+    }
     if (!(state & WAYLAND_SURFACE_CONFIG_STATE_MAXIMIZED) != !(style & WS_MAXIMIZE)
         && !(state & WAYLAND_SURFACE_CONFIG_STATE_FULLSCREEN))
         NtUserSetWindowLong(hwnd, GWL_STYLE, style ^ WS_MAXIMIZE, FALSE);

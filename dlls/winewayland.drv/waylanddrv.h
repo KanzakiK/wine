@@ -36,6 +36,7 @@
 #include "viewporter-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
+#include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "wlr-data-control-unstable-v1-client-protocol.h"
 #include "xdg-toplevel-icon-v1-client-protocol.h"
 #include "pointer-warp-v1-client-protocol.h"
@@ -174,6 +175,7 @@ struct wayland
     struct zxdg_output_manager_v1 *zxdg_output_manager_v1;
     struct wl_compositor *wl_compositor;
     struct xdg_wm_base *xdg_wm_base;
+    struct zxdg_decoration_manager_v1 *decoration_manager;
     struct wl_shm *wl_shm;
     struct wp_viewporter *wp_viewporter;
     struct wl_subcompositor *wl_subcompositor;
@@ -294,6 +296,7 @@ struct wayland_surface
         {
             struct xdg_surface *xdg_surface;
             struct xdg_toplevel *xdg_toplevel;
+            struct zxdg_toplevel_decoration_v1 *decoration;
             struct xdg_toplevel_icon_v1 *xdg_toplevel_icon;
         };
         struct

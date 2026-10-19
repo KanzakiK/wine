@@ -414,6 +414,22 @@ static void wayland_surface_init_fractional_scale(struct wayland_surface *surfac
  *
  * Gives the toplevel role to a plain wayland surface.
  */
+static void decoration_handle_configure(void *data,
+                                        struct zxdg_toplevel_decoration_v1 *decoration,
+                                        uint32_t mode)
+{
+    /* Win32 non-client painting and application-drawn frames are already part
+     * of our buffer. Do not request another configure here (which can loop on
+     * compositors enforcing their own decoration policy). */
+    if (mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE)
+        WARN("Compositor enforces server-side decorations for hwnd=%p\n", data);
+}
+
+static const struct zxdg_toplevel_decoration_v1_listener decoration_listener =
+{
+    decoration_handle_configure
+};
+
 void wayland_surface_make_toplevel(struct wayland_surface *surface)
 {
     WCHAR text[1024];
@@ -434,6 +450,16 @@ void wayland_surface_make_toplevel(struct wayland_surface *surface)
     surface->xdg_toplevel = xdg_surface_get_toplevel(surface->xdg_surface);
     if (!surface->xdg_toplevel) goto err;
     xdg_toplevel_add_listener(surface->xdg_toplevel, &xdg_toplevel_listener, surface->hwnd);
+
+    if (process_wayland.decoration_manager)
+    {
+        surface->decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
+            process_wayland.decoration_manager, surface->xdg_toplevel);
+        zxdg_toplevel_decoration_v1_add_listener(surface->decoration,
+                                                &decoration_listener, surface->hwnd);
+        zxdg_toplevel_decoration_v1_set_mode(surface->decoration,
+                                             ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    }
 
     if (process_name)
         xdg_toplevel_set_app_id(surface->xdg_toplevel, process_name);
@@ -531,6 +557,12 @@ void wayland_surface_clear_role(struct wayland_surface *surface)
                 surface->xdg_toplevel, NULL);
             xdg_toplevel_icon_v1_destroy(surface->xdg_toplevel_icon);
             surface->xdg_toplevel_icon = NULL;
+        }
+
+        if (surface->decoration)
+        {
+            zxdg_toplevel_decoration_v1_destroy(surface->decoration);
+            surface->decoration = NULL;
         }
 
         if (surface->xdg_toplevel)
