@@ -1017,7 +1017,13 @@ prefix DXVK replaces `dxgi.dll` and `d3d11.dll`, while this branch's composition
 and DComp popup handling live in `dxgi` (the GL present in `wined3d`). The simplest setup
 is to leave DXVK out of the prefix; the package alone changes nothing, it takes effect
 once `setup_dxvk.sh` has run there. If it is needed for something else on the same
-machine, select per application rather than per prefix. The switch is
+machine, select per application rather than per prefix — and for a 32-bit D3D11
+application that per-application route can be the cheaper one by a wide margin: vatSys
+(PE32, SharpDX Direct2D on D3D11) took 24 % of a core with DXVK 3.1.1 against 113 % with
+wined3d on an RTX 2000 Ada, where wined3d's command stream thread stays near one core even
+after the wow64 mapping fix above (`opengl32 (WoW64)`), while the map rendered identically
+and nothing in that application needs this branch's `dxgi` or `wined3d` presentation
+path. The switch is
 `WINEDLLOVERRIDES="d3d11,dxgi,d3d10core=n"` (the prefix copies, DXVK) against `=b` (the
 builtins of this branch); a setup that survives desktop-icon launches and keeps `system32`
 untouched puts DXVK's three DLLs next to the host's executable (Wine looks there first
