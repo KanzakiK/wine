@@ -362,6 +362,17 @@ This is the recommended branch. What it changes, by subsystem:
   thousands of live blocks before they are enabled. Dorico 6, ten mode switches: 399 → 9.9
   steps per call, 15.5 % → 0.3 % of the process samples in the walk, 9 % less CPU time,
   2 % more anonymous memory. `kernel32:heap` passes unchanged on both architectures
+- **ntdll**: `GetUserPreferredUILanguages()` and its process, thread and system variants
+  returned a one-entry dummy list with the current locale and printed a `FIXME` on every
+  call. JUCE 8.0.4 asks for the user's display language for every piece of text it shapes
+  (twice, for the size and the buffer): with the Cymatics Hotline editor open the message
+  came 552 times per second and made up 98 % of the log. Wine 11.17/11.18 implemented the
+  family (Alexandre Julliard, `c1197354dfc` to `1350cc58cdc`, cherry-picked with their
+  origin): the lists come from `HKCU\Control Panel\Desktop\PreferredUILanguages` and
+  `MuiCached\MachinePreferredUILanguages`, fall back to the user's and the system's UI
+  language, and resource lookup walks that list with en-US as the last resort. The message
+  is gone and the answer is the real list; notepad and winecfg titles under `de_DE` and
+  `en_US` unchanged, `kernel32:locale` passes
 - **Per-pixel alpha for GPU-painted layered windows**: `DwmExtendFrameIntoClientArea`
   with `margins = -1` asks for full glass, which on Windows makes the client area
   per-pixel alpha capable. Wine stubbed it, so a plugin dragging a bitmap around — Serum
