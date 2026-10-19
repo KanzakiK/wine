@@ -45,7 +45,7 @@ struct wayland_window_surface
 {
     struct window_surface header;
     struct wayland_buffer_queue *wayland_buffer_queue;
-    BOOL layered;
+    LONG layered;
 };
 
 static struct wayland_window_surface *wayland_window_surface_cast(
@@ -375,6 +375,7 @@ static BOOL wayland_window_surface_flush(struct window_surface *window_surface, 
     RECT surface_rect = {.right = color_info->bmiHeader.biWidth, .bottom = abs(color_info->bmiHeader.biHeight)};
     struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
     struct wayland_shm_buffer *shm_buffer = NULL, *latest_buffer;
+    BOOL layered = InterlockedCompareExchange(&wws->layered, 0, 0);
     BOOL flushed = FALSE;
     HRGN surface_damage_region = NULL;
     HRGN copy_from_window_region;
@@ -388,7 +389,7 @@ static BOOL wayland_window_surface_flush(struct window_surface *window_surface, 
         goto done;
     }
 
-    buffer_format = (shape_bits || wws->layered) ? WL_SHM_FORMAT_ARGB8888 : WL_SHM_FORMAT_XRGB8888;
+    buffer_format = (shape_bits || layered) ? WL_SHM_FORMAT_ARGB8888 : WL_SHM_FORMAT_XRGB8888;
     if (wws->wayland_buffer_queue->format != buffer_format)
     {
         int width = wws->wayland_buffer_queue->width;
@@ -440,7 +441,7 @@ static BOOL wayland_window_surface_flush(struct window_surface *window_surface, 
     }
 
     wayland_shm_buffer_copy_data(shm_buffer, color_bits, &surface_rect, copy_from_window_region,
-                                 shape_bits && !wws->layered);
+                                 shape_bits && !layered);
     if (shape_bits) wayland_shm_buffer_copy_shape(shm_buffer, rect, shape_info, shape_bits);
 
     NtGdiSetRectRgn(shm_buffer->damage_region, 0, 0, 0, 0);
@@ -527,7 +528,9 @@ BOOL WAYLAND_CreateWindowSurface(HWND hwnd, BOOL layered, const RECT *surface_re
          * pixels, but select ARGB at the next flush instead of treating the
          * new per-pixel alpha as opaque RGB. The reverse transition must also
          * restore ordinary GDI rendering. */
-        wayland_window_surface_cast(previous)->layered = layered;
+        /* Flush holds the surface lock and then takes win_data_mutex.
+         * Publish the flag atomically rather than inverting that lock order. */
+        InterlockedExchange(&wayland_window_surface_cast(previous)->layered, layered);
         wayland_win_data_release(data);
         return TRUE;
     }
