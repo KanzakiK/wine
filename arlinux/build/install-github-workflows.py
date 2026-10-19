@@ -5,16 +5,23 @@ import base64
 import json
 from pathlib import Path
 import subprocess
+import time
 
 
 def api(path, payload=None, optional=False):
     command=['gh','api',path]
     if payload is not None:
         command+=['--method','PUT','--input','-']
-    result=subprocess.run(command,input=json.dumps(payload) if payload is not None else None,
-                          capture_output=True,text=True)
+    for attempt in range(4 if payload is None else 1):
+        result=subprocess.run(command,input=json.dumps(payload) if payload is not None else None,
+                              capture_output=True,text=True)
+        transient = any(word in result.stderr.lower() for word in
+                        ('timeout', 'timed out', 'connection', 'eof', '502', '503', '504', 'tls handshake'))
+        if not result.returncode or not transient or attempt == 3:
+            break
+        time.sleep(2**attempt)
     if result.returncode:
-        if optional:return None
+        if optional and 'HTTP 404' in result.stderr:return None
         raise RuntimeError(result.stderr.strip())
     return json.loads(result.stdout)
 

@@ -28,7 +28,7 @@ def gh(*args, optional=False):
         if attempt+1<attempts:
             time.sleep(2**attempt)
     if result.returncode:
-        if optional:
+        if optional and 'HTTP 404' in result.stderr:
             return None
         raise RuntimeError(result.stderr.strip())
     return result.stdout
