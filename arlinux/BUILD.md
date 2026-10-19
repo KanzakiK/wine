@@ -196,12 +196,58 @@ python arlinux/build/install-github-workflows.py
 ./arlinux/build.sh publish-wine build/products/wine/arlinux-wine-bionic.tar.gz
 ```
 
-Publish only the exact runtime validated on fresh device instances. The publisher
-verifies declared file hashes and matching source archives, then updates latest;
-it does not rebuild or modify a rootfs checkout. `--manifest` is an optional
-consumer-side download pin output. Capsule prereleases are build inputs, not
-acceptance results. Missing direct inputs and actual command errors fail builds;
-do not add parallel feature/file/version presence lists.
+## Publishing the public latest runtime
+
+Publishing `latest` makes the runtime available to ordinary ARLinux users. Both
+the Windows launcher and Steam's Bionic compatibility tool resolve the
+`arlinux-wine-bionic.tar.gz` asset in
+[taowen/wine's latest release](https://github.com/taowen/wine/releases/tag/latest).
+This is a public promotion, not a private device deployment or merely a successful
+runner build. Existing instances cache a successful release lookup for up to one
+hour; an already running Windows application is not replaced during execution.
+
+Use the Android checkout's sole Windows entry, with the full pushed Wine
+integration commit and the exact archive path reported by that build:
+
+```powershell
+.\build.ps1 wine -WineRef COMMIT -Serial SERIAL -Instance INSTANCE
+.\build.ps1 publish-wine -WineRef COMMIT -Archive EXACT_TESTED_ARCHIVE -Check
+.\build.ps1 publish-wine -WineRef COMMIT -Archive EXACT_TESTED_ARCHIVE
+```
+
+The first command builds or verifies the product and explicitly selects that
+candidate for one stopped Debug instance. It does not publish `latest`. Before
+either publish command, complete the fresh-instance user journey using the
+matching APK and this candidate: install, normal Steam/Windows startup, real
+interaction, close, restart and end the task. Retain device/package/instance,
+APK SHA-256, Wine integration/component/archive identities, actual loaded
+runtime evidence, screenshots and logs. Pair APK changes to host/helper interfaces
+with their corresponding Wine product; a previously tested older candidate is
+not evidence for the new pair. Do not publish a candidate whose required journey
+has not passed.
+
+`-Check` verifies the archive's declared hashes and matching Wine/FEX/DXVK/support
+source archives without changing the public release. The final command uploads
+those sources, preserves the immutable Wine source release, and replaces the
+stable latest runtime asset only with the exact tested bytes. It does not rebuild,
+repack, or modify a rootfs. It verifies GitHub's uploaded asset digest and size;
+retain that result and compare it with the accepted local archive SHA-256.
+The publisher's optional `--manifest` output is a consumer pin, not another build.
+
+After promotion, remove the Debug candidate selection through the documented
+instance maintenance flow and validate the ordinary latest download in another
+fresh instance. Confirm its selected/loaded SHA-256 matches the published asset,
+then repeat the real launch/interaction/exit journey. Keep private Steam
+authentication preparation outside the instance as documented by Android
+diagnostics; never restore an old prefix to validate a release.
+
+Keep one selected runtime for ordinary use. Before cleaning device runtime or
+workstation product caches, stop their users and check instance candidate records,
+the shared current selection, process maps and retained build receipts. Remove
+only unreferenced disposable candidates. Do not remove an active archive, compiler
+cache, reproducibility sources, or GitHub component capsule prereleases needed by
+the dependency graph. Capsule prereleases are build inputs, not competing public
+runtime releases. Historical releases are separate from local cache cleanup.
 
 The optional diagnostics product builds the standalone Windows observer and probe on
 its own x64 runner and carries the Wine-owned guest capture helper. The Windows
