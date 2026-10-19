@@ -223,7 +223,12 @@ This is the recommended branch. What it changes, by subsystem:
   does not embed) drew no button labels and retried about 19 times per second, each retry
   walking the whole collection; with ~3750 host fonts in the prefix its editor froze and the
   host stopped answering `Ctrl+Q`. The NT prefix is now stripped: Hotline asks twice, finds
-  GDI's choice (Arial) and shows its labels
+  GDI's choice (Arial) and shows its labels. A prefix whose fonts directory holds the same
+  file under two spellings (`arial.ttf` from the font setup next to an older `Arial.ttf`)
+  still failed: GDI had loaded one, the `Fonts` key names the other, and local file
+  references compare by write time and path. `GetFontFromFontFace()` now falls back to
+  matching local files by path alone, ignoring case and write time, as Windows treats the
+  two names as one file.
 - **ClearType-style subpixel text** (from Cade / @shibco, `shibco/ableton-linux`):
   a glyph run asking for `DWRITE_TEXTURE_CLEARTYPE_3x1` used to be rendered once in
   greyscale and copied into all three subpixels. DWrite now rasterises the outline scaled
