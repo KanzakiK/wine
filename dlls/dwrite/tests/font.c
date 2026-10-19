@@ -4367,9 +4367,11 @@ static void test_CreateFontFaceFromHdc(void)
     IDWriteFontFileStream *stream, *stream2;
     void *font_data, *fragment_context;
     struct font_realization_info info;
+    IDWriteFontCollection *collection;
     const void *refkey, *fragment;
     IDWriteFontFileLoader *loader;
     DWORD data_size, num_fonts;
+    IDWriteFont *font;
     IDWriteGdiInterop *interop;
     IDWriteFontFace *fontface;
     IDWriteFactory *factory;
@@ -4436,6 +4438,28 @@ static void test_CreateFontFaceFromHdc(void)
     IDWriteFontFileLoader_Release(loader);
     IDWriteFontFile_Release(file);
 
+    IDWriteFontFace_Release(fontface);
+    DeleteObject(SelectObject(hdc, oldhfont));
+
+    /* A face backed by an installed file maps back to the system collection. */
+    logfont.lfItalic = 0;
+    hfont = CreateFontIndirectW(&logfont);
+    oldhfont = SelectObject(hdc, hfont);
+
+    fontface = NULL;
+    hr = IDWriteGdiInterop_CreateFontFaceFromHdc(interop, hdc, &fontface);
+    ok(hr == S_OK, "Failed to create font face, hr %#lx.\n", hr);
+
+    hr = IDWriteFactory_GetSystemFontCollection(factory, &collection, FALSE);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    font = NULL;
+    hr = IDWriteFontCollection_GetFontFromFontFace(collection, fontface, &font);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    if (font)
+        IDWriteFont_Release(font);
+
+    IDWriteFontCollection_Release(collection);
     IDWriteFontFace_Release(fontface);
     DeleteObject(SelectObject(hdc, oldhfont));
 
