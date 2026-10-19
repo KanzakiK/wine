@@ -23,9 +23,6 @@ cmake --build "$output/$triple" --target "$module" -j"${JOBS:-8}"
 install -m755 "$output/$triple/Bin/lib$module.dll" "$output/lib$module.dll"
 done
 
-# Device diagnostic retained only in the component capsule, not the runtime.
-i686-w64-mingw32-clang -O2 -Wall -Wextra -Werror -Wl,--no-insert-timestamp \
-    "$source/arlinux/x87-status.c" -o "$output/x87-status.exe"
 git -C "$source" rev-parse HEAD > "$output/source-commit"
 tar -czf "$output/fex-source.tar.gz" --exclude=.git -C "$repo/arlinux/components" FEX
 sha256sum "$output/"lib*fex.dll "$output/fex-source.tar.gz"

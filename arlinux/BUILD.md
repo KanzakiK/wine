@@ -34,6 +34,9 @@ and toolchains. A forced rerun verifies outputs before reusing a published capsu
 Sources are fixed Git submodules. Steamworks owns its committed frontend fixes,
 Windows integration owns accessibility/tray, and the audio fork pins its patched
 PulseAudio fork. No Steam Proton distribution is built or patched.
+FEX is pinned to an unmodified upstream FEX-Emu/FEX commit. The taowen/FEX
+fork hosts standalone CI only; do not maintain translator or ARM64EC behavior
+patches there. Keep product integration and diagnostic recipes outside FEX.
 Concurrent local coordinators lock each content identity until publication, so
 identical requests share one hosted workflow rather than queueing duplicate jobs.
 Locks are released by the operating system on process exit. Full commit pins
