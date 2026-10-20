@@ -154,6 +154,15 @@ There is no public or internal total-version JSON and no pairing token.
 The rootfs owns only stable endpoint names in `windows-downloads.tsv`, never a
 Wine build dependency or a version combination.
 
+New builds upload payloads and `component.json` to the component's fixed debug
+release. Candidate preparation replaces `runtime.tar.gz` and then `candidate.json`
+in that same release; it creates no additional candidate release or SHA tag.
+An unchanged request reuses the verified completion record. SHA-256 remains in
+receipts and content-addressed payload filenames, not in release selection.
+Previously published runtimes can still reference source/assets under the old
+`arlinux-wine-components` release. Retain those referenced assets; new builds
+do not read or write this legacy warehouse.
+
 Prepare a delivery candidate from one exact verified producer manifest:
 
 ```powershell
