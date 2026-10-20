@@ -141,6 +141,9 @@ class Coordinator:
         framework = Path(__file__).resolve().parents[2]
         request = dict(format=2,stage=stage,framework=self.framework,android=self.android,
                        dependencies=dependencies, sourceInputs=source_inputs(framework, self.framework, stage, self.plan))
+        if stage == 'wine-addons':
+            from local_addons import toolchain_identity
+            request['hostTools'] = toolchain_identity()
         request['identity']=request_identity(request)
         with request_lock(self.state/request['identity']/'dispatch.lock', self.stopped):
             result = self._component(request)
@@ -259,11 +262,16 @@ class Coordinator:
             return ranks[name]
         for name in required:
             rank(name)
-        with ThreadPoolExecutor(max_workers=parallel) as executor:
+        # Local manifest/vendor preparation must not wait for all remote poll
+        # workers. It consumes no hosted runner slot and can overlap downloads.
+        with ThreadPoolExecutor(max_workers=parallel+2) as executor:
             while pending or active:
                 for stage in sorted(pending, key=lambda name: (-ranks[name], name)):
                     dependencies=self.plan['stages'][stage]['dependencies']
-                    if all(name in completed for name in dependencies) and len(active)<parallel:
+                    local = self.plan['stages'][stage].get('execution') == 'local'
+                    running = sum((self.plan['stages'][name].get('execution') == 'local') == local
+                                  for name in active.values())
+                    if all(name in completed for name in dependencies) and running < (2 if local else parallel):
                         future=executor.submit(self.component,stage,[completed[n] for n in dependencies])
                         active[future]=stage
                         pending.remove(stage)

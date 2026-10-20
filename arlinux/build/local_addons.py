@@ -6,10 +6,16 @@ import hashlib
 import json
 from pathlib import PurePosixPath
 import posixpath
+import sys
 import tarfile
+import zlib
 
 from artifact_download import download, sha256_file
 from runtime_distribution import COMPONENT_BASE, publish_distribution
+
+
+def toolchain_identity():
+    return dict(python=list(sys.version_info[:3]), zlib=zlib.ZLIB_RUNTIME_VERSION)
 
 
 def member_name(name):
