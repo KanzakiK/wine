@@ -40,6 +40,10 @@ BOOL cfany_to_cf2w(CHARFORMAT2W *to, const CHARFORMAT2W *from)
     CHARFORMATA *f = (CHARFORMATA *)from;
     CopyMemory(to, f, FIELD_OFFSET(CHARFORMATA, szFaceName));
     to->cbSize = sizeof(CHARFORMAT2W);
+    /* Legacy formats cannot specify the extended fields, even if the host
+     * includes their mask bits. Preserve their existing default values. */
+    to->dwMask &= CFM_ALL;
+    to->dwEffects &= CFM_EFFECTS;
     if (f->dwMask & CFM_FACE) {
       MultiByteToWideChar(CP_ACP, 0, f->szFaceName, -1, to->szFaceName, ARRAY_SIZE(to->szFaceName));
     }
@@ -52,6 +56,8 @@ BOOL cfany_to_cf2w(CHARFORMAT2W *to, const CHARFORMAT2W *from)
     /* theoretically, we don't need to zero the remaining memory */
     ZeroMemory(&to->wWeight, sizeof(CHARFORMAT2W)-FIELD_OFFSET(CHARFORMAT2W, wWeight));
     to->cbSize = sizeof(CHARFORMAT2W);
+    to->dwMask &= CFM_ALL;
+    to->dwEffects &= CFM_EFFECTS;
     return TRUE;
   }
   if (from->cbSize == sizeof(CHARFORMAT2A))
