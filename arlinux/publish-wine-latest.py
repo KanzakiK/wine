@@ -4,16 +4,12 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import shutil
-import subprocess
 import tarfile
-import tempfile
-import time
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent/'build'))
 from artifact_download import download
-from runtime_distribution import INDEX, read_index, runtime_url
+from runtime_distribution import read_index, runtime_url
 
 
 def component_source_archives(metadata, directory):
@@ -33,18 +29,6 @@ def component_source_archives(metadata, directory):
     return component_sources
 
 
-def verify_uploaded_asset(command, asset, checksum, size):
-    # GitHub can briefly return the previous asset or an unset digest after
-    # replacement. Never advance the download pin until metadata agrees.
-    for attempt in range(6):
-        release = json.loads(subprocess.check_output(command[:1] + ['api',
-                             'repos/taowen/wine/releases/tags/latest'], text=True))
-        uploaded = next((item for item in release['assets'] if item['name'] == asset), None)
-        if uploaded and uploaded.get('digest') == 'sha256:' + checksum and uploaded.get('size') == size:
-            return
-        if attempt < 5:
-            time.sleep(2)
-    raise RuntimeError('Published archive verification failed; download pin unchanged')
 
 
 def main():
@@ -52,8 +36,6 @@ def main():
     parser.add_argument('archive', type=Path, help='Exact component manifest already tested on devices')
     parser.add_argument('--source-archive', type=Path,
                         help='wine-source-<commit>.tar.gz produced by wine-pe.sh')
-    parser.add_argument('--manifest', type=Path,
-                        help='Optional consumer download manifest to update after publishing')
     parser.add_argument('--check', action='store_true', help='Validate without publishing')
     args = parser.parse_args()
     archive = args.archive.resolve(strict=True)
@@ -107,61 +89,14 @@ def main():
         raise ValueError('wineSource.archiveURL must use the immutable source release tag')
     # The PE packager also records the Wine, FEX and DXVK source inputs.
     # Validate every one before changing any public release asset.
-    component_sources = component_source_archives(metadata, archive.parent)
-    asset = INDEX
-    url = 'https://github.com/taowen/wine/releases/download/latest/' + asset
-    manifest = f'Wine {metadata["wine"]} Bionic latest\t{checksum}\t{url}\n'
-    print('Validated Bionic Wine manifest SHA-256:', checksum, flush=True)
-    print('Validated Wine source archive SHA-256:', source_checksum, flush=True)
+    component_source_archives(metadata, archive.parent)
+    from public_releases import prepare, promote
+    print('Validated publication input SHA-256:', checksum, flush=True)
     if args.check:
-        return
-    command = ['gh', 'release']
-    source_tag = 'arlinux-wine-source-' + source['archiveSHA256']
-    # Older gh release --json projections omit GitHub's asset digest field.
-    # Raw API responses preserve it across supported CLI versions.
-    source_view = subprocess.run(['gh', 'api', 'repos/taowen/wine/releases/tags/' + source_tag],
-                                 capture_output=True, text=True)
-    if source_view.returncode:
-        subprocess.run(command + ['create', source_tag, '-R', 'taowen/wine',
-            '--title', 'ARLinux Wine source ' + source['commit'], '--notes',
-            'Immutable source archive for the ARLinux Bionic Wine runtime.'], check=True)
-        source_assets = []
+        prepare(archive)
     else:
-        source_assets = json.loads(source_view.stdout).get('assets', [])
-    existing_source = next((item for item in source_assets if item['name'] == source['archiveName']), None)
-    if existing_source:
-        if existing_source.get('digest') != 'sha256:' + source_checksum or \
-                existing_source.get('size') != source_archive.stat().st_size:
-            raise RuntimeError('Immutable Wine source release already contains a different archive')
-    else:
-        with tempfile.TemporaryDirectory(prefix='arlinux-wine-source-') as directory:
-            staged_source = Path(directory) / source['archiveName']
-            shutil.copyfile(source_archive, staged_source)
-            subprocess.run(command + ['upload', source_tag, '-R', 'taowen/wine',
-                                      str(staged_source)], check=True)
-    # The legacy arlinux-wine-bionic.tar.gz stays frozen. New clients resolve
-    # only this manifest, whose immutable component URLs are already published.
-    view = subprocess.run(['gh', 'api', 'repos/taowen/wine/releases/tags/latest'],
-                          capture_output=True, text=True)
-    if view.returncode:
-        subprocess.run(command + ['create', 'latest', '-R', 'taowen/wine',
-            '--title', 'ARLinux Bionic Wine latest', '--notes',
-            'Shared Bionic Wine runtime for ARLinux Windows applications and Steam games. '
-            'Downloads are pinned and verified by SHA-256.', '--latest'], check=True)
-    assets = json.loads(subprocess.check_output(['gh', 'api',
-                        'repos/taowen/wine/releases/tags/latest'], text=True))['assets']
-    existing = next((item for item in assets if item['name'] == asset), None)
-    if not existing or existing.get('digest') != 'sha256:' + checksum or existing.get('size') != archive.stat().st_size:
-        with tempfile.TemporaryDirectory(prefix='arlinux-wine-latest-') as directory:
-            staged = Path(directory) / asset
-            shutil.copyfile(archive, staged)
-            subprocess.run(command + ['upload', 'latest', '-R', 'taowen/wine',
-                                      str(staged), '--clobber'], check=True)
-    verify_uploaded_asset(command, asset, checksum, archive.stat().st_size)
-    if args.manifest:
-        args.manifest.write_text(manifest, encoding='utf-8', newline='\n')
-    print('Published latest:', checksum)
-
+        promote(archive)
+    return
 
 if __name__ == '__main__':
     main()
