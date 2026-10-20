@@ -40,6 +40,18 @@ def verify_file(path, checksum, size=None):
         raise ValueError('Publication input hash/size mismatch: '+str(path))
 
 
+class HashReader:
+    """Hash while tarfile copies bytes; never rewind the compressed input."""
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+
+    def read(self, size=-1):
+        data = self.stream.read(size)
+        self.digest.update(data)
+        return data
+
+
 def asset(repository, tag, name):
     release = coordinator().api(f'repos/{repository}/releases/tags/{tag}', optional=True)
     return next((a for a in release['assets'] if a['name'] == name), None) if release else None
@@ -254,12 +266,17 @@ def runner():
                                     or '\\' in name or ':' in name or any(p in ('', '.', '..') for p in name.split('/'))):
                                 raise ValueError('Unsafe or duplicate runtime path: '+name)
                             seen.add(name)
+                            reader = HashReader(bundle.extractfile(member)) if member.isfile() else None
+                            output.addfile(member, reader)
                             if name in expected:
-                                if not (member.isfile() or member.islnk()):
+                                if member.isfile():
+                                    checksum = reader.digest.hexdigest()
+                                elif member.islnk():
+                                    checksum = hashlib.file_digest(bundle.extractfile(member), 'sha256').hexdigest()
+                                else:
                                     raise ValueError('Expected runtime file: '+name)
-                                if hashlib.file_digest(bundle.extractfile(member), 'sha256').hexdigest() != expected.pop(name):
+                                if checksum != expected.pop(name):
                                     raise ValueError('Runtime file checksum mismatch: '+name)
-                            output.addfile(member, bundle.extractfile(member) if member.isfile() else None)
         if expected:
             raise ValueError('Declared runtime files missing from producer output')
         upload(archive, repository, 'arlinux-'+stage+'-candidates', request['identity']+'.tar.gz', immutable=True)
