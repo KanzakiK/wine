@@ -1,0 +1,15 @@
+{
+  "repository": "taowen/wine",
+  "runner": "ubuntu-24.04",
+  "dependencies": [
+    "wine-pe-aarch64",
+    "bionic-deps",
+    "wine-tls",
+    "wine-pulse",
+    "wine-graphics"
+  ],
+  "product": "wine",
+  "compilerCacheMiB": 1024,
+  "release": "arlinux-wine-bionic-compile-latest",
+  "products": []
+}

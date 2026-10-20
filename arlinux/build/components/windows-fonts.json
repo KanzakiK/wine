@@ -1,0 +1,11 @@
+{
+  "repository": "taowen/wine",
+  "runner": "windows-latest",
+  "dependencies": [],
+  "product": "vendor",
+  "compilerCacheMiB": 256,
+  "release": "arlinux-windows-fonts-latest",
+  "products": [
+    "wine"
+  ]
+}

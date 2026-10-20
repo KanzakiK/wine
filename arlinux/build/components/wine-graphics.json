@@ -1,0 +1,11 @@
+{
+  "repository": "taowen/mesa",
+  "runner": "ubuntu-24.04",
+  "dependencies": [
+    "bionic-deps"
+  ],
+  "product": "wine",
+  "compilerCacheMiB": 2048,
+  "release": "arlinux-wine-graphics-latest",
+  "products": []
+}

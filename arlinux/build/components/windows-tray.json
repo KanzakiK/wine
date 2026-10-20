@@ -1,0 +1,11 @@
+{
+  "repository": "taowen/arlinux-windows-integration",
+  "runner": "ubuntu-24.04",
+  "dependencies": [],
+  "product": "wine",
+  "compilerCacheMiB": 256,
+  "release": "arlinux-windows-tray-latest",
+  "products": [
+    "wine"
+  ]
+}

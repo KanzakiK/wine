@@ -1,0 +1,13 @@
+{
+  "repository": "taowen/gfxreconstruct",
+  "runner": "ubuntu-24.04",
+  "dependencies": [
+    "bionic-deps"
+  ],
+  "product": "wine-capture",
+  "compilerCacheMiB": 2048,
+  "release": "arlinux-wine-capture-latest",
+  "products": [
+    "wine-capture"
+  ]
+}

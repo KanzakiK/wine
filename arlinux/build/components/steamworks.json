@@ -1,0 +1,14 @@
+{
+  "repository": "taowen/arlinux-steamworks",
+  "runner": "ubuntu-24.04",
+  "dependencies": [
+    "wine-bionic-compile",
+    "wine-pe"
+  ],
+  "product": "wine",
+  "compilerCacheMiB": 256,
+  "release": "arlinux-steamworks-latest",
+  "products": [
+    "wine"
+  ]
+}

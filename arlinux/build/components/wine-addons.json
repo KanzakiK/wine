@@ -1,0 +1,13 @@
+{
+  "execution": "local",
+  "artifactInputsOnly": true,
+  "repository": "taowen/wine",
+  "runner": "windows-latest",
+  "dependencies": [],
+  "product": "wine",
+  "compilerCacheMiB": 0,
+  "release": "arlinux-wine-addons-latest",
+  "products": [
+    "wine"
+  ]
+}

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Dispatch independent repository workflows from Windows or Linux, without WSL."""
+from component_recipes import load_plan
 import argparse
 from contextlib import contextmanager
 import errno
@@ -118,7 +119,7 @@ class Coordinator:
 
     def existing(self, request):
         repository = self.plan['stages'][request['stage']]['repository']
-        tag = 'arlinux-'+request['stage']+'-'+request['identity'][:24]
+        tag = self.plan['stages'][request['stage']]['release']
         directory = self.state/request['identity']
         manifest = directory/'component.json'
         reference_file = directory/'reference.json'
@@ -126,22 +127,10 @@ class Coordinator:
         def validate(record):
             for name in ('stage','identity','android','dependencies', 'sourceInputs'):
                 if record.get(name) != request.get(name):
-                    raise ValueError('Component release differs from the requested inputs: '+name)
-        # Only immutable, checksum-bound completion records are reusable here.
-        # Mutable latest selections deliberately never use this cache.
-        try:
-            reference = json.loads(reference_file.read_text())
-            if (set(reference) != {'repository','identity','manifestUrl','manifestSha256'}
-                    or reference['repository'] != repository or reference['identity'] != request['identity']
-                    or reference['manifestUrl'] != url
-                    or not re.fullmatch('[0-9a-f]{64}', reference['manifestSha256'])
-                    or sha256_file(manifest) != reference['manifestSha256']):
-                raise ValueError('Invalid cached component reference')
-            validate(json.loads(manifest.read_text()))
-            self.local_manifests.add(request['stage'])
-            return reference
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
+                    return False
+            return True
+        # Always resolve the fixed release; local metadata alone cannot prove
+        # that its mutable endpoint still selects the same component.
         release = api(f'repos/{repository}/releases/tags/{tag}',optional=True)
         if not release:
             return None
@@ -153,7 +142,8 @@ class Coordinator:
             raise ValueError('GitHub did not supply the component manifest SHA-256')
         download(asset['browser_download_url'],manifest,digest[7:])
         record = json.loads(manifest.read_text())
-        validate(record)
+        if not validate(record):
+            return None
         names={a['name'] for a in release['assets']}
         if any(part['name'] not in names for part in record['parts']):
             return None
@@ -213,17 +203,15 @@ class Coordinator:
             # duplicates large downloads; current declared inputs are sufficient.
             if stage not in ('yibu','debian','arch','omarchy','plasma','lxqt','windows-fonts',
                              'wine-pe','wine-bionic'):
-                releases=api(f'repos/{repository}/releases?per_page=100')
-                candidate=next((r for r in releases if re.fullmatch(re.escape('arlinux-'+stage+'-')+'[0-9a-f]{24}',r['tag_name']) and
-                                any(a['name']=='component.json' for a in r['assets'])),None)
+                candidate=api(f"repos/{repository}/releases/tags/{self.plan['stages'][stage]['release']}", optional=True)
                 if candidate:
-                    asset=next(a for a in candidate['assets'] if a['name']=='component.json')
-                    digest=asset.get('digest','')
+                    asset=next((a for a in candidate['assets'] if a['name']=='component.json'), None)
+                    digest=asset.get('digest','') if asset else ''
                     if digest.startswith('sha256:'):
                         request['cacheSeed']=dict(repository=repository,
-                            identity=candidate['tag_name'][len('arlinux-'+stage+'-'):],
+                            identity='',
                             manifestUrl=asset['browser_download_url'],manifestSha256=digest[7:])
-                        # The tag contains a short identity; read the verified manifest.
+                        # Read the actual identity from the verified fixed-release metadata.
                         file=self.state/request['identity']/'seed.json'
                         download(asset['browser_download_url'],file,digest[7:])
                         seed=json.loads(file.read_text())
@@ -418,7 +406,7 @@ def main():
     parser.add_argument('--plan',action='store_true')
     args=parser.parse_args()
     framework=Path(__file__).resolve().parents[2]
-    plan=json.loads((framework/'arlinux/build/github-components.json').read_text())
+    plan=load_plan()
     if args.plan:
         print(json.dumps(plan,indent=2))
         return

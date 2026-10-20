@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Internal hosted-runner adapter; recipes remain behind build.sh."""
+from component_recipes import load_plan
 import argparse
 import hashlib
 import json
@@ -30,7 +31,7 @@ def sha(path):
 def request():
     data = json.loads(os.environ['ARLINUX_COMPONENT_REQUEST'])
     framework = Path(__file__).resolve().parents[2]
-    plan = json.loads((framework / 'arlinux/build/github-components.json').read_text())
+    plan = load_plan()
     stage = plan['stages'].get(data.get('stage'))
     if not stage or os.environ.get('GITHUB_REPOSITORY') != stage['repository']:
         raise ValueError('Component must run in its owning repository')
@@ -62,7 +63,7 @@ def prepare(data, framework):
         for name in ('framework',):
             shutil.move(str(framework.parent / name), root / name)
         framework = root / 'framework'
-        plan = json.loads((framework/'arlinux/build/github-components.json').read_text())
+        plan = load_plan()
         if plan['stages'][data['stage']].get('artifactInputsOnly'):
             # Standard hosted runners already provide Python, Git and tar.
             # Assembly needs the capsule decoder, not any compiler toolchain.
@@ -117,7 +118,7 @@ def prepare(data, framework):
         cross = bin_dir / 'aarch64-linux-gnu-pkg-config'
         cross.write_text('#!/bin/sh\nexport PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig\nexec pkg-config "$@"\n')
         cross.chmod(0o755)
-        plan = json.loads((framework/'arlinux/build/github-components.json').read_text())
+        plan = load_plan()
         modules, _ = requirements(data['stage'], plan)
         if modules:
             run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1', '--', *modules)
@@ -156,7 +157,7 @@ def prepare(data, framework):
 def toolchains(root, framework):
     lock = json.loads((framework / 'arlinux/build/github-inputs.json').read_text())
     stage = json.loads(os.environ['ARLINUX_COMPONENT_REQUEST'])['stage']
-    plan = json.loads((framework/'arlinux/build/github-components.json').read_text())
+    plan = load_plan()
     _, resources = requirements(stage, plan)
     cache = root / 'cache/downloads'
     tools = root / 'toolchains'
@@ -208,7 +209,7 @@ def toolchains(root, framework):
             target.chmod(0o755)
         else:
             target.symlink_to(compiler)
-    plan=json.loads((framework/'arlinux/build/github-components.json').read_text())
+    plan=load_plan()
     if not plan['stages'][stage].get('artifactInputsOnly'):
         run('ccache', '--max-size', str(plan['stages'][stage]['compilerCacheMiB'])+'M',
             env=dict(os.environ,CCACHE_DIR=str(root/'cache/ccache')))
@@ -341,7 +342,7 @@ def build(data, framework):
         globals()['build_'+stage.replace('-', '_')](data, framework)
         return
     visited = set()
-    plan = json.loads((framework/'arlinux/build/github-components.json').read_text())
+    plan = load_plan()
     assembly = plan['stages'][stage].get('artifactInputsOnly', False)
     restore_seed(root, framework, data, visited, recursive=not assembly)
     artifacts = {}
@@ -402,7 +403,7 @@ def publish(data, framework):
                     file.relative_to(p).as_posix(): sha(file) for file in sorted(p.rglob('*')) if file.is_file()}
                     for p in paths})
     record['outputIdentity'] = hashlib.sha256(json.dumps(contents, sort_keys=True).encode()).hexdigest()
-    tag = 'arlinux-'+stage+'-'+data['identity'][:24]
+    tag = load_plan()['stages'][stage]['release']
     repository = os.environ['GITHUB_REPOSITORY']
     previous = subprocess.run(['gh','api',f'repos/{repository}/releases/tags/{tag}'], capture_output=True, text=True)
     if not previous.returncode:
@@ -412,13 +413,14 @@ def publish(data, framework):
             expected = completed['digest'].removeprefix('sha256:')
             saved = download(completed['browser_download_url'], output/'previous.json', expected)
             prior = json.loads(saved.read_text())
-            if prior['identity'] != data['identity'] or prior.get('outputIdentity') != record['outputIdentity']:
+            if prior['identity'] == data['identity'] and prior.get('outputIdentity') != record['outputIdentity']:
                 if stage != 'windows-fonts' and prior['identity'] == data['identity']:
                     from artifact_download import explain_component_difference
                     explain_component_difference(prior, contents, output/'comparison')
                 raise ValueError('Published component differs from the verified rerun outputs')
-            print('OK identical published component '+stage, flush=True)
-            return
+            if prior['identity'] == data['identity']:
+                print('OK identical published component '+stage, flush=True)
+                return
     from runtime_distribution import RUNTIME_STAGES, publish_runtime_component
     if stage in RUNTIME_STAGES:
         sdk = stage in ('wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386')
@@ -467,20 +469,20 @@ def publish(data, framework):
             shutil.copyfileobj(source, writer)
     archive.unlink()
     record['archiveSha256'] = sha(compressed)
-    tag = 'arlinux-'+stage+'-'+data['identity'][:24]
+    tag = load_plan()['stages'][stage]['release']
     repository = os.environ['GITHUB_REPOSITORY']
     record['parts'] = []
     with compressed.open('rb') as source:
         while block := source.read(1024*1024*1024):
-            name = f'capsule-{len(record["parts"]):03d}.zst.part'
+            name = f'capsule-{record["archiveSha256"]}-{len(record["parts"]):03d}.zst.part'
             part = output/name
             part.write_bytes(block)
             record['parts'].append(dict(name=name, sha256=sha(part),
                 url=f'https://github.com/{repository}/releases/download/{tag}/{name}'))
     manifest = output/'component.json'
     manifest.write_text(json.dumps(record,sort_keys=True,indent=2)+'\n')
-    # Component releases are immutable build inputs. Never touch application
-    # releases, Wine latest, or a moving download manifest here.
+    # Each component owns one fixed release. Upload verified payloads first;
+    # component.json is the final completion marker for this generation.
     existing = subprocess.run(['gh','api',f'repos/{repository}/releases/tags/{tag}'],
                               capture_output=True,text=True)
     if existing.returncode:
@@ -489,12 +491,12 @@ def publish(data, framework):
         assets = {}
     else:
         assets = {asset['name']:asset for asset in json.loads(existing.stdout)['assets']}
-    # Upload the manifest last as the completion marker. An interrupted upload
-    # can resume, but an already published asset must never change silently.
+    # Payload names contain their archive digest so an in-flight reader cannot
+    # mix generations. Replace the completion marker only after all uploads.
     for file in [*(output/part['name'] for part in record['parts']), manifest]:
         if file.name in assets:
             if assets[file.name].get('digest') != 'sha256:'+sha(file):
-                raise ValueError('Immutable component release conflicts with rebuilt output: '+file.name)
+                run('gh','release','upload',tag,'--repo',repository,file,'--clobber')
         else:
             run('gh','release','upload',tag,'--repo',repository,file)
 

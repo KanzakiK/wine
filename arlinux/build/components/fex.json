@@ -1,0 +1,11 @@
+{
+  "repository": "taowen/FEX",
+  "runner": "ubuntu-24.04",
+  "dependencies": [],
+  "product": "wine",
+  "compilerCacheMiB": 2048,
+  "release": "arlinux-fex-latest",
+  "products": [
+    "wine"
+  ]
+}

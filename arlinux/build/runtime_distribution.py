@@ -10,8 +10,12 @@ import subprocess
 import tarfile
 import tempfile
 
-COMPONENT_TAG = 'arlinux-wine-components'
-COMPONENT_BASE = 'https://github.com/taowen/wine/releases/download/'+COMPONENT_TAG+'/'
+from component_recipes import load_plan
+
+
+def release_base(stage, repository=None):
+    spec = load_plan()['stages'][stage]
+    return f'https://github.com/{repository or spec["repository"]}/releases/download/{spec["release"]}/'
 LEAF_INDEX = 'arlinux-wine-runtime.json'
 RUNTIME_STAGES = ('wine-bionic', 'steamworks', 'windows-accessibility', 'windows-tray',
                   'wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386',
@@ -21,7 +25,7 @@ RUNTIME_STAGES = ('wine-bionic', 'steamworks', 'windows-accessibility', 'windows
 def publish_runtime_component(data, framework, record, built, complete=True):
     """Publish a producer's own installable files and source manifest."""
     repository = os.environ['GITHUB_REPOSITORY']
-    base = f'https://github.com/{repository}/releases/download/{COMPONENT_TAG}/'
+    base = release_base(data['stage'], repository)
     (framework/'build/artifacts').mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='runtime-publication-', dir=framework/'build/artifacts') as temporary:
         work = Path(temporary)
@@ -136,7 +140,7 @@ def publish_distribution(data, record, final, repository=None, index_name=LEAF_I
     """The completion marker follows every immutable object upload."""
     index = json.loads((final/index_name).read_text())
     repository = repository or os.environ['GITHUB_REPOSITORY']
-    tag = 'arlinux-'+data['stage']+'-'+data['identity'][:24]
+    tag = load_plan()['stages'][data['stage']]['release']
     def run(*args):
         subprocess.run(list(map(str, args)), check=True)
     def release_assets(name):
@@ -144,22 +148,25 @@ def publish_distribution(data, record, final, repository=None, index_name=LEAF_I
                                 capture_output=True, text=True)
         if result.returncode:
             run('gh', 'release', 'create', name, '--repo', repository, '--prerelease',
-                '--title', name, '--notes', 'Immutable ARLinux build inputs; not a latest runtime promotion.')
+                '--title', name, '--notes', 'Independent ARLinux component. Compiler publication does not promote runtime.tar.gz.')
             return {}
         return {asset['name']: asset for asset in json.loads(result.stdout)['assets']}
-    objects, assets = release_assets(COMPONENT_TAG), release_assets(tag)
-    def upload(path, name, release, existing):
+    assets = release_assets(tag)
+    def upload(path, name, release, existing, replace=False):
         checksum, size = sha(path), path.stat().st_size
         if name in existing:
             prior = existing[name]
-            if prior.get('digest') != 'sha256:'+checksum or prior['size'] != size:
+            if prior.get('digest') == 'sha256:'+checksum and prior['size'] == size:
+                return checksum, size
+            if not replace:
                 raise ValueError('Immutable product asset conflicts: '+name)
-        else:
+        if name not in existing or replace:
             with tempfile.TemporaryDirectory(prefix='product-asset-') as directory:
                 staged = Path(directory)/name
                 shutil.copyfile(path, staged)
                 try:
-                    run('gh', 'release', 'upload', release, '--repo', repository, staged)
+                    run('gh', 'release', 'upload', release, '--repo', repository, staged,
+                        *(['--clobber'] if replace else []))
                 except subprocess.CalledProcessError:
                     # Another product may publish the same content-addressed
                     # object after our release inventory was fetched. Never
@@ -178,14 +185,14 @@ def publish_distribution(data, record, final, repository=None, index_name=LEAF_I
             continue
         role = 'runtime' if path.name in component_files else 'manifest' if path.name == index_name else 'source'
         if role == 'source':
-            name, release, existing = 'source-'+sha(path)+'.tar.gz', COMPONENT_TAG, objects
+            name = 'source-'+sha(path)+'.tar.gz'
         elif role == 'runtime':
-            name, release, existing = path.name, COMPONENT_TAG, objects
+            name = path.name
         else:
-            name, release, existing = path.name, tag, assets
-        checksum, size = upload(path, name, release, existing)
+            name = path.name
+        checksum, size = upload(path, name, tag, assets, replace=role == 'manifest')
         record['artifacts'].append(dict(name=path.name, sha256=checksum, bytes=size, role=role,
-            url=f'https://github.com/{repository}/releases/download/{release}/{name}'))
+            url=f'https://github.com/{repository}/releases/download/{tag}/{name}'))
     if data['stage'] in RUNTIME_STAGES:
         item = next(item for item in record['artifacts'] if item['role'] == 'manifest')
         record['runtimeManifest'] = dict(name=data['stage'], file=item['name'],
@@ -193,7 +200,7 @@ def publish_distribution(data, record, final, repository=None, index_name=LEAF_I
     if complete:
         manifest = final.parent/'wine-component.json'
         manifest.write_text(json.dumps(record, sort_keys=True, indent=2)+'\n')
-        upload(manifest, 'component.json', tag, assets)
+        upload(manifest, 'component.json', tag, assets, replace=True)
 
 
 def sha(path):
@@ -223,7 +230,9 @@ def component_name(name):
     return 'wine-data'
 
 
-def assemble(root, output, component_base=COMPONENT_BASE, group_prefix='', index_name=LEAF_INDEX):
+def assemble(root, output, component_base=None, group_prefix='', index_name=LEAF_INDEX):
+    if component_base is None:
+        component_base = release_base('wine-bionic')
     metadata = json.loads((root/'bionic-runtime.json').read_text())
     groups = {}
     for path in sorted(root.rglob('*')):

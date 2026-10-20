@@ -1,0 +1,11 @@
+{
+  "repository": "taowen/arlinux-windows-integration",
+  "runner": "ubuntu-24.04",
+  "dependencies": [],
+  "product": "diagnostics",
+  "compilerCacheMiB": 256,
+  "release": "arlinux-wine-diagnostics-latest",
+  "products": [
+    "diagnostics"
+  ]
+}

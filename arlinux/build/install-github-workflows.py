@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Install the one canonical workflow wrapper in each component repository."""
+from component_recipes import load_plan
 import argparse
 import base64
 import json
@@ -38,7 +39,7 @@ def render_workflow(plan,template):
 
 def ensure_workflows(repositories=None, check=False):
     directory=Path(__file__).resolve().parent
-    plan=json.loads((directory/'github-components.json').read_text())
+    plan=load_plan()
     workflow=render_workflow(plan,(directory/'github-component.workflow.yml').read_text())
     for repository in sorted(repositories or {s['repository'] for s in plan['stages'].values()}):
         metadata=api('repos/'+repository)

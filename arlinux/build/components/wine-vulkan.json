@@ -1,0 +1,11 @@
+{
+  "repository": "taowen/libhybris",
+  "runner": "ubuntu-24.04",
+  "dependencies": [
+    "wine-graphics"
+  ],
+  "product": "wine",
+  "compilerCacheMiB": 2048,
+  "release": "arlinux-wine-vulkan-latest",
+  "products": []
+}

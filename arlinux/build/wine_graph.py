@@ -1,10 +1,11 @@
 """The component DAG used by local builds and GitHub Actions jobs."""
+from component_recipes import load_plan
 import json
 from pathlib import Path
 from pipeline_cache import Cache
 
 
-PLAN = json.loads(Path(__file__).with_name('github-components.json').read_text())
+PLAN = load_plan()
 DEPENDENCIES = {name: tuple(stage['dependencies']) for name, stage in PLAN['stages'].items()
                 if stage['product'] in ('wine', 'vendor')}
 

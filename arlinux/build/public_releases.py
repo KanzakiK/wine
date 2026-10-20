@@ -1,4 +1,5 @@
 """Runner-owned candidate packaging and promotion of exact tested runtime bytes."""
+from component_recipes import load_plan
 from concurrent.futures import ThreadPoolExecutor
 import gzip
 import hashlib
@@ -17,7 +18,7 @@ from artifact_download import download
 from runtime_distribution import RUNTIME_STAGES, runtime_url, sha
 
 DIRECTORY = Path(__file__).resolve().parent
-PLAN = json.loads((DIRECTORY/'github-components.json').read_text())
+PLAN = load_plan()
 
 
 def coordinator():

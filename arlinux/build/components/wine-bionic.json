@@ -1,0 +1,19 @@
+{
+  "artifactInputsOnly": true,
+  "repository": "taowen/wine",
+  "runner": "ubuntu-24.04",
+  "dependencies": [
+    "wine-bionic-compile",
+    "bionic-deps",
+    "wine-tls",
+    "wine-pulse",
+    "wine-graphics",
+    "wine-vulkan"
+  ],
+  "product": "wine",
+  "compilerCacheMiB": 256,
+  "release": "arlinux-wine-bionic-latest",
+  "products": [
+    "wine"
+  ]
+}

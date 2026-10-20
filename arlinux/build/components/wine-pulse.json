@@ -1,0 +1,11 @@
+{
+  "repository": "taowen/pulseaudio-android",
+  "runner": "ubuntu-24.04",
+  "dependencies": [],
+  "product": "wine",
+  "compilerCacheMiB": 256,
+  "release": "arlinux-wine-pulse-latest",
+  "products": [
+    "audio"
+  ]
+}

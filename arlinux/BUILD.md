@@ -14,8 +14,13 @@ use WSL, assemble an old runtime archive, or bypass the pinned graph stages.
 
 Each producer owns its compiler workflow, runtime manifest, archives and release.
 There is no `wine-product` stage, total runtime manifest, version combination
-selection or product-wide compatibility hash. `build/github-components.json` is
-the sole compiler dependency graph; it is not an installed version lock.
+selection or product-wide compatibility hash. Each `build/components/COMPONENT.json` defines that component's repository,
+compiler dependencies and fixed release, such as `arlinux-wine-capture-latest`.
+The coordinator reads these independent recipes; there is no central component
+manifest. It queries that exact release directly, never scans SHA-tagged releases.
+Input and output hashes remain cache keys and integrity/provenance records.
+Payloads upload before the component completion marker. Compiler publication
+does not replace the tested public `runtime.tar.gz`; explicit promotion does.
 
 The DXVK fork carries upstream incremental `Present1` support, including dirty
 rectangles, scrolling and complete-frame preservation across sequential buffers.
@@ -179,8 +184,10 @@ default. The rootfs/glibc capture product is separate. Retain capture limits,
 exact module identity and an uncaptured control run; initialization records do
 not establish rendered frames, successful replay or application compatibility.
 
-The ordinary component build also publishes its immutable, content-addressed
-release in the owning repository. The product's `download-receipt.json` records
+The ordinary component build publishes to its fixed release in the owning
+repository, for example `taowen/gfxreconstruct` / `arlinux-wine-capture-latest`.
+Updating the component replaces its completion metadata at this same endpoint;
+archives retain SHA-256 verification. No SHA-tagged release is created. The product's `download-receipt.json` records
 the exact release URL and hashes; retain it with the tested capture archive.
 No combined Wine archive or runtime-producer promotion is needed for these
 optional tools. Updating their source pin does not change an installed runtime

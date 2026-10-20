@@ -12,7 +12,7 @@ import tarfile
 import zlib
 
 from artifact_download import download, sha256_file
-from runtime_distribution import COMPONENT_BASE, publish_distribution
+from runtime_distribution import release_base, publish_distribution
 
 
 def toolchain_identity():
@@ -106,7 +106,7 @@ def build(request, directory, repository, object_cache):
             name = 'wine-addons-'+group+'-'+checksum+'.tar.gz'
             pending.replace(output/name)
             components.append(dict(name='wine-addons-'+group, file=name, sha256=checksum,
-                                   bytes=(output/name).stat().st_size, url=COMPONENT_BASE+name))
+                                   bytes=(output/name).stat().st_size, url=release_base('wine-addons', repository)+name))
     metadata = dict(protocol=1, libc='bionic', files=dict(sorted(hashes.items())), originalSources={}, vendorDownloads=vendors)
     index = dict(format=1, kind='arlinux-bionic-components', runtime=metadata, components=components, sources=[])
     manifest = output/'arlinux-wine-addons.json'

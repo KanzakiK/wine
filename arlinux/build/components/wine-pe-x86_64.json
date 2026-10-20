@@ -1,0 +1,11 @@
+{
+  "repository": "taowen/wine",
+  "runner": "ubuntu-24.04",
+  "dependencies": [],
+  "product": "wine",
+  "compilerCacheMiB": 512,
+  "release": "arlinux-wine-pe-x86_64-latest",
+  "products": [
+    "wine"
+  ]
+}
