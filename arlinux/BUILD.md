@@ -54,6 +54,14 @@ backend; general PE producers exclude these files to avoid overlapping installs.
 
 ## Cache and provenance
 
+FEX is pinned to the taowen/FEX fork commit
+`b63017afe5a15a66c6ab8438fb749ed08c51d82d`, restoring the ARM64EC
+process-termination fix removed by Wine integration commit `318936f`.
+Before terminating peer threads, it drains code invalidation and retains the
+locks across the termination notification. This is an ARM64EC fix; it does not
+establish that the separate WoW64 .NET installer stall is resolved. Keep such
+component fixes in the pinned fork rather than applying patches during builds.
+
 Requests hash declared source trees, recipes, locked toolchains, publication
 recipes and dependency identities. A source commit is retained as provenance,
 not a blanket invalidation key. Compiler outputs, references and receipts are
