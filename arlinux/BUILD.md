@@ -12,6 +12,10 @@ use WSL, assemble an old runtime archive, or bypass the pinned graph stages.
 
 ## Independent runtime manifests
 
+This section describes internal compiler products and candidate provenance,
+not the public update protocol. User downloads use the fixed component releases
+documented under [Publishing fixed component releases](#publishing-fixed-component-releases).
+
 `build/github-components.json` is the single component graph. Compiler jobs use
 independent `workflow_dispatch` runs in their owning repositories, retaining each
 repository's standard cache allowance. Runtime files are published beside the
@@ -133,21 +137,70 @@ release and updates geometry/visibility. It leaves Vulkan WSI and default GPU/
 DirectComposition enabled. Power BI import/chart/save/reopen and Steam/game
 regression are pending. Do not promote it based on successful builds.
 
-## Publishing the public latest selection
+## Publishing fixed component releases
 
-Promote the exact tested `arlinux-wine-manifests.json` using the Android entry's
-`publish-wine -Archive PATH -Check`, then the same invocation without `-Check`.
-The publisher does not rebuild. It verifies all pinned producer manifests,
-component archives, runtime file hashes, safe archive paths and corresponding
-source archives before replacing the small public selection asset. Preserve
-its exact SHA-256 in the release record and verify it through the normal download
-path in a fresh instance.
+Public runtime distribution uses one fixed release tag per producer, in that
+producer's repository: `arlinux-PRODUCER-latest`, containing `runtime.tar.gz`.
+Create a tag only on its first publication; subsequent updates replace the asset
+in place. Neither a public total-selection JSON nor public producer JSON files
+are needed. GitHub's release API supplies the current asset SHA-256, size and ID.
+Each archive carries its own `bionic-runtime.json` with file/source provenance.
+The consumer's endpoint list is `windows-downloads.tsv`, not a set of hash pins.
 
-The new asset name is `latest/arlinux-wine-manifests.json`. The previous flat
-`arlinux-wine-runtime.json` and legacy `arlinux-wine-bionic.tar.gz` assets remain
-frozen for earlier APKs; neither is the new publication target. Validate the new
-launcher against a candidate, promote the tested selection, then release its
-consumer APK. A build of immutable component objects never promotes latest.
+Private Wine/PE/FEX/Steamworks interfaces carry a matching compatibility identity.
+Data-only fonts/addons and Vulkan clients are independently updateable. A
+consumer snapshots release assets, verifies downloads and embedded metadata,
+rejects incompatible component snapshots/duplicate ownership and installs into
+a new immutable runtime directory before changing its current pointer.
+An update-in-progress may fail and be retried; it must never select a partial mix.
+
+The internal build graph still publishes content-addressed compiler objects and
+producer receipts for reproducibility and cached SDK consumers. Those are build
+records, not the public update protocol. Do not replace compiler-cache identities
+with mutable latest tags. The old monolithic `latest` assets remain untouched.
+
+Run from the Windows Android checkout using its sole `build.ps1` entry. Retain
+the exact verified product directory from `build.ps1 wine`; this contains the
+declared producer outputs, not an installed instance or an old runtime export.
+Pin the publisher revision as well as the compiler product. The publisher
+preflight verifies runtime/source hashes and creates deterministic per-producer
+delivery archives in the product's `public-release/` directory. It does not
+compile Wine or download compiler SDK capsules.
+
+```powershell
+$wineRef = 'FULL_PUBLISHER_COMMIT'
+$wineSelection = 'EXACT_VERIFIED_PRODUCT_DIRECTORY/arlinux-wine-manifests.json'
+.\build.ps1 publish-wine -WineRef $wineRef -Archive $wineSelection -Check -Serial SERIAL -Instance yibu-FRESH_INSTANCE
+```
+
+Here `-Archive` identifies the internal build selection, not a public download.
+With a stopped fresh Debug instance, `-Check -Serial -Instance` transfers the
+prepared immutable delivery archives through the existing cache tool and binds
+the internal candidate receipt to that instance. Without device arguments it
+only prepares/verifies publication. Complete the real install/input/close/
+relaunch/task-stop journey before promotion; compilation alone is not acceptance.
+Keep the publication candidate digest, source product, consumer APK and evidence.
+
+```powershell
+.\build.ps1 publish-wine -WineRef $wineRef -Archive $wineSelection
+```
+
+Promotion consumes the already prepared and tested `public-release/` files,
+checks their receipt against the input selection and replaces only changed
+`runtime.tar.gz` assets. It never repackages or rebuilds during promotion.
+No release is created for an unchanged or subsequent version of a producer.
+Source references use the already published checksum-addressed source objects.
+
+After promotion, compare every public asset digest/size with the prepared
+product, then use a new instance with no candidate override. Normal launch must
+resolve GitHub releases and select the same runtime identity, using verified
+shared downloads where available. Do not write latest cache state manually or
+restore an old prefix. Retain actual process maps and finish the application/
+game journey again. Existing successful lookups expire after one hour; a fresh
+instance verifies publication without that previous-instance cache.
+An interrupted upload or incompatible snapshot is not permission to use the
+frozen legacy bundle. A consumer APK/distribution update is required for this
+new protocol; an APK upgrade alone does not replace an existing rootfs's scripts.
 
 ## Optional diagnostics
 
