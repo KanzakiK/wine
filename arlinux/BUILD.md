@@ -26,7 +26,7 @@ does not wait for Steamworks or the x86 PE producers.
 
 The phone caches each producer's extracted files independently. Updating one
 producer downloads and extracts only its changed archives. Immutable launch
-views hard-link already installed files; running processes keep their old view.
+views reference already installed files with relative symbolic links; running processes keep their old view.
 The view's `bionic-runtime.json` contains merged runtime configuration and file
 ownership, not a producer-version vector or a requirement to rebuild the other
 producers. Steam and Windows launcher apps share these files and the instance's

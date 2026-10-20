@@ -82,6 +82,12 @@ def dispatch(stage, action, **fields):
     request['identity'] = identity(request)
     request['framework'] = framework
     repository = owner(stage)
+    if action == 'candidate':
+        cached = asset(repository, 'arlinux-'+stage+'-candidates', request['identity']+'.tar.gz')
+        if cached:
+            descriptor(cached)
+            print('Verified immutable component candidate; runner skipped: '+stage, flush=True)
+            return repository, request
     coordinator().dispatch_release(repository, request, PLAN['workflow'])
     return repository, request
 
