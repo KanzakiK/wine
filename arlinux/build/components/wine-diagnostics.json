@@ -4,7 +4,7 @@
   "dependencies": [],
   "product": "diagnostics",
   "compilerCacheMiB": 256,
-  "release": "arlinux-wine-diagnostics-latest",
+  "release": "arlinux-wine-diagnostics-debug",
   "products": [
     "diagnostics"
   ]

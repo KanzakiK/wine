@@ -6,6 +6,6 @@
   ],
   "product": "wine",
   "compilerCacheMiB": 2048,
-  "release": "arlinux-wine-graphics-latest",
+  "release": "arlinux-wine-graphics-debug",
   "products": []
 }

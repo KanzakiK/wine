@@ -4,6 +4,6 @@
   "dependencies": [],
   "product": "wine",
   "compilerCacheMiB": 256,
-  "release": "arlinux-bionic-deps-latest",
+  "release": "arlinux-bionic-deps-debug",
   "products": []
 }

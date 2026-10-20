@@ -12,7 +12,7 @@
   ],
   "product": "wine",
   "compilerCacheMiB": 256,
-  "release": "arlinux-wine-bionic-latest",
+  "release": "arlinux-wine-bionic-debug",
   "products": [
     "wine"
   ]

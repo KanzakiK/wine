@@ -8,6 +8,6 @@
   ],
   "product": "wine",
   "compilerCacheMiB": 256,
-  "release": "arlinux-wine-pe-latest",
+  "release": "arlinux-wine-pe-debug",
   "products": []
 }

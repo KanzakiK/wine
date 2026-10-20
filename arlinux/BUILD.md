@@ -12,10 +12,13 @@ use WSL, assemble an old runtime archive, or bypass the pinned graph stages.
 
 ## Independent runtime producers
 
-Each producer owns its compiler workflow, runtime manifest, archives and release.
+Each producer owns its compiler workflow, runtime manifest, archives and releases.
+Daily development overwrites its fixed `arlinux-COMPONENT-debug` release;
+only explicit promotion updates the public `arlinux-COMPONENT-latest`.
+Neither path creates a release tag containing an input SHA.
 There is no `wine-product` stage, total runtime manifest, version combination
 selection or product-wide compatibility hash. Each `build/components/COMPONENT.json` defines that component's repository,
-compiler dependencies and fixed release, such as `arlinux-wine-capture-latest`.
+compiler dependencies and fixed release, such as `arlinux-wine-capture-debug`.
 The coordinator reads these independent recipes; there is no central component
 manifest. It queries that exact release directly, never scans SHA-tagged releases.
 Input and output hashes remain cache keys and integrity/provenance records.
@@ -160,9 +163,11 @@ $manifest = 'EXACT_PRODUCER_DIRECTORY/arlinux-wine-bionic.json'
 ```
 
 This dispatches only that producer's release job. The runner verifies declared
-runtime/source hashes and retains a deterministic immutable candidate archive;
+runtime/source hashes and replaces `runtime.tar.gz` and its completion marker in the same debug release;
 it does not compile Wine or restore compiler caches. Windows handles only the
-small `public-release/candidate.json` descriptor and receipts. The phone tests
+small `public-release/candidate.json` descriptor and receipts. Its digest pins the
+tested bytes; if a newer debug upload replaces them before promotion, the
+promotion fails checksum verification and must be prepared and tested again. The phone tests
 the candidate archive directly. Finish the fresh-instance journey before promotion.
 
 ```powershell
@@ -185,7 +190,7 @@ exact module identity and an uncaptured control run; initialization records do
 not establish rendered frames, successful replay or application compatibility.
 
 The ordinary component build publishes to its fixed release in the owning
-repository, for example `taowen/gfxreconstruct` / `arlinux-wine-capture-latest`.
+repository, for example `taowen/gfxreconstruct` / `arlinux-wine-capture-debug`.
 Updating the component replaces its completion metadata at this same endpoint;
 archives retain SHA-256 verification. No SHA-tagged release is created. The product's `download-receipt.json` records
 the exact release URL and hashes; retain it with the tested capture archive.

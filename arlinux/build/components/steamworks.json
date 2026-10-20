@@ -7,7 +7,7 @@
   ],
   "product": "wine",
   "compilerCacheMiB": 256,
-  "release": "arlinux-steamworks-latest",
+  "release": "arlinux-steamworks-debug",
   "products": [
     "wine"
   ]

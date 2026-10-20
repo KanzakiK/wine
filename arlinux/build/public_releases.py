@@ -76,6 +76,23 @@ def metadata(leaf):
     return result
 
 
+def candidate_asset(stage, request):
+    repository, tag = owner(stage), PLAN['stages'][stage]['release']
+    marker = asset(repository, tag, 'candidate.json')
+    if not marker:
+        return None
+    checked = descriptor(marker)
+    with tempfile.TemporaryDirectory(prefix='candidate-record-') as temporary:
+        file = download(checked['url'], Path(temporary)/'candidate.json', checked['sha256'])
+        record = json.loads(file.read_text())
+    if record['requestIdentity'] != request['identity']:
+        return None
+    runtime = asset(repository, tag, 'runtime.tar.gz')
+    if not runtime or descriptor(runtime) != record['runtime']:
+        return None
+    return runtime
+
+
 def dispatch(stage, action, **fields):
     framework = subprocess.check_output(['git', '-C', str(DIRECTORY), 'rev-parse', 'HEAD'], text=True).strip()
     request = dict(operation='release', action=action, stage=stage,
@@ -84,10 +101,10 @@ def dispatch(stage, action, **fields):
     request['framework'] = framework
     repository = owner(stage)
     if action == 'candidate':
-        cached = asset(repository, 'arlinux-'+stage+'-candidates', request['identity']+'.tar.gz')
+        cached = candidate_asset(stage, request)
         if cached:
             descriptor(cached)
-            print('Verified immutable component candidate; runner skipped: '+stage, flush=True)
+            print('Verified current debug component; runner skipped: '+stage, flush=True)
             return repository, request
     coordinator().dispatch_release(repository, request, PLAN['workflow'])
     return repository, request
@@ -105,7 +122,7 @@ def prepare(manifest):
         raise ValueError('Producer manifest differs from its verified receipt')
     importlib.import_module('install-github-workflows').ensure_workflows({owner(stage)})
     repository, request = dispatch(stage, 'candidate', manifest=item)
-    published = asset(repository, 'arlinux-'+stage+'-candidates', request['identity']+'.tar.gz')
+    published = candidate_asset(stage, request)
     data = descriptor(published or {})
     directory = manifest.parent/'public-release'
     directory.mkdir(exist_ok=True)
@@ -175,21 +192,21 @@ def runner():
         work = Path(temporary)
         if request['action'] == 'promote':
             item = request['candidate']
-            expected_prefix = f'https://github.com/{repository}/releases/download/arlinux-{stage}-candidates/'
+            expected_prefix = f'https://github.com/{repository}/releases/download/{PLAN["stages"][stage]["release"]}/'
             if (not item['url'].startswith(expected_prefix)
-                    or not re.fullmatch(r'[0-9a-f]{64}\.tar\.gz', item['asset'])
+                    or item['asset'] != 'runtime.tar.gz'
                     or item['url'] != expected_prefix+item['asset']):
-                raise ValueError('Promotion must consume an immutable candidate from its owner')
+                raise ValueError('Promotion must consume the verified debug runtime from its owner')
             archive = download(item['url'], work/'runtime.tar.gz', item['sha256'])
             verify_file(archive, item['sha256'], item['bytes'])
             upload(archive, repository, 'arlinux-'+stage+'-latest', 'runtime.tar.gz')
             return
         if request['action'] != 'candidate':
             raise ValueError('Unknown release operation')
-        existing = asset(repository, 'arlinux-'+stage+'-candidates', request['identity']+'.tar.gz')
+        existing = candidate_asset(stage, request)
         if existing:
             descriptor(existing)
-            print('Reusing verified immutable candidate:', existing['name'], flush=True)
+            print('Reusing verified debug runtime:', existing['name'], flush=True)
             return
         item = request['manifest']
         if (item['name'] != stage or not runtime_url(item['url'], item['file'])
@@ -242,7 +259,12 @@ def runner():
                                     raise ValueError('Runtime file checksum mismatch: '+name)
         if expected:
             raise ValueError('Declared runtime files missing from producer output')
-        upload(archive, repository, 'arlinux-'+stage+'-candidates', request['identity']+'.tar.gz', immutable=True)
+        tag = PLAN['stages'][stage]['release']
+        upload(archive, repository, tag, 'runtime.tar.gz')
+        marker = work/'candidate.json'
+        marker.write_text(json.dumps(dict(requestIdentity=request['identity'],
+            runtime=descriptor(asset(repository, tag, 'runtime.tar.gz'))), sort_keys=True)+'\n')
+        upload(marker, repository, tag, marker.name)
 
 
 if __name__ == '__main__':

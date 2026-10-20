@@ -6,6 +6,6 @@
   ],
   "product": "wine",
   "compilerCacheMiB": 2048,
-  "release": "arlinux-wine-vulkan-latest",
+  "release": "arlinux-wine-vulkan-debug",
   "products": []
 }

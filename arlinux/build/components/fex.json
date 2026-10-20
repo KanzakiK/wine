@@ -4,7 +4,7 @@
   "dependencies": [],
   "product": "wine",
   "compilerCacheMiB": 2048,
-  "release": "arlinux-fex-latest",
+  "release": "arlinux-fex-debug",
   "products": [
     "wine"
   ]

@@ -4,7 +4,7 @@
   "dependencies": [],
   "product": "wine",
   "compilerCacheMiB": 256,
-  "release": "arlinux-wine-pulse-latest",
+  "release": "arlinux-wine-pulse-debug",
   "products": [
     "audio"
   ]

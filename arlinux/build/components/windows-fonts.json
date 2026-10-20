@@ -4,7 +4,7 @@
   "dependencies": [],
   "product": "vendor",
   "compilerCacheMiB": 256,
-  "release": "arlinux-windows-fonts-latest",
+  "release": "arlinux-windows-fonts-debug",
   "products": [
     "wine"
   ]

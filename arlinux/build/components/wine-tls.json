@@ -4,6 +4,6 @@
   "dependencies": [],
   "product": "wine",
   "compilerCacheMiB": 256,
-  "release": "arlinux-wine-tls-latest",
+  "release": "arlinux-wine-tls-debug",
   "products": []
 }

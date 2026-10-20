@@ -4,7 +4,7 @@
   "dependencies": [],
   "product": "wine",
   "compilerCacheMiB": 2048,
-  "release": "arlinux-dxvk-latest",
+  "release": "arlinux-dxvk-debug",
   "products": [
     "wine"
   ]

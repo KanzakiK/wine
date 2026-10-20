@@ -4,7 +4,7 @@
   "dependencies": [],
   "product": "wine",
   "compilerCacheMiB": 256,
-  "release": "arlinux-windows-tray-latest",
+  "release": "arlinux-windows-tray-debug",
   "products": [
     "wine"
   ]

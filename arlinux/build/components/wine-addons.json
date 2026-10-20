@@ -6,7 +6,7 @@
   "dependencies": [],
   "product": "wine",
   "compilerCacheMiB": 0,
-  "release": "arlinux-wine-addons-latest",
+  "release": "arlinux-wine-addons-debug",
   "products": [
     "wine"
   ]

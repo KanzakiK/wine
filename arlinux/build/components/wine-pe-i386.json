@@ -4,7 +4,7 @@
   "dependencies": [],
   "product": "wine",
   "compilerCacheMiB": 512,
-  "release": "arlinux-wine-pe-i386-latest",
+  "release": "arlinux-wine-pe-i386-debug",
   "products": [
     "wine"
   ]

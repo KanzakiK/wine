@@ -6,7 +6,7 @@
   ],
   "product": "wine-capture",
   "compilerCacheMiB": 2048,
-  "release": "arlinux-wine-capture-latest",
+  "release": "arlinux-wine-capture-debug",
   "products": [
     "wine-capture"
   ]
