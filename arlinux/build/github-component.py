@@ -264,7 +264,7 @@ def import_dependency(root, dependency, visited=None, *, recursive=True):
     return record
 
 
-def restore_seed(root, framework, data, visited, *, recursive=True):
+def restore_seed(root, framework, data, visited):
     if not data.get('cacheSeed'):
         return
     stage_cache = framework/'build/pipeline'/data['stage']
@@ -346,7 +346,7 @@ def build(data, framework):
     visited = set()
     plan = load_plan(framework/'arlinux/build')
     assembly = plan['stages'][stage].get('artifactInputsOnly', False)
-    restore_seed(root, framework, data, visited, recursive=not assembly)
+    restore_seed(root, framework, data, visited)
     artifacts = {}
     for dependency in data['dependencies']:
         record = import_dependency(root, dependency, visited, recursive=not assembly)
