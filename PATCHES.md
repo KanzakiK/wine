@@ -811,6 +811,17 @@ This is the recommended branch. What it changes, by subsystem:
   device) the same way, so a WASAPI client's mix is not handed to the hardware by a thread
   that ranks below the client's audio threads; Cubase 15 through its built-in ASIO driver had
   six `Audio Realtime` threads at SCHED_FIFO 4 and the pump at nice -19 before.
+- **winealsa (mmdevapi)**: `IAudioClient::Start()` on a render stream whose ALSA device ran
+  dry after `Stop()` recovers the device before writing to it. In that state
+  `snd_pcm_avail_update()` returns `-EPIPE`, and `alsa_start()` passed the value on as an
+  unsigned frame count; after alsa-lib's `snd_pcm_recover: underrun occurred` the retried write
+  read past the end of the stream buffer, and `mmdevapi` stopped at its assertion
+  (`unix call 6 returned status c0000005`). The window lies between the device running dry and
+  the next period of the stream's timer, which recovers it. Studio Pro 8 hit it when closing
+  its main window and when loading a project. A client that stops and restarts a 30 ms
+  shared-mode stream at random phases aborted within the first 100 of 1000 rounds in three of
+  three runs before, and ran all rounds after. Upstream has the same code (wine-11.20 and
+  master of 2026-10-19)
 - **Virtual-desktop compositor (winex11)**: windows inside a Wine virtual desktop get
   real per-pixel alpha, which the plain desktop drawable cannot provide. A small
   XDamage-driven compositor assembles frames off screen and composites them through an
