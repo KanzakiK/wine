@@ -75,8 +75,12 @@ if [[ ! -f "$stage/source-ready" ]]; then
     patch -d "$prepare/source" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-keyboard-layout.patch"
     (cd "$prepare/source" && perl tools/make_requests)
     if [[ -d "$stage/source" ]]; then
-        echo "Incomplete source preparation at $stage/source; inspect it before retrying." >&2
-        exit 2
+        # A compiler capsule can restore individual source files referenced by
+        # its SDK tools. It is not a complete prepared tree. Preserve those
+        # files for diagnosis and install the freshly prepared source atomically.
+        incomplete="$(mktemp -d "$stage/incomplete.XXXXXXXX")"
+        mv -T "$stage/source" "$incomplete/source"
+        echo "Retained partial SDK source at $incomplete/source" >&2
     fi
     touch "$prepare/source/.arlinux-source-ready"
     mv -T "$prepare/source" "$stage/source"
