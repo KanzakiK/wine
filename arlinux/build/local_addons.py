@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import PurePosixPath
 import posixpath
+import shutil
 import sys
 import tarfile
 import zlib
@@ -38,7 +39,17 @@ def build(request, directory, repository, object_cache):
         for item in request['sourceInputs']['tools']['addons']:
             source = download(item['url'], object_cache/item['sha256'], item['sha256'], label=item['file'])
             vendors.append(dict(url=item['url'], sha256=item['sha256'], file=item['file']))
-            archive = stack.enter_context(tarfile.open(source, 'r:*'))
+            # Tar member sorting/overlay selection needs random reads. Seeking
+            # backwards in a solid xz stream repeatedly decompresses the prefix.
+            # Decode once to an owned temporary tar, preserving all Unix metadata.
+            inputs = directory/'inputs'
+            inputs.mkdir(parents=True, exist_ok=True)
+            decoded = inputs/(item['sha256']+'.tar')
+            stack.callback(decoded.unlink, missing_ok=True)
+            with tarfile.open(source, 'r:*') as packed, decoded.open('wb') as raw:
+                packed.fileobj.seek(0)
+                shutil.copyfileobj(packed.fileobj, raw)
+            archive = stack.enter_context(tarfile.open(decoded, 'r:'))
             group = item['directory']
             prefix = 'files/share/wine/'+group+'/'
             members = groups.setdefault(group, {})
