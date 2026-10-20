@@ -114,15 +114,14 @@
      {
          WARN("Failed to map staging texture, hr %#lx.\n", hr);
          goto done;
-@@ -1843,19 +1898,29 @@
- }
+@@ -1844,18 +1899,28 @@
  
  /* A composition swapchain this dxgi did not create -- DXVK's, in practice -- has no
   * composition window to hand over, so its content is read back like a texture's.
 - * Buffer 0 holds the frame of the last Present, in DXVK as in wined3d.  The
+- * reference lasts for one readback only: a back buffer held across frames makes
 + * DXVK rotates sequential back-buffer storage after Present. The last buffer
 + * then holds the presented frame; buffer 0 is the application's next draw target.
-- * reference lasts for one readback only: a back buffer held across frames makes
 + * The reference lasts for one readback only: a back buffer held across frames makes
   * the application's ResizeBuffers() fail. */
  static BOOL dcomp_texture_acquire_swapchain_buffer(struct dcomp_texture *texture)
