@@ -49,16 +49,14 @@
       "product": "wine",
       "compilerCacheMiB": 2048
     },
-    "wine-pe-package": {
+    "wine-addons": {
+      "execution": "local",
+      "artifactInputsOnly": true,
       "repository": "taowen/wine",
-      "runner": "ubuntu-24.04",
-      "dependencies": [
-        "wine-pe",
-        "fex",
-        "dxvk"
-      ],
+      "runner": "windows-latest",
+      "dependencies": [],
       "product": "wine",
-      "compilerCacheMiB": 256
+      "compilerCacheMiB": 0
     },
     "wine-tls": {
       "repository": "taowen/arlinux-bionic-deps",
@@ -86,13 +84,16 @@
       "compilerCacheMiB": 2048
     },
     "wine-bionic": {
+      "artifactInputsOnly": true,
       "repository": "taowen/wine",
       "runner": "ubuntu-24.04",
       "dependencies": [
         "wine-bionic-compile",
-        "wine-pe-package",
-        "wine-vulkan",
-        "windows-fonts"
+        "bionic-deps",
+        "wine-tls",
+        "wine-pulse",
+        "wine-graphics",
+        "wine-vulkan"
       ],
       "product": "wine",
       "compilerCacheMiB": 256
@@ -128,6 +129,13 @@
       "runner": "ubuntu-24.04",
       "dependencies": [
         "wine-bionic",
+        "wine-pe-aarch64",
+        "wine-pe-x86_64",
+        "wine-pe-i386",
+        "fex",
+        "dxvk",
+        "windows-fonts",
+        "wine-addons",
         "steamworks",
         "windows-accessibility",
         "windows-tray"

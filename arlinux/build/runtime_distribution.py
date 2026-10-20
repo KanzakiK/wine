@@ -14,21 +14,16 @@ COMPONENT_TAG = 'arlinux-wine-components'
 COMPONENT_BASE = 'https://github.com/taowen/wine/releases/download/'+COMPONENT_TAG+'/'
 INDEX = 'arlinux-wine-manifests.json'
 LEAF_INDEX = 'arlinux-wine-runtime.json'
-RUNTIME_STAGES = ('wine-bionic', 'steamworks', 'windows-accessibility', 'windows-tray')
+RUNTIME_STAGES = ('wine-bionic', 'steamworks', 'windows-accessibility', 'windows-tray',
+                  'wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386',
+                  'fex', 'dxvk', 'windows-fonts', 'wine-addons')
 
 
-def publish_runtime_component(data, framework):
+def publish_runtime_component(data, framework, record, built, complete=True):
     """Publish a producer's own installable files and source manifest."""
-    from pipeline_cache import inventory, build_references
-    descriptor = json.loads((framework/'build/artifacts/components'/f'{data["stage"]}.json').read_text())
-    state = descriptor['records'][data['stage']]
-    built = Path(descriptor['output'])
-    if inventory(built) != state['outputs'] or build_references(built) != state['references']:
-        raise ValueError('Runtime producer differs from its verified build receipt')
-    record = dict(data, outputIdentity=hashlib.sha256(json.dumps(dict(
-        outputs=state['outputs'], references=state['references']), sort_keys=True).encode()).hexdigest())
     repository = os.environ['GITHUB_REPOSITORY']
     base = f'https://github.com/{repository}/releases/download/{COMPONENT_TAG}/'
+    (framework/'build/artifacts').mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='runtime-publication-', dir=framework/'build/artifacts') as temporary:
         work = Path(temporary)
         output = work/'publication'
@@ -40,14 +35,74 @@ def publish_runtime_component(data, framework):
                 shutil.copyfile(source, output/source.name)
         else:
             runtime = work/'runtime'
-            target = runtime/'files/lib/arlinux'
-            target.mkdir(parents=True)
-            if stage == 'steamworks':
+            runtime.mkdir()
+            metadata = dict(protocol=1, libc='bionic', originalSources={})
+            if stage.startswith('wine-pe-'):
+                files = built/'files'
+                for source in sorted(files.rglob('*')):
+                    relative = source.relative_to(files)
+                    name = relative.as_posix()
+                    if (source.is_dir() or source.suffix == '.a'
+                            or source.name in ('winebus.sys', 'explorer.exe')
+                            or not (name.startswith('lib/wine/') and '-windows/' in name
+                                    or stage == 'wine-pe-aarch64' and name.startswith('share/wine/'))):
+                        continue
+                    target = runtime/'files'/relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target, follow_symlinks=False)
+                if stage == 'wine-pe-aarch64':
+                    inf = runtime/'files/share/wine/wine.inf'
+                    text = inf.read_text()
+                    for arch, old, new in (('amd64', 'xtajit64.dll', 'libarm64ecfex.dll'),
+                                           ('x86', 'xtajit.dll', 'libwow64fex.dll')):
+                        needle = f'HKLM,Software\\Microsoft\\Wow64\\{arch},,2,"{old}"'
+                        if text.count(needle) != 1:
+                            raise ValueError('Wine CPU-module registry default changed: '+old)
+                        text = text.replace(needle, needle.replace(old, new))
+                    inf.write_text(text)
+                    source = output/'wine-pe-source.tar.gz'
+                    shutil.copyfile(built/'wine-source.tar.gz', source)
+                    metadata['originalSources']['wine-pe'] = dict(asset=source.name, sha256=sha(source))
+            elif stage == 'fex':
+                target = runtime/'files/lib/wine/aarch64-windows'
+                target.mkdir(parents=True)
+                for binary in built.glob('lib*fex.dll'):
+                    shutil.copy2(binary, target/binary.name)
+                config = runtime/'files/share/fex-emu/Config.json'
+                config.parent.mkdir(parents=True)
+                config.write_text(json.dumps({'Config': {'TSOEnabled': '1', 'X87ReducedPrecision': '1',
+                    'VectorTSOEnabled': '0', 'MemcpySetTSOEnabled': '0', 'HalfBarrierTSOEnabled': '1',
+                    'MaxInst': '500', 'Multiblock': '1'}}, indent=2)+'\n')
+                source = output/'fex-source.tar.gz'
+                shutil.copyfile(built/source.name, source)
+                metadata['fexCommit'] = (built/'source-commit').read_text().strip()
+                metadata['originalSources']['fex'] = dict(asset=source.name, sha256=sha(source))
+            elif stage == 'dxvk':
+                target = runtime/'files/lib/wine/dxvk'
+                target.mkdir(parents=True)
+                for folder in built.glob('*-windows'):
+                    shutil.copytree(folder, target/folder.name)
+                source = output/'dxvk-source.tar.gz'
+                shutil.copyfile(built/'source.tar.gz', source)
+                metadata['dxvkCommit'] = (built/'source-commit').read_text().strip()
+                metadata['originalSources']['dxvk'] = dict(asset=source.name, sha256=sha(source))
+            elif stage == 'windows-fonts':
+                import sys
+                sys.path.insert(0, str(framework/'arlinux'))
+                from wine_fonts import install
+                install(runtime/'files/share/arlinux/fonts', source=built)
+            elif stage == 'steamworks':
+                target = runtime/'files/lib/arlinux'
+                target.mkdir(parents=True)
                 target = target/'steamworks'
                 shutil.copytree(built, target, ignore=shutil.ignore_patterns('*-source.tar.gz'))
                 source = output/'steamworks-source.tar.gz'
                 shutil.copyfile(built/source.name, source)
+                metadata['support'] = dict(protocol=1, directory='files/lib/arlinux')
+                metadata['originalSources'][stage] = dict(asset=source.name, sha256=sha(source))
             else:
+                target = runtime/'files/lib/arlinux'
+                target.mkdir(parents=True)
                 for binary in built.iterdir():
                     if binary.is_file():
                         shutil.copyfile(binary, target/binary.name)
@@ -61,30 +116,24 @@ def publish_runtime_component(data, framework):
                         process.stdout.close()
                     if process.wait():
                         raise RuntimeError('Cannot archive the pinned Windows integration sources')
-            metadata = dict(protocol=1, libc='bionic', support=dict(protocol=1, directory='files/lib/arlinux'),
-                originalSources={stage: dict(asset=source.name, sha256=sha(source))},
-                files={path.relative_to(runtime).as_posix(): sha(path)
-                       for path in sorted(runtime.rglob('*')) if path.is_file()})
+                metadata['support'] = dict(protocol=1, directory='files/lib/arlinux')
+                metadata['originalSources'][stage] = dict(asset=source.name, sha256=sha(source))
+            if stage.startswith('wine-pe-') or stage in ('fex', 'dxvk'):
+                from importlib.util import spec_from_file_location, module_from_spec
+                spec = spec_from_file_location('wine_pe_debug', framework/'arlinux/wine_pe_debug.py')
+                optimizer = module_from_spec(spec)
+                spec.loader.exec_module(optimizer)
+                optimizer.optimize(runtime, framework.parent/'toolchains/mingw/bin/llvm-strip')
+            metadata['files'] = {path.relative_to(runtime).as_posix(): sha(path)
+                                  for path in sorted(runtime.rglob('*')) if path.is_file()}
             (runtime/'bionic-runtime.json').write_text(json.dumps(metadata, sort_keys=True)+'\n')
         name = 'arlinux-'+stage+'.json'
         assemble(runtime, output, component_base=base,
                  group_prefix='' if stage == 'wine-bionic' else stage+'-', index_name=name)
-        publish_distribution(data, record, output, repository=repository, index_name=name)
+        publish_distribution(data, record, output, repository=repository, index_name=name, complete=complete)
 
 
-def finish(final, output, records):
-    output.mkdir(parents=True, exist_ok=True)
-    for source in final.iterdir():
-        if source.is_file():
-            shutil.copyfile(source, output/source.name)
-    target = output/INDEX
-    pending = output/'runtime.json.part'
-    pending.write_text(json.dumps(dict(format=1, wineManifestSha256=sha(target), stages=records), indent=2)+'\n')
-    pending.replace(output/'runtime.json')
-    print('Independent Wine runtime ready: '+str(target), flush=True)
-
-
-def publish_distribution(data, record, final, repository=None, index_name=INDEX):
+def publish_distribution(data, record, final, repository=None, index_name=INDEX, complete=True):
     """The completion marker follows every immutable object upload."""
     index = json.loads((final/index_name).read_text())
     repository = repository or os.environ['GITHUB_REPOSITORY']
@@ -142,9 +191,10 @@ def publish_distribution(data, record, final, repository=None, index_name=INDEX)
         item = next(item for item in record['artifacts'] if item['role'] == 'manifest')
         record['runtimeManifest'] = dict(name=data['stage'], file=item['name'],
             sha256=item['sha256'], bytes=item['bytes'], url=item['url'])
-    manifest = final.parent/'wine-component.json'
-    manifest.write_text(json.dumps(record, sort_keys=True, indent=2)+'\n')
-    upload(manifest, 'component.json', tag, assets)
+    if complete:
+        manifest = final.parent/'wine-component.json'
+        manifest.write_text(json.dumps(record, sort_keys=True, indent=2)+'\n')
+        upload(manifest, 'component.json', tag, assets)
 
 
 def sha(path):
@@ -223,7 +273,7 @@ def assemble(root, output, component_base=COMPONENT_BASE, group_prefix='', index
 
 
 def runtime_url(url, filename):
-    return bool(re.fullmatch(r'https://github\.com/taowen/(?:wine|arlinux-steamworks|arlinux-windows-integration)'
+    return bool(re.fullmatch(r'https://github\.com/taowen/(?:wine|FEX|dxvk|arlinux-steamworks|arlinux-windows-integration)'
                             r'/releases/download/[^/]+/'+re.escape(filename), url))
 
 

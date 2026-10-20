@@ -15,8 +15,8 @@ def source_directory():
     return Path(os.environ['ARLINUX_WINDOWS_FONTS'])
 
 
-def install(destination):
-    source = source_directory()
+def install(destination, source=None):
+    source = Path(source) if source is not None else source_directory()
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     hashes = {}

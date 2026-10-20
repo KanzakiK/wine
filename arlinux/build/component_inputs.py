@@ -12,18 +12,18 @@ SOURCES = {
     'bionic-deps': ('arlinux/components/bionic-deps', 'tools/build', 'toolchain.json'),
     'bionic-x11': ('arlinux/build/bionic-x11.sh', 'arlinux/components/libX11'),
     'wine-pulse': ('arlinux/components/pulseaudio-android', 'tools/build/ndk-env.sh', 'toolchain.json'),
-    **{'wine-pe-'+arch: ('@wine', *PE) for arch in ('aarch64', 'x86_64', 'i386')},
+    **{'wine-pe-'+arch: ('@wine', *PE, 'arlinux/build/runtime_distribution.py', 'arlinux/wine_pe_debug.py') for arch in ('aarch64', 'x86_64', 'i386')},
     'wine-pe': (),
-    'fex': ('arlinux/build/fex-windows.sh', 'arlinux/components/FEX'),
-    'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/patches/dxvk-optional-pipeline-library.patch'),
-    'wine-pe-package': ('arlinux/package-wine-pe.py', 'arlinux/wine_pe_debug.py', 'arlinux/build/runtime_assembly.py'),
+    'fex': ('arlinux/build/fex-windows.sh', 'arlinux/components/FEX', 'arlinux/build/runtime_distribution.py', 'arlinux/wine_pe_debug.py'),
+    'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/patches/dxvk-optional-pipeline-library.patch', 'arlinux/build/runtime_distribution.py', 'arlinux/wine_pe_debug.py'),
+    'wine-addons': ('arlinux/build/local_addons.py', 'arlinux/build/runtime_distribution.py'),
     'wine-tls': ('arlinux/components/bionic-deps',),
     'wine-graphics': ('arlinux/build/wine-bionic-graphics.sh', 'arlinux/components/mesa',
                       'arlinux/components/libxshmfence', 'arlinux/components/libhybris'),
     'wine-vulkan': ('arlinux/components/libhybris', 'arlinux/components/android-headers', 'arlinux/patches'),
     'wine-bionic-compile': ('@wine', *PE, 'arlinux/build/wine-bionic.sh', 'arlinux/components/FEX'),
     'wine-bionic': ('arlinux/package-wine-bionic.py', 'arlinux/wine_pe_debug.py',
-                    'arlinux/wine_fonts.py', 'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB',
+                    'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB',
                     'arlinux/build/runtime_assembly.py', 'arlinux/build/runtime_distribution.py'),
     'steamworks': ('arlinux/components/steamworks', 'arlinux/build/runtime_distribution.py'),
     'windows-accessibility': ('arlinux/components/windows-integration', 'arlinux/build/runtime_distribution.py'),
@@ -32,19 +32,18 @@ SOURCES = {
                          'arlinux/components/windows-integration'),
     'wine-product': ('arlinux/build/local_product.py', 'arlinux/build/runtime_distribution.py'),
     'wine-capture': ('arlinux/components/gfxreconstruct', 'arlinux/vulkan-capture.py'),
-    'windows-fonts': ('arlinux/wine_fonts.py',),
+    'windows-fonts': ('arlinux/wine_fonts.py', 'arlinux/build/runtime_distribution.py'),
 }
 RESOURCES = {name: ('mingw',) for name in SOURCES}
 for name in ('bionic-deps', 'bionic-x11', 'wine-pulse', 'wine-tls', 'wine-graphics', 'wine-vulkan'):
     RESOURCES[name] = ('ndk',)
-RESOURCES.update({'wine-pe-package': ('addons',), 'wine-bionic-compile': ('mingw', 'ndk'), 'wine-bionic': ('ndk',),
+RESOURCES.update({'wine-addons': ('addons',), 'wine-bionic-compile': ('mingw', 'ndk'), 'wine-bionic': ('ndk',),
                   'wine-product': (), 'wine-capture': ('ndk',), 'windows-fonts': ()})
 SHARED = ('arlinux/build/github-component.py',
           'arlinux/build/wine-pipeline.py', 'arlinux/build/pipeline_cache.py',
           'arlinux/build/wine_graph.py', 'arlinux/build.sh')
 ASSEMBLY_CODE = {
-    'wine-pe-package': ('package_pe',),
-    'wine-bionic': ('package_bionic',),
+    'wine-bionic': ('package_bionic', 'build_native'),
 }
 
 
@@ -58,7 +57,11 @@ def implementation(source, names=None):
     definitions = {node.name: node for node in tree.body
                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
     selected = sorted(definitions) if names is None else names
-    nodes = [node for node in tree.body if
+    def entrypoint(node):
+        return (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                and ast.dump(node.test, include_attributes=False) == ast.dump(
+                    ast.parse('__name__ == "__main__"', mode='eval').body, include_attributes=False))
+    nodes = [node for node in tree.body if not entrypoint(node) and
              (not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
               if names is not None else isinstance(node, (ast.Import, ast.ImportFrom)))]
     nodes += [definitions[name] for name in selected]
@@ -89,7 +92,15 @@ def source_inputs(repo, revision, stage, plan):
     def source(path):
         return subprocess.check_output(['git', '-C', str(repo), 'show', revision+':'+path]).decode()
     selected['arlinux/build/component_inputs.py'] = implementation(source('arlinux/build/component_inputs.py'))
-    selected['declaredPaths'] = paths
+    publication = {}
+    runtime_publisher = 'arlinux/build/runtime_distribution.py'
+    if runtime_publisher in paths and plan['stages'][stage].get('execution') != 'local':
+        # Runtime manifests and install archives are post-processing. A change
+        # here republishes the component using verified compiler outputs.
+        publication[runtime_publisher] = selected.pop(runtime_publisher)
+        if stage != 'wine-bionic' and 'arlinux/wine_pe_debug.py' in selected:
+            publication['arlinux/wine_pe_debug.py'] = selected.pop('arlinux/wine_pe_debug.py')
+    selected['declaredPaths'] = tuple(path for path in paths if path not in publication)
     adapter = 'arlinux/build/github-component.py'
     handlers = ('build_'+stage.replace('-', '_'),) if stage in (
         'windows-fonts', 'wine-capture', 'wine-diagnostics') else ()
@@ -105,9 +116,12 @@ def source_inputs(repo, revision, stage, plan):
     lock = subprocess.check_output(['git', '-C', str(repo), 'show', revision+':arlinux/build/github-inputs.json'])
     versions = json.loads(lock)
     recipe = dict(selected)
+    publisher = implementation(source(adapter), ('publish', 'publish_distribution'))
+    if publication:
+        publisher = hashlib.sha256(json.dumps(dict(adapter=publisher, sources=publication), sort_keys=True).encode()).hexdigest()
     return dict(sourceSha256=hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest(),
                 recipeSha256=hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest(),
-                publicationSha256=implementation(source(adapter), ('publish', 'publish_distribution')),
+                publicationSha256=publisher,
                 tools={n: versions[n] for n in RESOURCES[stage]},
                 runner=plan['stages'][stage]['runner'],
                 artifactInputsOnly=plan['stages'][stage].get('artifactInputsOnly', False))

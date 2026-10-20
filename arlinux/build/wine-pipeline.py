@@ -9,8 +9,8 @@ import shutil
 import subprocess
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from wine_graph import ComponentCache, ComponentComplete, required_stages
-from pipeline_cache import Cache, digest, inventory, key, run, source_state, support_sources
+from wine_graph import ComponentCache, ComponentComplete, required_stages, PLAN
+from pipeline_cache import Cache, digest, inventory, key, run, source_state
 from component_inputs import core_path, RESOURCES, source_inputs
 import runtime_assembly as assembly
 
@@ -22,7 +22,6 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
                     'arlinux/build/prepare-wine-dcomp.sh', 'arlinux/patches'),
         'fex': ('arlinux/build/fex-windows.sh', 'arlinux/components/FEX'),
         'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/patches/dxvk-optional-pipeline-library.patch'),
-        'wine-pe-package': ('arlinux/package-wine-pe.py', 'arlinux/wine_pe_debug.py'),
         'wine-tls': ('arlinux/components/bionic-deps/build-tls.sh',),
         'wine-graphics': ('arlinux/build/wine-bionic-graphics.sh', 'arlinux/components/mesa', 'arlinux/components/libxshmfence', 'arlinux/components/libhybris/arlinux/graphics-protocols'),
         'wine-vulkan': ('arlinux/components/libhybris/arlinux/build-bionic-vulkan.py', 'arlinux/components/libhybris', 'arlinux/components/android-headers', 'arlinux/patches'),
@@ -30,7 +29,7 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
                         'arlinux/build/prepare-wine-dcomp.sh', 'arlinux/components/FEX',
                         'arlinux/patches'),
         'wine-bionic': ('arlinux/package-wine-bionic.py', 'arlinux/wine_pe_debug.py',
-                        'arlinux/wine_fonts.py', 'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB'),
+                        'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB'),
     }
     def stage(name, command, dependencies=()):
         if not cache.selected(name):
@@ -40,11 +39,6 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
         inputs['toolchain'] = {n: common['toolchain'][n] for n in RESOURCES[name]}
         inputs['sources'] = {p: source_state(framework/p) if (framework/p).is_dir() else inventory(framework/p)
                              for p in recipes.get(name, recipes['wine-pe'])}
-        if name == 'wine-bionic':
-            import sys
-            sys.path.insert(0, str(framework / 'arlinux'))
-            from wine_fonts import FILES, source_directory
-            inputs['windowsFonts'] = {n: inventory(source_directory()/n) for n in FILES}
         if name in ('wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386', 'wine-bionic-compile'):
             inputs['wineSources'] = common['wineSources']
         if name == 'wine-pulse':
@@ -85,9 +79,6 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
     fex = stage('fex', lambda out: invoke('bash', 'arlinux/build/fex-windows.sh', paths['mingw'], out))
     dxvk = stage('dxvk', lambda out: invoke('bash', 'arlinux/build/dxvk-windows.sh', paths['mingw'], out))
 
-    pe_stage = stage('wine-pe-package', lambda out: assembly.package_pe(out, framework,
-        wine, fex, dxvk, paths['addons'], invoke), ('wine-pe', 'fex', 'dxvk'))
-    pe = pe_stage / 'runtime' if pe_stage else None
     tls = stage('wine-tls', lambda out: invoke('bash', 'arlinux/components/bionic-deps/build-tls.sh', paths['ndk'], out))
     graphics = stage('wine-graphics', lambda out: invoke('bash', 'arlinux/build/wine-bionic-graphics.sh',
                      framework / 'arlinux/components/mesa', paths['ndk'], paths['bionicPrefix'],
@@ -105,8 +96,8 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
         ('wine-pe-aarch64', 'bionic-deps', 'wine-tls', 'wine-pulse', 'wine-graphics'))
 
     native = stage('wine-bionic', lambda out: assembly.package_bionic(out, framework,
-        compiled, pe, tls, pulse, graphics, adapter, dxvk, paths, invoke),
-        ('wine-bionic-compile', 'wine-pe-package', 'wine-vulkan'))
+        compiled, tls, pulse, graphics, adapter, paths, invoke),
+        ('wine-bionic-compile', 'bionic-deps', 'wine-tls', 'wine-pulse', 'wine-graphics', 'wine-vulkan'))
     if compiled is not None and wine is not None:
         paths.update(wineSource=compiled / 'source', wineBuild=compiled / 'core',
                      wineTools=tools, wineImportLibs=wine / 'files/lib/wine')
@@ -132,16 +123,14 @@ def build_bionic_deps(cache, framework, android, ndk):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, type=Path)
-    parser.add_argument('--target', choices=tuple(required_stages(None)))
+    parser.add_argument('--target', required=True,
+                        choices=tuple(name for name in required_stages(None)
+                                      if PLAN['stages'][name].get('execution') != 'local'))
     parser.add_argument('--require-dependencies', action='store_true')
     parser.add_argument('--rebuild', action='store_true')
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     framework = Path(config['framework']).resolve(strict=True)
-    if args.target and 'artifacts' in config:
-        import runtime_assembly
-        runtime_assembly.build_target(framework, args.target, config['artifacts'], args.rebuild)
-        return
     paths = {name: Path(config[name]).resolve() for name in ('wineSource', 'mingw', 'ndk', 'addons')}
     android = framework
     dirty = subprocess.check_output(['git', '-C', str(paths['wineSource']), 'status', '--porcelain', '--untracked-files=normal'])
@@ -166,7 +155,6 @@ def main():
         toolchain = {name: inventory(paths[name]) for name in resources}
         sources = source_state(framework)
         revision = subprocess.check_output(['git', '-C', str(framework), 'rev-parse', 'HEAD'], text=True).strip()
-        from wine_graph import PLAN
         engines = {name: source_inputs(framework, revision, name, PLAN)['recipeSha256'] for name in cache.required}
         common = dict(engines=engines, config=config, sources=sources,
                       wineSources={n: v for n, v in sources.items() if core_path(n)}, toolchain=toolchain)
@@ -199,11 +187,6 @@ def main():
             tray = cache.stage('windows-tray', helper_inputs('windows-tray', 'arlinux/components/windows-integration/tray',
                 'arlinux/components/windows-integration/build-tray.sh'), lambda out: invoke(
                 'bash', 'arlinux/components/windows-integration/build-tray.sh', paths['mingw'], out))
-        import runtime_assembly as assembly
-        support = assembly.cached_support(cache, framework, bridge, observer, tray, invoke)
-        final = assembly.cached_product(cache, framework, base, support, invoke)
-        from runtime_distribution import finish
-        finish(final, framework/'build/artifacts/wine', cache.records)
 
 
 if __name__ == '__main__':

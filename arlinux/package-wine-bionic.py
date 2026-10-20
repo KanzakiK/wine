@@ -1,78 +1,35 @@
 #!/usr/bin/env python3
-"""Assemble an experimental Bionic backend with matching Wine/FEX PE modules."""
+"""Package only the native Bionic backend and its paired shell/HID frontends."""
 import argparse
-import gzip
 import hashlib
 import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
-import tarfile
-import tempfile
 from wine_pe_debug import optimize
-from wine_fonts import install as install_fonts
 
 SYSTEM_LIBS = {'libc.so', 'libm.so', 'libdl.so', 'libz.so', 'liblog.so', 'libandroid.so', 'libnativewindow.so'}
 
 
 
-def archive_runtime(root, archive):
-    if archive.exists() or archive.with_name(archive.name + '.sha256').exists():
-        raise FileExistsError('Runtime archive already exists: ' + str(archive))
-    if archive.resolve().is_relative_to(root.resolve()):
-        raise ValueError('Archive must be outside the runtime directory')
-    metadata = json.loads((root / 'bionic-runtime.json').read_text())
-    for name, expected in metadata['files'].items():
-        with (root / name).open('rb') as stream:
-            if hashlib.file_digest(stream, 'sha256').hexdigest() != expected:
-                raise RuntimeError('Runtime checksum mismatch before compression: ' + name)
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='wine-archive-', dir=archive.parent) as temp:
-        temporary = Path(temp) / 'runtime.tar.gz'
-        with temporary.open('wb') as output, gzip.GzipFile(filename='', mode='wb', fileobj=output,
-                                                         compresslevel=1, mtime=0) as compressed:
-            with tarfile.open(fileobj=compressed, mode='w|') as bundle:
-                for path in sorted(root.rglob('*')):
-                    entry = bundle.gettarinfo(str(path), path.relative_to(root).as_posix())
-                    entry.uid = entry.gid = entry.mtime = 0
-                    entry.uname = entry.gname = ''
-                    if entry.isfile():
-                        with path.open('rb') as source:
-                            bundle.addfile(entry, source)
-                    else:
-                        bundle.addfile(entry)
-        with temporary.open('rb') as stream:
-            checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
-        temporary.rename(archive)
-    archive.with_name(archive.name + '.sha256').write_text(checksum + '  ' + archive.name + '\n')
-    return checksum
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ['core', 'fex', 'native-prefix', 'ndk', 'pe-runtime', 'output']:
+    for name in ['core', 'fex', 'native-prefix', 'ndk', 'output']:
         parser.add_argument('--' + name, type=Path)
     parser.add_argument('--dependency-prefix', type=Path, action='append', default=[])
     parser.add_argument('--graphics-prefix', type=Path)
-    parser.add_argument('--dxvk-runtime', type=Path,
-                        help='DXVK build with optional KHR_pipeline_library, containing ARCH-windows directories')
     parser.add_argument('--vulkan-driver', choices=['system', 'turnip', 'none'], default='system')
     parser.add_argument('--system-vulkan-adapter', type=Path,
                         help='Bionic libvulkan_android_desktop.so from arlinux/components/libhybris/arlinux/build-bionic-vulkan.py')
-    parser.add_argument('--archive', type=Path, help='Also create a deterministic tar.gz and SHA-256 sidecar')
     parser.add_argument('--wine-source-archive', type=Path,
-                        help='Source archive produced by wine-pe.sh; defaults to PE runtime/wine-source.tar.gz')
+                        help='Source archive exported by the matching native Wine compile')
     args = parser.parse_args()
-    for name in ('core', 'fex', 'native_prefix', 'ndk', 'pe_runtime', 'output'):
+    for name in ('core', 'fex', 'native_prefix', 'ndk', 'output'):
         if getattr(args, name) is None:
             parser.error('Full packaging requires --' + name.replace('_', '-'))
-    if args.archive and (args.archive.exists() or args.archive.resolve().is_relative_to(args.output.resolve())):
-        parser.error('Archive must be a new file outside the runtime output directory')
     if args.vulkan_driver == 'system' and (not args.system_vulkan_adapter or not args.system_vulkan_adapter.is_file()):
         parser.error('System Vulkan requires --system-vulkan-adapter; build the native desktop WSI first')
-    if args.vulkan_driver == 'system' and not args.dxvk_runtime:
-        parser.error('System Vulkan requires --dxvk-runtime from arlinux/build/dxvk-windows.sh')
     compat_layer = args.system_vulkan_adapter.with_name('libVkLayer_hybris_compat.so') if args.vulkan_driver == 'system' else None
     if compat_layer and (not compat_layer.is_file() or not compat_layer.with_name('VkLayer_hybris_compat.json').is_file()):
         parser.error('Build the system adapter and its matching Bionic hybris compatibility layer together')
@@ -87,10 +44,10 @@ def main():
         if not args.graphics_prefix:
             parser.error('OpenGL requires a graphics prefix with Zink')
         graphics_record = json.loads((args.graphics_prefix / 'arlinux-bionic-graphics.json').read_text())
-    original = json.loads((args.pe_runtime / 'arlinux-runtime.json').read_text())
+    original = json.loads((args.core.parent / 'wine-build.json').read_text())
     wine_commit = original['wine_commit']
     fex_commit = original['fex_commit']
-    source_archive = args.wine_source_archive or (args.pe_runtime / 'wine-source.tar.gz')
+    source_archive = args.wine_source_archive or (args.core.parent / 'wine-source.tar.gz')
     with source_archive.open('rb') as stream:
         source_archive_sha256 = hashlib.file_digest(stream, 'sha256').hexdigest()
     source_asset = 'wine-source-' + source_archive_sha256 + '.tar.gz'
@@ -103,23 +60,13 @@ def main():
     elif source_archive.resolve() != source_target.resolve():
         shutil.copyfile(source_archive, source_target)
     args.output.mkdir(parents=True, exist_ok=False)
-    source = args.pe_runtime / 'files'
     destination = args.output / 'files'
-
-    def ignore(directory, names):
-        path = Path(directory)
-        if path == source / 'lib/wine':
-            return ['aarch64-unix']
-        if path == source / 'bin':
-            return [name for name in names if name in {'wine', 'wine64', 'wineserver', 'wine-preloader', 'wine64-preloader'}]
-        return []
-
-    shutil.copytree(source, destination, symlinks=True, ignore=ignore)
-    install_fonts(destination / "share/arlinux/fonts")
+    destination.mkdir()
     # Keep the HID driver's private Unix ABI paired with the native backend.
     for arch in ('aarch64', 'i386', 'x86_64'):
         driver = args.core / 'dlls/winebus.sys' / (arch + '-windows/winebus.sys')
         target = destination / 'lib/wine' / (arch + '-windows/winebus.sys')
+        target.parent.mkdir(parents=True)
         if target.is_symlink():
             target.unlink()
         shutil.copyfile(driver, target)
@@ -129,21 +76,11 @@ def main():
         if target.is_symlink():
             target.unlink()
         shutil.copyfile(explorer, target)
-    dcomp_record = json.loads((args.pe_runtime / 'arlinux-dcomp.json').read_text())
+    dcomp_record = original['directComposition']
     configuration = destination / 'etc/dxvk.conf'
     configuration.parent.mkdir(parents=True, exist_ok=True)
     configuration.write_text('[msedgewebview2.exe]\n'
                              'dxgi.enableDummyCompositionSwapchain = True\n')
-    if args.dxvk_runtime:
-        for arch in ['aarch64', 'x86_64', 'i386']:
-            target = destination / 'lib/wine/dxvk' / (arch + '-windows')
-            target.mkdir(parents=True, exist_ok=True)
-            for name in ['dxgi', 'd3d8', 'd3d9', 'd3d10core', 'd3d11']:
-                src = args.dxvk_runtime / (arch + '-windows') / (name + '.dll')
-                dst = target / src.name
-                if dst.is_symlink():
-                    dst.unlink()
-                shutil.copyfile(src, dst)
     unix = destination / 'lib/wine/aarch64-unix'
     unix.mkdir(parents=True)
     readelf = args.ndk / 'bin/llvm-readelf'
@@ -232,14 +169,16 @@ def main():
         if path.is_file() and not path.is_symlink():
             with path.open('rb') as stream:
                 hashes[path.relative_to(args.output).as_posix()] = hashlib.file_digest(stream, 'sha256').hexdigest()
-    metadata = dict(protocol=1, taskProtocol=1, libc='bionic', experimental=True, wine='11.19',
+    metadata = dict(protocol=1, taskProtocol=1, libc='bionic', experimental=True,
+                    wine=original['wine_version'].removeprefix('Wine version ').strip(),
                     wineCommit=wine_commit,
                     wineSource=dict(repository='https://github.com/taowen/wine',
                                     commit=wine_commit, archiveURL=source_url,
                                     archiveName=source_asset,
                                     archiveSHA256=source_archive_sha256),
                     fexCommit=fex_commit,
-                    originalSources=original['sources'], packaging=packaging, vulkanDriver=args.vulkan_driver,
+                    originalSources={'wine-native': dict(asset=source_asset, sha256=source_archive_sha256)},
+                    packaging=packaging, vulkanDriver=args.vulkan_driver,
                     vulkanCompat='hybris' if compat_layer else 'none',
                     openglDriver='zink' if opengl else 'none',
                     graphicsBuild=graphics_record,
@@ -251,14 +190,10 @@ def main():
                                  ['Vulkan driver not packaged']), files=hashes)
     if dcomp_record:
         metadata['directComposition'] = dcomp_record
-    vkd3d_record = args.pe_runtime / 'arlinux-vkd3d.json'
-    if vkd3d_record.is_file():
-        metadata['vkd3d'] = json.loads(vkd3d_record.read_text())
-        shutil.copyfile(vkd3d_record, args.output / 'arlinux-vkd3d.json')
+    if original.get('vkd3d'):
+        metadata['vkd3d'] = original['vkd3d']
     (args.output / 'bionic-runtime.json').write_text(json.dumps(metadata, indent=2) + '\n')
     print('Packaged Bionic Wine:', len(hashes), 'files')
-    if args.archive:
-        print('Runtime archive SHA-256:', archive_runtime(args.output, args.archive))
 
 
 

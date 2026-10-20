@@ -127,13 +127,3 @@ class Cache:
 def run(*args, cwd, env):
     print('> ' + ' '.join(map(str, args)), flush=True)
     subprocess.run(list(map(str, args)), cwd=cwd, env=env, check=True)
-
-
-
-def support_sources(framework):
-    required = ('arlinux/components/steamworks', 'arlinux/components/windows-integration/accessibility',
-                'arlinux/components/steamworks/build.sh', 'arlinux/components/windows-integration/build-accessibility.sh')
-    optional = ('arlinux/components/windows-integration/tray', 'arlinux/components/windows-integration/build-tray.sh')
-    result = {name: inventory(framework / name) for name in required}
-    result.update({name: inventory(framework / name) if (framework / name).exists() else None for name in optional})
-    return result

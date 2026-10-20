@@ -157,7 +157,10 @@ class Coordinator:
             print('OK published '+repository+'/'+stage,flush=True)
             return result
         if self.plan['stages'][stage].get('execution') == 'local':
-            from local_product import build
+            if stage == 'wine-addons':
+                from local_addons import build
+            else:
+                from local_product import build
             print('START local '+stage, flush=True)
             build(request, self.state/request['identity'], repository, self.state/'downloads/objects')
             result = self.existing(request)
@@ -179,7 +182,7 @@ class Coordinator:
             # runtime plus its dependency closure just to rebuild a new runtime
             # duplicates large downloads; current declared inputs are sufficient.
             if stage not in ('yibu','debian','arch','omarchy','plasma','lxqt','windows-fonts',
-                             'wine-pe','wine-pe-package','wine-bionic','runtime-support','wine-product'):
+                             'wine-pe','wine-bionic','wine-product'):
                 releases=api(f'repos/{repository}/releases?per_page=100')
                 candidate=next((r for r in releases if re.fullmatch(re.escape('arlinux-'+stage+'-')+'[0-9a-f]{24}',r['tag_name']) and
                                 any(a['name']=='component.json' for a in r['assets'])),None)

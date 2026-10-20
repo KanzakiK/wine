@@ -109,10 +109,10 @@ ccache "$ndk/bin/aarch64-linux-android29-clang++" -std=c++17 -fPIC -O2 \
 cp "$stage/fex/libarm64ecfex.so" "$stage/fex/libwow64fex.so"
 # Export only compiler outputs consumed by packaging and Steamworks. Keep the
 # private object tree in this runner; it is never a downstream artifact.
-python3 - "$stage" "$output" <<'COMPILE_OUTPUT'
-import shutil, sys
+python3 - "$stage" "$output" "$repo" "$fex_source" <<'COMPILE_OUTPUT'
+import json, shutil, subprocess, sys
 from pathlib import Path
-stage, output = map(Path, sys.argv[1:])
+stage, output, repo, fex = map(Path, sys.argv[1:])
 output.mkdir()
 shutil.copytree(stage/'source/include', output/'source/include')
 shutil.copytree(stage/'core/include', output/'core/include')
@@ -126,6 +126,13 @@ for source in files:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
 shutil.copytree(stage/'fex', output/'fex', ignore=shutil.ignore_patterns('*.cpp', '*.h', '*.o'))
+metadata = dict(wine_commit=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip(),
+                wine_version=(stage/'source/VERSION').read_text().strip(),
+                fex_commit=subprocess.check_output(['git','-C',str(fex),'rev-parse','HEAD'],text=True).strip(),
+                directComposition=json.loads((stage/'source/arlinux-dcomp.json').read_text()))
+vkd3d = stage/'source/arlinux-vkd3d.json'
+if vkd3d.is_file(): metadata['vkd3d'] = json.loads(vkd3d.read_text())
+(output/'wine-build.json').write_text(json.dumps(metadata,sort_keys=True)+'\n')
 COMPILE_OUTPUT
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu \
     -czf "$output/wine-source.tar.gz" -C "$stage" source

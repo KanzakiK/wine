@@ -78,6 +78,11 @@ def prepare(data, framework):
             with Path(os.environ['GITHUB_OUTPUT']).open('a') as out:
                 if data['stage'] != 'wine-product':
                     out.write('cache-paths='+str(framework/'build/pipeline'/data['stage'])+'\n')
+                lock = json.loads((framework/'arlinux/build/github-inputs.json').read_text())
+                _, resources = requirements(data['stage'], plan)
+                for name in sorted(resources):
+                    identity = hashlib.sha256(json.dumps(lock[name], sort_keys=True).encode()).hexdigest()
+                    out.write('vendor-'+name+'-key='+identity+'\n')
             return
         # Only remove optional software on the ephemeral GitHub runner.
         # Never run this cleanup in a workstation or self-hosted environment.
@@ -98,8 +103,8 @@ def prepare(data, framework):
             'libxcb-xfixes0-dev', 'libxcb-randr0-dev', 'libxdamage-dev', 'libxext-dev',
             'libelf-dev', 'libudev-dev', 'libgbm-dev', 'gperf', 'libglib2.0-dev', 'libglib2.0-dev-bin',
             'ccache', 'gettext', 'libgettextpo-dev', 'libssl-dev', 'unzip', 'autopoint', 'intltool', 'python-is-python3']
-        if data['stage'] in ('wine-capture', 'wine-diagnostics', 'windows-accessibility', 'windows-tray', 'runtime-support', 'wine-product', 'wine-bionic',
-                             'wine-pe', 'wine-pe-package', 'wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386'):
+        if data['stage'] in ('wine-capture', 'wine-diagnostics', 'windows-accessibility', 'windows-tray',
+                             'wine-pe', 'wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386'):
             packages = ['build-essential', 'bison', 'flex', 'ccache', 'gettext', 'libfreetype-dev',
                         'cmake', 'ninja-build', 'pkg-config', 'git', 'curl', 'unzip',
                         'python3', 'python3-venv', 'python3-pip', 'zstd']
@@ -205,8 +210,9 @@ def toolchains(root, framework):
         else:
             target.symlink_to(compiler)
     plan=json.loads((framework/'arlinux/build/github-components.json').read_text())
-    run('ccache', '--max-size', str(plan['stages'][stage]['compilerCacheMiB'])+'M',
-        env=dict(os.environ,CCACHE_DIR=str(root/'cache/ccache')))
+    if not plan['stages'][stage].get('artifactInputsOnly'):
+        run('ccache', '--max-size', str(plan['stages'][stage]['compilerCacheMiB'])+'M',
+            env=dict(os.environ,CCACHE_DIR=str(root/'cache/ccache')))
     return dict(format=1, framework=str(framework), wineSource=str(framework),
         ndk=str(tools/'ndk'), mingw=str(launcher), addons=str(addons))
 
@@ -344,6 +350,10 @@ def build(data, framework):
         record = import_dependency(root, dependency, visited, recursive=not assembly)
         if assembly:
             artifacts[record['stage']] = record['pipelineOutput']
+    if stage == 'wine-bionic':
+        from runtime_assembly import build_native
+        build_native(data, framework, artifacts, toolchains(root, framework))
+        return
     config = root / 'product.json'
     config.write_text(json.dumps(dict(framework=str(framework), artifacts=artifacts)
                                  if assembly else toolchains(root, framework)))
@@ -410,9 +420,13 @@ def publish(data, framework):
                 raise ValueError('Published component differs from the verified rerun outputs')
             print('OK identical published component '+stage, flush=True)
             return
-    if stage == 'wine-product':
-        publish_distribution(data, record, final)
-        return
+    from runtime_distribution import RUNTIME_STAGES, publish_runtime_component
+    if stage in RUNTIME_STAGES:
+        sdk = stage in ('wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386')
+        publish_runtime_component(data, framework, record, paths[0] if stage == 'windows-fonts' else path,
+                                  complete=not sdk)
+        if not sdk:
+            return
     archive = output / 'capsule.tar'
     # Compiler tools can point at generated source/header trees outside the
     # output directory. Preserve those references at the same absolute path.
@@ -492,11 +506,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     data, framework = request()
     try:
-        from runtime_distribution import RUNTIME_STAGES, publish_runtime_component
-        if args.action == 'publish' and data['stage'] in RUNTIME_STAGES:
-            publish_runtime_component(data, framework)
-        else:
-            globals()[args.action](data, framework)
+        globals()[args.action](data, framework)
     except subprocess.CalledProcessError:
         # Existing recipes retain detailed compiler logs in their work trees.
         # Surface them when a hosted build fails so diagnosis needs no SSH.
