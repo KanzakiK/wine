@@ -4,7 +4,19 @@
   "workspace": "/opt/arlinux",
   "cacheLimitGiB": 10,
   "products": {
-    "wine": "wine-product",
+    "wine": [
+      "wine-bionic",
+      "wine-pe-aarch64",
+      "wine-pe-x86_64",
+      "wine-pe-i386",
+      "fex",
+      "dxvk",
+      "windows-fonts",
+      "wine-addons",
+      "steamworks",
+      "windows-accessibility",
+      "windows-tray"
+    ],
     "audio": "wine-pulse",
     "diagnostics": "wine-diagnostics",
     "wine-capture": "wine-capture"
@@ -119,27 +131,6 @@
       "repository": "taowen/arlinux-windows-integration",
       "runner": "ubuntu-24.04",
       "dependencies": [],
-      "product": "wine",
-      "compilerCacheMiB": 256
-    },
-    "wine-product": {
-      "execution": "local",
-      "artifactInputsOnly": true,
-      "repository": "taowen/wine",
-      "runner": "ubuntu-24.04",
-      "dependencies": [
-        "wine-bionic",
-        "wine-pe-aarch64",
-        "wine-pe-x86_64",
-        "wine-pe-i386",
-        "fex",
-        "dxvk",
-        "windows-fonts",
-        "wine-addons",
-        "steamworks",
-        "windows-accessibility",
-        "windows-tray"
-      ],
       "product": "wine",
       "compilerCacheMiB": 256
     },

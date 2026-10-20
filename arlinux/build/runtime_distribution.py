@@ -12,7 +12,6 @@ import tempfile
 
 COMPONENT_TAG = 'arlinux-wine-components'
 COMPONENT_BASE = 'https://github.com/taowen/wine/releases/download/'+COMPONENT_TAG+'/'
-INDEX = 'arlinux-wine-manifests.json'
 LEAF_INDEX = 'arlinux-wine-runtime.json'
 RUNTIME_STAGES = ('wine-bionic', 'steamworks', 'windows-accessibility', 'windows-tray',
                   'wine-pe-aarch64', 'wine-pe-x86_64', 'wine-pe-i386',
@@ -133,7 +132,7 @@ def publish_runtime_component(data, framework, record, built, complete=True):
         publish_distribution(data, record, output, repository=repository, index_name=name, complete=complete)
 
 
-def publish_distribution(data, record, final, repository=None, index_name=INDEX, complete=True):
+def publish_distribution(data, record, final, repository=None, index_name=LEAF_INDEX, complete=True):
     """The completion marker follows every immutable object upload."""
     index = json.loads((final/index_name).read_text())
     repository = repository or os.environ['GITHUB_REPOSITORY']
@@ -275,73 +274,3 @@ def assemble(root, output, component_base=COMPONENT_BASE, group_prefix='', index
 def runtime_url(url, filename):
     return bool(re.fullmatch(r'https://github\.com/taowen/(?:wine|FEX|dxvk|arlinux-steamworks|arlinux-windows-integration)'
                             r'/releases/download/[^/]+/'+re.escape(filename), url))
-
-
-def resolve_index(path, fetch=None):
-    """Resolve checksum-bound producer manifests; never fetch runtime archives."""
-    path = Path(path)
-    index = json.loads(path.read_text())
-    if index.get('format') == 1 and index.get('kind') == 'arlinux-bionic-components':
-        return index
-    if (index.get('format') != 2 or index.get('kind') != 'arlinux-bionic-manifests'
-            or not isinstance(index.get('manifests'), list) or not index['manifests']):
-        raise ValueError('Expected independently pinned Bionic runtime manifests')
-    merged = dict(format=1, kind='arlinux-bionic-components', runtime={}, components=[], sources=[])
-    names, paths, sources = set(), set(), {}
-    for item in index['manifests']:
-        name, filename, checksum = item['name'], item['file'], item['sha256']
-        if (not re.fullmatch('[a-z0-9_-]+', name) or filename != 'arlinux-'+name+'.json'
-                or name in names or not re.fullmatch('[0-9a-f]{64}', checksum)
-                or not runtime_url(item['url'], filename)
-                or type(item['bytes']) is not int or item['bytes'] <= 0):
-            raise ValueError('Invalid independent runtime manifest')
-        names.add(name)
-        leaf = Path(fetch(item)) if fetch else path.parent/filename
-        if sha(leaf) != checksum or leaf.stat().st_size != item['bytes']:
-            raise ValueError('Runtime manifest checksum/size mismatch: '+name)
-        child = json.loads(leaf.read_text())
-        if child.get('format') != 1 or child.get('kind') != 'arlinux-bionic-components':
-            raise ValueError('Expected a leaf runtime component manifest')
-        for key, value in child['runtime'].items():
-            if key in ('files', 'originalSources'):
-                previous = merged['runtime'].setdefault(key, {})
-                for field, content in value.items():
-                    if field in previous and previous[field] != content:
-                        raise ValueError('Conflicting runtime metadata: '+field)
-                    if key == 'files' and field in previous:
-                        raise ValueError('Runtime file owned by multiple producers: '+field)
-                    previous[field] = content
-            elif key in merged['runtime'] and merged['runtime'][key] != value:
-                raise ValueError('Conflicting runtime metadata: '+key)
-            else:
-                merged['runtime'][key] = value
-        for component in child['components']:
-            if component['file'] in paths:
-                raise ValueError('Duplicate independently published component')
-            paths.add(component['file'])
-            merged['components'].append(component)
-        for source in child['sources']:
-            if source['file'] in sources and sources[source['file']] != source:
-                raise ValueError('Conflicting component source archive')
-            sources[source['file']] = source
-    merged['sources'] = list(sources.values())
-    return merged
-
-
-def read_index(path):
-    path = Path(path)
-    index = resolve_index(path)
-    if (index.get('format') != 1 or index.get('kind') != 'arlinux-bionic-components'
-            or index['runtime'].get('libc') != 'bionic' or not index.get('components')):
-        raise ValueError('Expected a Bionic runtime component manifest')
-    seen = set()
-    for item in index['components']:
-        if (not re.fullmatch('[0-9a-f]{64}', item['sha256'])
-                or not re.fullmatch(r'[a-z0-9_-]+-'+item['sha256']+r'\.tar\.gz', item['file'])
-                or not runtime_url(item['url'], item['file']) or item['name'] in seen):
-            raise ValueError('Invalid runtime component')
-        seen.add(item['name'])
-        component = path.parent/item['file']
-        if component.stat().st_size != item['bytes'] or sha(component) != item['sha256']:
-            raise ValueError('Runtime component differs from its build manifest: '+item['name'])
-    return index

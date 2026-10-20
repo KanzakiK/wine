@@ -51,34 +51,6 @@ class CoordinatorTest(unittest.TestCase):
                     self.assertEqual([f.result() for f in futures],[result,result])
                 self.assertEqual(dispatch.call_count,1)
 
-    def test_local_product_cache_is_verified_before_skipping_download(self):
-        import zstandard
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary)
-            source=root/'source'
-            source.mkdir()
-            (source/'arlinux-wine-bionic.tar.gz').write_bytes(b'complete built rootfs fixture')
-            (source/'arlinux-wine-bionic.tar.gz.sha256').write_text(hashlib.sha256((source/'arlinux-wine-bionic.tar.gz').read_bytes()).hexdigest()+'  arlinux-wine-bionic.tar.gz\n')
-            archive=root/'capsule.tar'
-            with tarfile.open(archive,'w') as target:
-                for file in source.iterdir():
-                    target.add(file,arcname='framework/build/artifacts/wine/'+file.name)
-            part=root/'capsule-000.zst.part'
-            part.write_bytes(zstandard.ZstdCompressor().compress(archive.read_bytes()))
-            manifest=root/'component.json'
-            manifest.write_text(json.dumps(dict(identity='a'*64,stage='wine-product',
-                archiveSha256=hashlib.sha256(part.read_bytes()).hexdigest(),
-                parts=[dict(name=part.name,url=part.as_uri(),sha256=hashlib.sha256(part.read_bytes()).hexdigest())])))
-            reference=dict(identity='a'*64,manifestUrl=manifest.as_uri(),
-                           manifestSha256=hashlib.sha256(manifest.read_bytes()).hexdigest())
-            output=root/'output'
-            module.fetch_product(reference,output)
-            with patch.object(module,'download',side_effect=RuntimeError('Download required')):
-                module.fetch_product(reference,output)
-                (output/'arlinux-wine-bionic.tar.gz').write_bytes(b'corrupt')
-                with self.assertRaisesRegex(RuntimeError,'Download required'):
-                    module.fetch_product(reference,output)
-
     def test_reuses_active_run_and_ignores_previous_failure_after_dispatch(self):
         for resume in (True,False):
             with self.subTest(resume=resume),tempfile.TemporaryDirectory() as temporary:

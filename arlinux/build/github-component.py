@@ -76,8 +76,7 @@ def prepare(data, framework):
                 out.write('ARLINUX_WORKSPACE='+root.as_posix()+'\n')
                 out.write('PYTHONPATH='+str(python_lib)+'\nARLINUX_ASSEMBLY_ONLY=1\n')
             with Path(os.environ['GITHUB_OUTPUT']).open('a') as out:
-                if data['stage'] != 'wine-product':
-                    out.write('cache-paths='+str(framework/'build/pipeline'/data['stage'])+'\n')
+                out.write('cache-paths='+str(framework/'build/pipeline'/data['stage'])+'\n')
                 lock = json.loads((framework/'arlinux/build/github-inputs.json').read_text())
                 _, resources = requirements(data['stage'], plan)
                 for name in sorted(resources):
@@ -139,7 +138,7 @@ def prepare(data, framework):
         paths = [str(root/'cache/ccache')]
         # Complete compiler trees travel in verified capsules; Actions caches
         # hold bounded compiler results and small component outputs.
-        if not data['stage'].startswith('wine-pe') and data['stage'] not in ('wine-bionic-compile','wine-bionic','wine-product'):
+        if not data['stage'].startswith('wine-pe') and data['stage'] not in ('wine-bionic-compile','wine-bionic'):
             paths.append(str(framework/'build/pipeline'/data['stage']))
         if data['stage'] == 'wine-capture':
             paths.append(str(framework/'build/gfxreconstruct-bionic'))
@@ -388,7 +387,7 @@ def publish(data, framework):
         paths = [path.parent, path.parent.parent/'receipt.json',
                  *(Path(name) for name in state['references'])]
         record['pipelineOutput'] = path.relative_to(root).as_posix()
-        if stage in ('wine-product', 'wine-diagnostics', 'wine-capture'):
+        if stage in ('wine-diagnostics', 'wine-capture'):
             # Consumers need distributable archives, not the native compiler work tree.
             final = framework/('build/artifacts/'+('diagnostics' if stage == 'wine-diagnostics' else 'wine-capture' if stage == 'wine-capture' else 'wine'))
             final.mkdir(parents=True, exist_ok=True)

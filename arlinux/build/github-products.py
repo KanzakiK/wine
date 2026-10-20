@@ -190,10 +190,7 @@ class Coordinator:
             print('OK published '+repository+'/'+stage,flush=True)
             return result
         if self.plan['stages'][stage].get('execution') == 'local':
-            if stage == 'wine-addons':
-                from local_addons import build
-            else:
-                from local_product import build
+            from local_addons import build
             print('START local '+stage, flush=True)
             build(request, self.state/request['identity'], repository, self.state/'downloads/objects')
             result = self.existing(request)
@@ -215,7 +212,7 @@ class Coordinator:
             # runtime plus its dependency closure just to rebuild a new runtime
             # duplicates large downloads; current declared inputs are sufficient.
             if stage not in ('yibu','debian','arch','omarchy','plasma','lxqt','windows-fonts',
-                             'wine-pe','wine-bionic','wine-product'):
+                             'wine-pe','wine-bionic'):
                 releases=api(f'repos/{repository}/releases?per_page=100')
                 candidate=next((r for r in releases if re.fullmatch(re.escape('arlinux-'+stage+'-')+'[0-9a-f]{24}',r['tag_name']) and
                                 any(a['name']=='component.json' for a in r['assets'])),None)
@@ -268,7 +265,7 @@ class Coordinator:
             self.stopped.wait(self.poll)
         raise TimeoutError('Component workflow timed out: '+stage)
 
-    def run(self, products, parallel):
+    def run(self, products, parallel, output=None):
         required=set()
         def visit(stage):
             if stage in required:
@@ -276,8 +273,17 @@ class Coordinator:
             for dependency in self.plan['stages'][stage]['dependencies']:
                 visit(dependency)
             required.add(stage)
+        targets = {}
         for product in products:
-            visit(self.plan['products'][product])
+            stages = self.plan['products'].get(product, [product])
+            alias = product if isinstance(stages, str) else None
+            if isinstance(stages, str):
+                stages = [stages]
+            for stage in stages:
+                if stage not in self.plan['stages']:
+                    raise ValueError('Unknown component: '+stage)
+                targets[stage] = alias or stage
+                visit(stage)
         completed={}
         pending=set(required)
         active={}
@@ -312,11 +318,14 @@ class Coordinator:
                     stage=active.pop(future)
                     try:
                         completed[stage]=future.result()
+                        if output is not None and stage in targets:
+                            fetch_product(completed[stage], output/targets[stage])
+                            print('READY '+stage+' '+str(output/targets[stage]), flush=True)
                     except BaseException:
                         self.stopped.set()
                         raise
                     (self.state/'progress.json').write_text(json.dumps(completed,indent=2)+'\n')
-        return {product:completed[self.plan['products'][product]] for product in products}
+        return {alias:completed[stage] for stage,alias in targets.items()}
 
 
 def fetch_product(reference, output):
@@ -332,7 +341,7 @@ def fetch_product(reference, output):
         record=json.loads(manifest.read_text())
         if record['identity']!=reference['identity']:
             raise ValueError('Product identity mismatch')
-        if record['stage'] != 'wine-product' and reuse_product(output, reference):
+        if reuse_product(output, reference):
             return
         if record.get('artifacts'):
             # Device testing needs only the runtime. Source archives are fetched
@@ -356,14 +365,11 @@ def fetch_product(reference, output):
                 raise ValueError('Duplicate product artifact name')
             with ThreadPoolExecutor(max_workers=4) as pool:
                 files.update(pool.map(fetch_artifact, artifacts))
-            from runtime_distribution import INDEX, resolve_index
-            def fetch_manifest(item):
-                name, checksum = fetch_artifact(dict(item, name=item['file']))
-                files[name] = checksum
-                return output/name
-            # Transfer only pinned metadata to the workstation. The product's
-            # ordinary installer downloads runtime bytes directly on the phone.
-            resolve_index(output/INDEX, fetch=fetch_manifest)
+            # Each producer is ready independently; no product selection is
+            # generated and no other producer blocks device deployment.
+            manifest = record['runtimeManifest']
+            name, checksum = fetch_artifact(dict(manifest, name=manifest['file']))
+            files[name] = checksum
             (output/'github-component.json').write_text(json.dumps(record, indent=2)+'\n')
             files['github-component.json'] = sha256_file(output/'github-component.json')
             cache_receipt.write_text(json.dumps(dict(format=1, reference=reference, files=files), indent=2)+'\n')
@@ -418,6 +424,7 @@ def main():
     parser.add_argument('--product',choices=('wine','audio','diagnostics','wine-capture','all'),default='all')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--parallel',type=int,default=8)
+    parser.add_argument('--component', choices=None, help='Build only this runtime producer and its compiler dependencies')
     parser.add_argument('--plan',action='store_true')
     args=parser.parse_args()
     framework=Path(__file__).resolve().parents[2]
@@ -425,13 +432,16 @@ def main():
     if args.plan:
         print(json.dumps(plan,indent=2))
         return
+    if args.component and args.component not in plan['products']['wine']:
+        parser.error('--component must name an installable Wine producer')
     framework_sha=(args.framework_ref if re.fullmatch('[0-9a-f]{40}',args.framework_ref)
                    else api('repos/taowen/wine/commits/'+args.framework_ref)['sha'])
-    products=['wine','audio'] if args.product=='all' else [args.product]
+    products=([args.component] if args.component else
+              ['wine','audio'] if args.product=='all' else [args.product])
     state=args.output/'github-state'
     coordinator=Coordinator(plan,framework_sha,None,state)
     started=time.monotonic()
-    result=coordinator.run(products,args.parallel)
+    result=coordinator.run(products,args.parallel,args.output)
     graph_seconds=time.monotonic()-started
     transfers={}
     for name,reference in result.items():

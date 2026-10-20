@@ -14,7 +14,7 @@ import tarfile
 import tempfile
 
 from artifact_download import download
-from runtime_distribution import INDEX, RUNTIME_STAGES, resolve_index, runtime_url, sha
+from runtime_distribution import RUNTIME_STAGES, runtime_url, sha
 
 DIRECTORY = Path(__file__).resolve().parent
 PLAN = json.loads((DIRECTORY/'github-components.json').read_text())
@@ -65,14 +65,12 @@ def descriptor(value):
     return dict(url=value['browser_download_url'], sha256=checksum[7:], bytes=value['size'])
 
 
-def metadata(leaf, abi):
+def metadata(leaf):
     result = json.loads(json.dumps(leaf['runtime']))
     if 'wineSource' in result:
         source = result['wineSource']
         source['archiveURL'] = next(s['url'] for s in leaf['sources']
                                    if s['sha256'] == source['archiveSHA256'])
-    if abi:
-        result['compatibility'] = {'wine': abi}
     result['sources'] = leaf['sources']
     return result
 
@@ -88,91 +86,49 @@ def dispatch(stage, action, **fields):
     return repository, request
 
 
-def prepare(selection):
-    """Dispatch delivery packaging; retain only small verified metadata locally."""
-    selection = Path(selection)
-    catalog = json.loads(selection.read_text())
-    resolve_index(selection)
-    if catalog.get('format') != 2:
-        raise ValueError('Publication requires the independent producer product')
-    importlib.import_module('install-github-workflows').ensure_workflows(
-        {owner(item['name']) for item in catalog['manifests']})
-    receipt = json.loads((selection.parent/'download-receipt.json').read_text())
-    verify_file(selection, receipt['files'][selection.name])
-    paired = [m for m in catalog['manifests'] if m['name'].startswith('wine-pe-')
-              or m['name'] in ('wine-bionic', 'fex', 'steamworks')]
-    abi = hashlib.sha256(json.dumps([(m['name'], m['sha256']) for m in paired],
-                                   separators=(',', ':')).encode()).hexdigest()
-    directory = selection.parent/'public-release'
+def prepare(manifest):
+    """Prepare one producer's delivery archive without a version combination."""
+    manifest = Path(manifest)
+    receipt = json.loads((manifest.parent/'download-receipt.json').read_text())
+    verify_file(manifest, receipt['files'][manifest.name])
+    record = json.loads((manifest.parent/'github-component.json').read_text())
+    stage = record['stage']
+    item = record['runtimeManifest']
+    if item['name'] != stage or item['sha256'] != sha(manifest):
+        raise ValueError('Producer manifest differs from its verified receipt')
+    importlib.import_module('install-github-workflows').ensure_workflows({owner(stage)})
+    repository, request = dispatch(stage, 'candidate', manifest=item)
+    published = asset(repository, 'arlinux-'+stage+'-candidates', request['identity']+'.tar.gz')
+    data = descriptor(published or {})
+    directory = manifest.parent/'public-release'
     directory.mkdir(exist_ok=True)
-
-    def candidate(item):
-        leaf_path = selection.parent/item['file']
-        verify_file(leaf_path, item['sha256'], item['bytes'])
-        leaf = json.loads(leaf_path.read_text())
-        repository, request = dispatch(item['name'], 'candidate', manifest=item,
-                                        compatibility=abi if item in paired else None)
-        published = asset(repository, 'arlinux-'+item['name']+'-candidates', request['identity']+'.tar.gz')
-        if not published:
-            raise ValueError('Runner did not retain the candidate archive')
-        data = descriptor(published)
-        return dict(name=item['name'], file=item['name']+'-'+data['sha256']+'.tar.gz',
-                    asset=published['name'], **data, metadata=metadata(leaf, request['compatibility']))
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        packages = list(pool.map(candidate, catalog['manifests']))
-    runtime = {}
-    for item in packages:
-        for key, value in item['metadata'].items():
-            if key in ('files', 'originalSources', 'compatibility'):
-                target = runtime.setdefault(key, {})
-                for name, content in value.items():
-                    if name in target and (key == 'files' or target[name] != content):
-                        raise ValueError('Conflicting producer metadata: '+name)
-                    target[name] = content
-            elif key == 'sources':
-                continue
-            elif key in runtime and runtime[key] != value:
-                raise ValueError('Conflicting runtime metadata: '+key)
-            else:
-                runtime[key] = value
-    target = directory/INDEX
-    target.write_text(json.dumps(dict(format=1, kind='arlinux-bionic-components', embeddedMetadata=True,
-        runtime=runtime, components=[{k: v for k, v in p.items() if k != 'metadata'} for p in packages]),
-        sort_keys=True, indent=2)+'\n', encoding='utf-8', newline='\n')
-    record = selection.parent/'github-component.json'
-    shutil.copyfile(record, directory/record.name)
-    receipt['files'] = {INDEX: sha(target), record.name: sha(directory/record.name)}
-    receipt['publicationInput'] = sha(selection)
-    receipt['remoteFiles'] = [{k: p[k] for k in ('file', 'sha256', 'bytes', 'url', 'asset')} for p in packages]
-    (directory/'download-receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
-    print('Prepared publication candidate:', target, flush=True)
-    print('Publication candidate SHA-256:', sha(target), flush=True)
+    candidate = dict(name=stage, file=stage+'-'+data['sha256']+'.tar.gz',
+                     asset=published['name'], **data)
+    target = directory/'candidate.json'
+    target.write_text(json.dumps(candidate, sort_keys=True, indent=2)+'\n')
+    component = directory/'github-component.json'
+    shutil.copyfile(manifest.parent/component.name, component)
+    publication = dict(publicationInput=sha(manifest), reference=receipt['reference'],
+                       files={target.name:sha(target), component.name:sha(component)})
+    (directory/'download-receipt.json').write_text(json.dumps(publication, indent=2)+'\n')
+    print('Prepared component candidate:', target, flush=True)
     return target
 
 
-def promote(selection):
-    directory = Path(selection).parent/'public-release'
+def promote(manifest):
+    directory = Path(manifest).parent/'public-release'
     receipt = json.loads((directory/'download-receipt.json').read_text())
-    if receipt['publicationInput'] != sha(selection):
+    if receipt['publicationInput'] != sha(manifest):
         raise ValueError('Publication input changed; prepare and test again')
-    for name, checksum in receipt['files'].items():
-        verify_file(directory/name, checksum)
-    product = json.loads((directory/INDEX).read_text())
-    remote = {p['file']: p for p in receipt['remoteFiles']}
-
-    def publish(item):
-        if remote.get(item['file']) != {k: item[k] for k in ('file', 'sha256', 'bytes', 'url', 'asset')}:
-            raise ValueError('Candidate differs from its prepared receipt')
-        dispatch(item['name'], 'promote', candidate=item)
-        published = asset(owner(item['name']), 'arlinux-'+item['name']+'-latest', 'runtime.tar.gz')
-        data = descriptor(published or {})
-        if data['sha256'] != item['sha256'] or data['bytes'] != item['bytes']:
-            raise RuntimeError('Published component differs: '+item['name'])
-        print('Published fixed release:', item['name'], item['sha256'], flush=True)
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(publish, product['components']))
+    candidate = directory/'candidate.json'
+    verify_file(candidate, receipt['files'][candidate.name])
+    item = json.loads(candidate.read_text())
+    dispatch(item['name'], 'promote', candidate=item)
+    published = asset(owner(item['name']), 'arlinux-'+item['name']+'-latest', 'runtime.tar.gz')
+    data = descriptor(published or {})
+    if (data['sha256'], data['bytes']) != (item['sha256'], item['bytes']):
+        raise RuntimeError('Published component differs: '+item['name'])
+    print('Published component:', item['name'], item['sha256'], flush=True)
 
 
 def upload(path, repository, tag, name, immutable=False):
@@ -235,7 +191,7 @@ def runner():
         leaf_path = download(item['url'], work/'manifest.json', item['sha256'])
         verify_file(leaf_path, item['sha256'], item['bytes'])
         leaf = json.loads(leaf_path.read_text())
-        meta = metadata(leaf, request['compatibility'])
+        meta = metadata(leaf)
         if meta.get('protocol') != 1 or meta.get('libc') != 'bionic':
             raise ValueError('Expected a Bionic runtime producer')
         # Source provenance is checked here, never transported via Windows.

@@ -10,51 +10,27 @@ The workstation entry is the Android repository's `build.ps1`; follow its
 and the independent component runners. Do not create another workstation builder,
 use WSL, assemble an old runtime archive, or bypass the pinned graph stages.
 
-## Independent runtime manifests
+## Independent runtime producers
 
-This section describes internal compiler products and candidate provenance,
-not the public update protocol. User downloads use the fixed component releases
-documented under [Publishing fixed component releases](#publishing-fixed-component-releases).
+Each producer owns its compiler workflow, runtime manifest, archives and release.
+There is no `wine-product` stage, total runtime manifest, version combination
+selection or product-wide compatibility hash. `build/github-components.json` is
+the sole compiler dependency graph; it is not an installed version lock.
 
-`build/github-components.json` is the single component graph. Compiler jobs use
-independent `workflow_dispatch` runs in their owning repositories, retaining each
-repository's standard cache allowance. Runtime files are published beside the
-producer that compiled them; there is no final combined runtime archive.
+The producers are `wine-bionic`, `wine-pe-aarch64`, `wine-pe-x86_64`,
+`wine-pe-i386`, `fex`, `dxvk`, `windows-fonts`, `wine-addons`, `steamworks`,
+`windows-accessibility` and `windows-tray`. Their independently hashed compiler
+receipts and source archives remain reproducible. Compiler dependencies are
+built only when required by the requested producer; building `wine-bionic`
+does not wait for Steamworks or the x86 PE producers.
 
-| Producer | Installable content |
-|---|---|
-| `wine-bionic` | Native Wine, its library closure, and paired HID/shell PE frontends |
-| `wine-pe-aarch64` | ARM64/ARM64EC modules and common Wine data |
-| `wine-pe-x86_64`, `wine-pe-i386` | Each architecture's Windows modules |
-| `fex` | Windows CPU modules and translator policy |
-| `dxvk` | DXVK modules for each architecture |
-| `windows-fonts` | Immutable Windows font inputs |
-| `wine-addons` | Pinned Mono/Gecko vendor archives, prepared on Windows |
-| `steamworks` | Steam RPC bridge and Windows frontends |
-| `windows-accessibility` | Accessibility observer |
-| `windows-tray` | Windows task owner |
-
-Each producer publishes its own `arlinux-PRODUCER.json`, checksum-addressed
-archives and source records. Its completion record contains `runtimeManifest`.
-SDK consumers can additionally use a verified internal compiler capsule; these
-capsules are never end-user runtime downloads. The `wine-pe` merge is an internal
-Steamworks SDK input. The former `wine-pe-package` and `runtime-support` runtime
-assembly stages and their packaging implementation have been removed.
-
-The local `wine-product` stage writes only `arlinux-wine-manifests.json`: a
-format-2 selection of immutable producer-manifest URLs, SHA-256 values and sizes.
-It never downloads or unpacks compiler capsules, recompresses runtime components,
-or merges executable directories. The launcher independently downloads and caches
-the selected format-1 producer manifests and their archives. It rejects conflicting
-file ownership, unsafe archive paths and checksum mismatches before selecting
-the installed runtime. Steam and Windows applications use the same runtime
-selection and instance-owned Wine prefix.
-
-Native packaging imports only its direct declared artifacts: compiled native
-outputs and the Bionic/TLS/audio/graphics/Vulkan prefixes. It does not restore PE,
-FEX/DXVK Windows modules, fonts, Mono/Gecko or their transitive compiler trees.
-The native HID and Explorer frontends retain private ABI ownership with the
-backend; general PE producers exclude these files to avoid overlapping installs.
+The phone caches each producer's extracted files independently. Updating one
+producer downloads and extracts only its changed archives. Immutable launch
+views hard-link already installed files; running processes keep their old view.
+The view's `bionic-runtime.json` contains merged runtime configuration and file
+ownership, not a producer-version vector or a requirement to rebuild the other
+producers. Steam and Windows launcher apps share these files and the instance's
+single Wine prefix. Conflicting file ownership and unsafe archives still fail.
 
 ## Cache and provenance
 
@@ -114,153 +90,76 @@ compatibility. Those regressions and public latest promotion remain pending.
 
 ## Development validation
 
-From the Android checkout, select a pushed full Wine commit using `build.ps1 wine`.
-For deployment pass the explicit device serial and freshly installed instance.
-The entry transfers only verified selection/producer metadata and binds the
-selection SHA-256 to that stopped Debug instance. The normal first-use installer
-downloads archives directly from GitHub into the instance-external immutable
-cache, verifies SHA-256 and reuses matching cached bytes. Runtime payloads do not
-travel through Windows or ADB. No latest publication or
-APK rebuild is needed for subsequent Wine-only changes.
+Use the Android checkout's sole entry. A Wine invocation defaults to the native
+`wine-bionic` producer. Select any other producer explicitly:
 
-Changing the download protocol requires a consumer APK built through the same
-entry. Reinstall the test Linux instance before acceptance; use the documented
-authentication-only Steam backup exception, never an old prefix or home restore.
-Follow the Android diagnostic guide for process maps, matching ELF hashes,
-exception stacks, accessibility observations and screenshots. Finish installation,
-interaction, close, relaunch and task cleanup before declaring compatibility.
-Compilation or a rendered first frame alone is not acceptance.
+```powershell
+.\build.ps1 wine -WineRef FULL_PUSHED_COMMIT -WineComponent wine-bionic
+.\build.ps1 wine -WineRef FULL_PUSHED_COMMIT -WineComponent wine-pe-aarch64
+```
 
-The current foreign GDI candidate adapts Erhan Bilgili's
-[Wine-Wineland transport](https://github.com/nanomatters/wine-wineland/commit/908f7702fbf6e6edb761daa47476d283e52b60f1)
-in ordinary fork sources. It delivers shared-memory GDI surfaces across a child
-and top-level owned by different processes, retains slots until compositor
-release and updates geometry/visibility. It leaves Vulkan WSI and default GPU/
-DirectComposition enabled. Power BI import/chart/save/reopen and Steam/game
-regression are pending. Do not promote it based on successful builds.
+The command prints the exact producer directory. Each directory contains its
+own `arlinux-PRODUCER.json`, `github-component.json` and verified download receipt.
+It never generates an aggregate runtime selection.
+
+Before acceptance, replace the tested instance through the Android guide's
+canonical rootfs deploy/import flow. Debug APKs do not embed rootfs. Confirm the
+device serial, package and explicit instance ID; preserve only Steam test
+credentials using the documented exception. Never restore old homes, installed
+applications or Wine prefixes. Keep the instance-external verified download cache.
+
+With that fresh instance and desktop stopped, deploy the one changed producer:
+
+```powershell
+.\build.ps1 wine -WineRef FULL_PUSHED_COMMIT -WineComponent wine-bionic -Serial SERIAL -Instance yibu-FRESH_INSTANCE
+```
+
+Only the small verified producer manifest crosses ADB. Its override is stored at
+`instances/INSTANCE/home/.config/arlinux/wine-components/PRODUCER.json`.
+The phone downloads archives directly through the usual routing/cache/checksum
+path. Other producers keep their own independent public releases. Missing
+candidate metadata fails rather than silently falling back. Subsequent Wine-only
+changes require no APK rebuild or latest publication. A protocol change requires
+a new APK and fresh distribution through the same canonical entry.
+
+Complete install, interaction, close, reopen and task stop on the device. Retain
+APK/source hashes, per-producer receipts, process maps, screenshots and logs in
+private validation evidence. Debug receiver maintenance and authentication
+commands are maintained only in the [Android diagnostic guide](https://github.com/taowen/arlinux/blob/main/tools/diagnostics/README.md#debug-yibu-instance-maintenance).
+Release builds expose no candidate receiver. Do not treat compilation as device
+acceptance. Preserve the tray as an independent window selected in Yibu's bar.
 
 ## Publishing fixed component releases
 
-Public runtime distribution uses one fixed release tag per producer, in that
-producer's repository: `arlinux-PRODUCER-latest`, containing `runtime.tar.gz`.
-Create a tag only on its first publication; subsequent updates replace the asset
-in place. Neither a public total-selection JSON nor public producer JSON files
-are needed. GitHub's release API supplies the current asset SHA-256, size and ID.
-Each archive carries its own `bionic-runtime.json` with file/source provenance.
-The consumer's endpoint list is `windows-downloads.tsv`, not a set of hash pins.
+Every producer publishes `runtime.tar.gz` in its own fixed
+`arlinux-PRODUCER-latest` release. GitHub supplies its SHA-256, size and URL.
+There is no public or internal total-version JSON and no pairing token.
+The rootfs owns only stable endpoint names in `windows-downloads.tsv`, never a
+Wine build dependency or a version combination.
 
-Private Wine/PE/FEX/Steamworks interfaces carry a matching compatibility identity.
-Data-only fonts/addons and Vulkan clients are independently updateable. A
-consumer snapshots release assets, verifies downloads and embedded metadata,
-rejects incompatible component snapshots/duplicate ownership and installs into
-a new immutable runtime directory before changing its current pointer.
-An update-in-progress may fail and be retried; it must never select a partial mix.
-
-The internal build graph still publishes content-addressed compiler objects and
-producer receipts for reproducibility and cached SDK consumers. Those are build
-records, not the public update protocol. Do not replace compiler-cache identities
-with mutable latest tags. The old monolithic `latest` assets remain untouched.
-
-Run from the Windows Android checkout using its sole `build.ps1` entry. Retain
-the exact verified product directory from `build.ps1 wine`; this contains the
-declared producer outputs, not an installed instance or an old runtime export.
-Pin the publisher revision as well as the compiler product. The publisher
-preflight verifies the pinned metadata and dispatches the release-only job in each
-producer's owning repository. Those standard x64 runners verify runtime/source
-hashes and package deterministic delivery archives. They never run compiler setup,
-restore compiler caches or compile Wine. The workstation retains only candidate
-metadata/receipts in the product's `public-release/` directory.
-
-Each producer has a fixed `arlinux-PRODUCER-candidates` Release. Candidate assets
-are keyed by the pinned inputs, compatibility identity and packaging recipe;
-existing assets are immutable and reusable. The canonical workflow wrapper is
-installed/updated through the publisher before dispatch. Every owner uses its
-own `github.token`; no personal access token is copied to a runner or phone.
+Prepare a delivery candidate from one exact verified producer manifest:
 
 ```powershell
 $wineRef = 'FULL_PUBLISHER_COMMIT'
-$wineSelection = 'EXACT_VERIFIED_PRODUCT_DIRECTORY/arlinux-wine-manifests.json'
-.\build.ps1 publish-wine -WineRef $wineRef -Archive $wineSelection -Check -Serial SERIAL -Instance yibu-FRESH_INSTANCE
+$manifest = 'EXACT_PRODUCER_DIRECTORY/arlinux-wine-bionic.json'
+.\build.ps1 publish-wine -WineRef $wineRef -Archive $manifest -Check -Serial SERIAL -Instance yibu-FRESH_INSTANCE
 ```
 
-Here `-Archive` identifies the internal build selection, not a public download.
-With a stopped fresh Debug instance, `-Check -Serial -Instance` transfers only
-the small internal candidate receipt and binds its SHA-256 to that instance.
-The phone's ordinary first-use installer downloads the immutable candidate
-assets directly, with the same cache, GitHub route policy and SHA-256 validation
-as normal downloads. Without device arguments the command only prepares/verifies
-publication candidates on runners. It does not update public latest. Complete the real install/input/close/
-relaunch/task-stop journey before promotion; compilation alone is not acceptance.
-Keep the publication candidate digest, source product, consumer APK and evidence.
+This dispatches only that producer's release job. The runner verifies declared
+runtime/source hashes and retains a deterministic immutable candidate archive;
+it does not compile Wine or restore compiler caches. Windows handles only the
+small `public-release/candidate.json` descriptor and receipts. The phone tests
+the candidate archive directly. Finish the fresh-instance journey before promotion.
 
 ```powershell
-.\build.ps1 publish-wine -WineRef $wineRef -Archive $wineSelection
+.\build.ps1 publish-wine -WineRef $wineRef -Archive $manifest
 ```
 
-Promotion verifies the tested candidate receipt against the input selection and
-dispatches only the owner repository's release job. Each runner downloads the
-exact tested candidate by SHA-256 and replaces only changed `runtime.tar.gz`
-assets in its fixed public Release. It never repackages or rebuilds during
-promotion. Windows sends only workflow requests and reads completion/digests;
-it never downloads/uploads candidate runtime payloads. Compiler success alone
-does not trigger promotion: explicit device acceptance remains the release gate.
-No release is created for an unchanged or subsequent version of a producer.
-Source references use the already published checksum-addressed source objects.
-
-After promotion, compare every public asset digest/size with the prepared
-product, then use a new instance with no candidate override. Normal launch must
-resolve GitHub releases and select the same component archive hashes, using verified
-shared downloads where available. Do not write latest cache state manually or
-restore an old prefix. Retain actual process maps and finish the application/
-game journey again. Existing successful lookups expire after one hour; a fresh
-instance verifies publication without that previous-instance cache.
-The local selection receipt hash can differ between candidate and public paths
-because their URLs differ; compare the component hashes and embedded metadata,
-not only that receipt filename.
-An interrupted upload or incompatible snapshot is not permission to use the
-frozen legacy bundle. A consumer APK/distribution update is required for this
-new protocol; an APK upgrade alone does not replace an existing rootfs's scripts.
-
-Runner packaging verification on 2026-10-20 used producer inputs from Wine
-integration `6ae74513401427716cc81b83dc70797b48ee8879`. Hashing each tar member
-while copying it removed gzip rewinds: the i386 release job changed from 315
-seconds (run `39382419742`) to 24 seconds (run `39383104749`). Both produced
-the identical 77,981,623-byte archive SHA-256
-`158696aac158668a5188786fda7171f3f26c67e1271dad9ffa9c92ce18bc2ba6`.
-These are candidate packaging/job timings, not compiler or whole-graph timings.
-
-The runner-only publication was exercised for all 11 producers using publisher
-`5e034d293e16d8c7d7df68ca7d759269f1e40b40`. Candidate and public assets matched
-the previously tested archives exactly (569,209,277 bytes total). For example,
-promotion run `39383641288` executed only the release job; no compiler work,
-workstation runtime download/upload or repackaging occurred. All public digests
-were checked again after completion.
-
-X300 USB `10AFA31610002QH`, fresh instance `yibu-8fcc27f5`, used APK SHA-256
-`439f599b55f305482af378ccaa2796ab758c6e56463e7c028f00c4923f3a840b`.
-ADB transferred only the 788,510-byte candidate selection with SHA-256
-`b90455f0f090f8ff12a69933c22e8c4e2d37f576834d97ad71c4fab9fc7e7a48`.
-Before first use, no prefix/runtime existed for this selection; 10 archives were
-already cached and the 208,690-byte tray archive had deliberately been evicted.
-Normal Steam startup downloaded that missing archive directly on the phone;
-all 11 cache hashes and 5,391 installed file hashes then passed. Only private
-Steam authentication was restored, not an installed home or prefix.
-
-The desktop-mode Steam launcher reached the signed-in library. An actual Play
-click launched Lost Castle PID 624 through native Wayland and DXVK/Mali at
-2358x1216. The screen controller selected a new save, confirmed Start and advanced
-visible Chinese dialogue; normal window close removed the game. Relaunch was
-not accepted: Steam warned that the same account was playing My Little Shark
-on another computer. The attempt was cancelled without disconnecting that game;
-Steam was exited normally and authentication backed up privately. Cloud sync
-also warned and was not accepted. This is download/install and scoped first-run
-acceptance, not complete Steam/Big Picture, relaunch or task-stop acceptance.
-Evidence remains in the Android checkout's ignored
-`build/validation-20261020/runner-candidate-evidence` and adjacent screenshots.
-An earlier public-path instance `yibu-9c134919` resolved all 11 fixed releases and
-passed file-hash validation, but its Big Picture screen remained black. That
-observation is retained under `releases-public-evidence/black-ui`; it is not a
-successful Big Picture regression or a diagnosed cause.
+Promotion copies the exact tested archive to that producer's fixed release
+without rebuilding or repackaging. Other producers are untouched. Compare the
+published SHA-256 with the tested archive, then use a fresh instance without
+candidate overrides to verify the ordinary public download path. Publishing one
+component never waits for unrelated component publications.
 
 ## Optional diagnostics
 
