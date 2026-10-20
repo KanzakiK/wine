@@ -36,14 +36,11 @@ def render_workflow(plan,template):
     return template.encode()
 
 
-def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--check',action='store_true')
-    args=parser.parse_args()
+def ensure_workflows(repositories=None, check=False):
     directory=Path(__file__).resolve().parent
     plan=json.loads((directory/'github-components.json').read_text())
     workflow=render_workflow(plan,(directory/'github-component.workflow.yml').read_text())
-    for repository in sorted({s['repository'] for s in plan['stages'].values()}):
+    for repository in sorted(repositories or {s['repository'] for s in plan['stages'].values()}):
         metadata=api('repos/'+repository)
         if metadata['private']:
             raise ValueError('Free standard runner builds require a public component repository')
@@ -52,13 +49,20 @@ def main():
         if current and base64.b64decode(current['content'])==workflow:
             print('OK workflow '+repository,flush=True)
             continue
-        if args.check:
+        if check:
             raise ValueError('Missing or stale standalone component workflow: '+repository)
         payload=dict(message='ci: enable standalone ARLinux component builds [skip ci]',
                      content=base64.b64encode(workflow).decode(),branch=metadata['default_branch'])
         if current:payload['sha']=current['sha']
         result=api(path,payload)
         print('Installed '+repository+' '+result['commit']['sha'],flush=True)
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check',action='store_true')
+    args=parser.parse_args()
+    ensure_workflows(check=args.check)
 
 
 if __name__=='__main__':main()

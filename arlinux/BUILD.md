@@ -116,9 +116,11 @@ compatibility. Those regressions and public latest promotion remain pending.
 
 From the Android checkout, select a pushed full Wine commit using `build.ps1 wine`.
 For deployment pass the explicit device serial and freshly installed instance.
-The entry transfers verified independent manifests and archives into the existing
-immutable download cache, then binds the selection SHA-256 to that stopped Debug
-instance. The normal first-use installer consumes it. No latest publication or
+The entry transfers only verified selection/producer metadata and binds the
+selection SHA-256 to that stopped Debug instance. The normal first-use installer
+downloads archives directly from GitHub into the instance-external immutable
+cache, verifies SHA-256 and reuses matching cached bytes. Runtime payloads do not
+travel through Windows or ADB. No latest publication or
 APK rebuild is needed for subsequent Wine-only changes.
 
 Changing the download protocol requires a consumer APK built through the same
@@ -163,9 +165,17 @@ Run from the Windows Android checkout using its sole `build.ps1` entry. Retain
 the exact verified product directory from `build.ps1 wine`; this contains the
 declared producer outputs, not an installed instance or an old runtime export.
 Pin the publisher revision as well as the compiler product. The publisher
-preflight verifies runtime/source hashes and creates deterministic per-producer
-delivery archives in the product's `public-release/` directory. It does not
-compile Wine or download compiler SDK capsules.
+preflight verifies the pinned metadata and dispatches the release-only job in each
+producer's owning repository. Those standard x64 runners verify runtime/source
+hashes and package deterministic delivery archives. They never run compiler setup,
+restore compiler caches or compile Wine. The workstation retains only candidate
+metadata/receipts in the product's `public-release/` directory.
+
+Each producer has a fixed `arlinux-PRODUCER-candidates` Release. Candidate assets
+are keyed by the pinned inputs, compatibility identity and packaging recipe;
+existing assets are immutable and reusable. The canonical workflow wrapper is
+installed/updated through the publisher before dispatch. Every owner uses its
+own `github.token`; no personal access token is copied to a runner or phone.
 
 ```powershell
 $wineRef = 'FULL_PUBLISHER_COMMIT'
@@ -174,10 +184,12 @@ $wineSelection = 'EXACT_VERIFIED_PRODUCT_DIRECTORY/arlinux-wine-manifests.json'
 ```
 
 Here `-Archive` identifies the internal build selection, not a public download.
-With a stopped fresh Debug instance, `-Check -Serial -Instance` transfers the
-prepared immutable delivery archives through the existing cache tool and binds
-the internal candidate receipt to that instance. Without device arguments it
-only prepares/verifies publication. Complete the real install/input/close/
+With a stopped fresh Debug instance, `-Check -Serial -Instance` transfers only
+the small internal candidate receipt and binds its SHA-256 to that instance.
+The phone's ordinary first-use installer downloads the immutable candidate
+assets directly, with the same cache, GitHub route policy and SHA-256 validation
+as normal downloads. Without device arguments the command only prepares/verifies
+publication candidates on runners. It does not update public latest. Complete the real install/input/close/
 relaunch/task-stop journey before promotion; compilation alone is not acceptance.
 Keep the publication candidate digest, source product, consumer APK and evidence.
 
@@ -185,9 +197,13 @@ Keep the publication candidate digest, source product, consumer APK and evidence
 .\build.ps1 publish-wine -WineRef $wineRef -Archive $wineSelection
 ```
 
-Promotion consumes the already prepared and tested `public-release/` files,
-checks their receipt against the input selection and replaces only changed
-`runtime.tar.gz` assets. It never repackages or rebuilds during promotion.
+Promotion verifies the tested candidate receipt against the input selection and
+dispatches only the owner repository's release job. Each runner downloads the
+exact tested candidate by SHA-256 and replaces only changed `runtime.tar.gz`
+assets in its fixed public Release. It never repackages or rebuilds during
+promotion. Windows sends only workflow requests and reads completion/digests;
+it never downloads/uploads candidate runtime payloads. Compiler success alone
+does not trigger promotion: explicit device acceptance remains the release gate.
 No release is created for an unchanged or subsequent version of a producer.
 Source references use the already published checksum-addressed source objects.
 

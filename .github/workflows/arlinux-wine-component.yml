@@ -14,6 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   component:
+    if: ${{ fromJSON(inputs.request).operation != 'release' }}
     runs-on: ${{ contains(fromJSON('[]'), fromJSON(inputs.request).stage) && 'ubuntu-24.04-arm' || contains(fromJSON('["wine-addons","windows-fonts"]'), fromJSON(inputs.request).stage) && 'windows-latest' || 'ubuntu-24.04' }}
     timeout-minutes: 350
     env:
@@ -72,3 +73,23 @@ jobs:
         run: |
           script="$ARLINUX_FRAMEWORK/arlinux/build/compact-cache.py"
           if [ -f "$script" ]; then python "$script"; fi
+  release:
+    if: ${{ fromJSON(inputs.request).operation == 'release' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    concurrency:
+      group: arlinux-release-${{ fromJSON(inputs.request).stage }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ARLINUX_COMPONENT_REQUEST: ${{ inputs.request }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: taowen/wine
+          ref: ${{ fromJSON(inputs.request).framework }}
+          path: framework
+          persist-credentials: false
+      - name: Prepare candidate or promote exact tested bytes
+        run: python framework/arlinux/build/public_releases.py

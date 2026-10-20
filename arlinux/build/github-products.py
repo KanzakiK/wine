@@ -39,6 +39,36 @@ def api(path, optional=False):
     return json.loads(value) if value else None
 
 
+def dispatch_release(repository, request, workflow, poll=15):
+    """Run only the owning repository's publication job, not its compiler graph."""
+    title = 'arlinux/'+request['stage']+'/'+request['identity']
+    def runs():
+        return json.loads(gh('run', 'list', '--repo', repository, '--workflow', workflow,
+                             '--limit', '100', '--json', 'databaseId,displayTitle,status,conclusion,url'))
+    previous = runs()
+    active = next((r for r in previous if r['displayTitle'] == title and r['status'] != 'completed'), None)
+    ignored = {r['databaseId'] for r in previous if r['status'] == 'completed'}
+    if not active:
+        gh('workflow', 'run', workflow, '--repo', repository,
+           '-f', 'request='+json.dumps(request, sort_keys=True))
+        print('START publication '+repository+'/'+request['stage'], flush=True)
+    deadline, last = time.monotonic()+50*60, None
+    while time.monotonic() < deadline:
+        matches = [r for r in runs() if r['displayTitle'] == title and r['databaseId'] not in ignored]
+        run = matches[0] if matches else None
+        if run:
+            state = run['status']+'/'+str(run['conclusion'])
+            if state != last:
+                print(request['action']+' '+request['stage']+': '+state+' '+run['url'], flush=True)
+                last = state
+            if run['status'] == 'completed':
+                if run['conclusion'] != 'success':
+                    raise RuntimeError('Publication failed: '+run['url'])
+                return run['url']
+        time.sleep(poll)
+    raise TimeoutError('Publication workflow timed out: '+title)
+
+
 @contextmanager
 def request_lock(path, stopped):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -295,8 +325,6 @@ def fetch_product(reference, output):
         raise ValueError('Invalid product component identity')
     directory = output.parent/'github-state/downloads'/identity
     with request_lock(directory/'transfer.lock', Event()):
-        if reuse_product(output, reference):
-            return
         cache_receipt=output/'download-receipt.json'
         import zstandard
         manifest=directory/'component.json'
@@ -304,6 +332,8 @@ def fetch_product(reference, output):
         record=json.loads(manifest.read_text())
         if record['identity']!=reference['identity']:
             raise ValueError('Product identity mismatch')
+        if record['stage'] != 'wine-product' and reuse_product(output, reference):
+            return
         if record.get('artifacts'):
             # Device testing needs only the runtime. Source archives are fetched
             # by the publisher on demand, using the same verified component record.
@@ -326,15 +356,14 @@ def fetch_product(reference, output):
                 raise ValueError('Duplicate product artifact name')
             with ThreadPoolExecutor(max_workers=4) as pool:
                 files.update(pool.map(fetch_artifact, artifacts))
-            from runtime_distribution import INDEX, read_index, resolve_index
+            from runtime_distribution import INDEX, resolve_index
             def fetch_manifest(item):
                 name, checksum = fetch_artifact(dict(item, name=item['file']))
                 files[name] = checksum
                 return output/name
-            resolved = resolve_index(output/INDEX, fetch=fetch_manifest)
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                files.update(pool.map(fetch_artifact, [dict(item, name=item['file']) for item in resolved['components']]))
-            read_index(output/INDEX)
+            # Transfer only pinned metadata to the workstation. The product's
+            # ordinary installer downloads runtime bytes directly on the phone.
+            resolve_index(output/INDEX, fetch=fetch_manifest)
             (output/'github-component.json').write_text(json.dumps(record, indent=2)+'\n')
             files['github-component.json'] = sha256_file(output/'github-component.json')
             cache_receipt.write_text(json.dumps(dict(format=1, reference=reference, files=files), indent=2)+'\n')
