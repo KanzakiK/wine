@@ -731,9 +731,24 @@ This is the recommended branch. What it changes, by subsystem:
   the token on first use and a real voice wins, or reports "No voice installed on the
   system" when there is none. `ISpObjectTokenCategory::GetDefaultTokenId()` reads
   `DefaultTokenId` under HKCU and HKLM before `DefaultDefaultTokenId`, and
-  `ISpDataKey::EnumValues()` is implemented (upstream MR 9733). vatSys 1.4.20's ATIS
-  plugin (System.Speech into a 48 kHz stream) synthesises with the MS Speech SDK 5.1
-  voices; a native voice remains necessary for audio
+  `ISpDataKey::EnumValues()` is implemented (upstream MR 9733). A native voice remains
+  necessary for audio, and the MS Speech SDK 5.1 voices did not speak with this alone:
+  their engine (`spttseng.dll`) takes its pronunciations from lexicon classes of
+  Microsoft's `sapi.dll` (`SpLexicon` with its user lexicon, `SpCompressedLexicon`) and a
+  `SpPhoneConverter`, none of which Wine's sapi has. Creating the engine failed, through
+  `ISpVoice` with `REGDB_E_CLASSNOTREG`, while System.Speech went on with the half
+  initialised engine and rendered every word as the same 0.52 s of samples. Those classes
+  read the SDK's undocumented `.lxa` files and stay native, registered to a renamed copy
+  of the SDK's `sapi.dll` (Wine substitutes its builtin for a file named `sapi.dll`); they
+  need three object token methods that were stubs or missing, now implemented after
+  Microsoft's 5.1 `sapi.dll` (69 probe results identical): `ISpObjectTokenInit::
+  InitFromDataKey()`, `ISpObjectToken::MatchesAttributes()` (attribute values compared
+  case-insensitively, in token enumeration too) and `GetStorageFileName()` (path kept
+  under `<token>\<caller CLSID>\Files`, a new file created empty and reported with
+  `S_FALSE`). `ISpVoice` output is then byte-identical to that of Microsoft's complete
+  5.1 `sapi.dll`, and vatSys 1.4.20's ATIS pattern (System.Speech into a 48 kHz stream)
+  speaks, as do `SelectVoice()` and `<phoneme>` prompts. System.Speech itself needs SAPI
+  5.3 interfaces and does not start with the 5.1 `sapi.dll` as a whole
 - **msvcp**: the stream classes' move constructors and move assignment were exported as
   stubs, so a C++ application calling one aborted with "Call to unimplemented function" —
   Ableton Live's indexer did, on startup in a fresh prefix, so Live restarted it in a loop
