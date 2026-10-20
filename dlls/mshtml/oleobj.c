@@ -525,6 +525,12 @@ static HRESULT WINAPI DocObjOleObject_SetClientSite(IOleObject *iface, IOleClien
         }
     }
 
+    /* Legacy hosts use screen pixels, rather than Gecko's DPI-scaled CSS
+     * pixels. Establish their 100% baseline before loading any saved zoom;
+     * hosts opting into 96-DPI layout keep Gecko's display-scaled default. */
+    if(!hostui_setup && !(This->hostinfo.dwFlags & DOCHOSTUIFLAG_DPI_AWARE))
+        set_viewer_zoom(This->nscontainer, 1.0f);
+
     load_settings(This);
 
     /* Native calls here GetWindow. What is it for?
