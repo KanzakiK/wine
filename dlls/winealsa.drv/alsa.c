@@ -1567,8 +1567,26 @@ static NTSTATUS alsa_start(void *args)
     }else{
         snd_pcm_sframes_t avail, written;
         snd_pcm_uframes_t offs;
+        int err;
 
         avail = snd_pcm_avail_update(stream->pcm_handle);
+
+        /* The device runs dry while the stream is stopped, and the timer
+         * recovers from that only on its next period. A negative avail must
+         * not reach alsa_write_buffer_wrap() as a frame count. */
+        if(avail < 0 || snd_pcm_state(stream->pcm_handle) == SND_PCM_STATE_XRUN){
+            TRACE("XRun state or error %ld, recovering\n", avail);
+
+            if((err = snd_pcm_recover(stream->pcm_handle, avail < 0 ? avail : -EPIPE, 1)) < 0)
+                WARN("snd_pcm_recover failed: %d (%s)\n", err, snd_strerror(err));
+
+            avail = snd_pcm_avail_update(stream->pcm_handle);
+            if(avail < 0){
+                WARN("snd_pcm_avail_update failed: %ld (%s)\n", avail, snd_strerror(avail));
+                avail = 0;
+            }
+        }
+
         avail = min(avail, stream->held_frames);
 
         if(stream->wri_offs_frames < stream->held_frames)
