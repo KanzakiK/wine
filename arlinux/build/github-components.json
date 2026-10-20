@@ -134,6 +134,7 @@
       "compilerCacheMiB": 256
     },
     "wine-product": {
+      "execution": "local",
       "artifactInputsOnly": true,
       "repository": "taowen/wine",
       "runner": "ubuntu-24.04",

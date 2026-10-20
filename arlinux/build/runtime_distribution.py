@@ -27,10 +27,10 @@ def finish(final, output, records):
     print('Independent Wine runtime ready: '+str(target), flush=True)
 
 
-def publish_distribution(data, record, final):
+def publish_distribution(data, record, final, repository=None):
     """The completion marker follows every immutable object upload."""
     index = read_index(final/INDEX)
-    repository = os.environ['GITHUB_REPOSITORY']
+    repository = repository or os.environ['GITHUB_REPOSITORY']
     tag = 'arlinux-wine-product-'+data['identity'][:24]
     def run(*args):
         subprocess.run(list(map(str, args)), check=True)

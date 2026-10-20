@@ -52,8 +52,17 @@ the complete user journey on fresh device instances. Do not gate ARM64 PE on
 mock implementations of other graph stages.
 
 `arlinux/build/github-components.json` is the single Wine component graph.
-Each component uses an independent workflow_dispatch in its owning repository;
+Compiler components use independent workflow_dispatch in their owning repository;
 compiler/download caches belong to that repository's standard free runners.
+The final `wine-product` stage executes in the Windows coordinator. It consumes
+checksum-bound runner capsules, merges tar members without materializing Linux
+symlinks or permissions on NTFS, and writes deterministic component archives.
+The request identity, input archives and output hashes govern assembly reuse.
+It publishes immutable build objects and a completion record, never `latest`;
+the workstation seeds its normal object cache with the assembled bytes rather
+than downloading them again. Runtime acceptance and explicit latest promotion
+remain separate. Intermediate packaging that still needs Linux compiler tools
+continues on its owning runner.
 Component requests hash the declared source trees, recipes, toolchain locks and
 dependency identities; the producing commit remains provenance, not a blanket
 invalidation key. Unrelated integration documentation or FEX changes do not

@@ -32,8 +32,7 @@ SOURCES = {
                          'arlinux/components/windows-integration'),
     'runtime-support': ('arlinux/components/steamworks', 'arlinux/components/windows-integration',
                         'arlinux/build/runtime_assembly.py'),
-    'wine-product': ('arlinux/package-wine-bionic.py', 'arlinux/build/runtime_assembly.py',
-                     'arlinux/build/runtime_distribution.py'),
+    'wine-product': ('arlinux/build/local_product.py', 'arlinux/build/runtime_distribution.py'),
     'wine-capture': ('arlinux/components/gfxreconstruct', 'arlinux/vulkan-capture.py'),
     'windows-fonts': ('arlinux/wine_fonts.py',),
 }
@@ -49,7 +48,6 @@ ASSEMBLY_CODE = {
     'wine-pe-package': ('package_pe',),
     'wine-bionic': ('package_bionic',),
     'runtime-support': ('assemble_support', 'cached_support', 'build_target'),
-    'wine-product': ('assemble_product', 'cached_product', 'build_target'),
 }
 
 

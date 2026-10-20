@@ -156,6 +156,14 @@ class Coordinator:
         if result:
             print('OK published '+repository+'/'+stage,flush=True)
             return result
+        if self.plan['stages'][stage].get('execution') == 'local':
+            from local_product import build
+            print('START local '+stage, flush=True)
+            build(request, self.state/request['identity'], repository, self.state/'downloads/objects')
+            result = self.existing(request)
+            if result is None:
+                raise RuntimeError('Local assembly did not publish its completion record')
+            return result
         payload=json.dumps(request,sort_keys=True)
         # A standalone workflow_dispatch creates a run in the component repo.
         # Do not replace this with workflow_call: caches must belong to that repo.
