@@ -271,7 +271,9 @@ def restore_seed(root, framework, data, visited, *, recursive=True):
     if any(stage_cache.glob('*/receipt.json')):
         print('Keep restored Actions cache before release seed: '+data['stage'], flush=True)
         return
-    import_dependency(root, data['cacheSeed'], visited, recursive=recursive)
+    # A debug release may have newer dependencies than this prior receipt.
+    # Seed only this component; declared current dependencies are imported next.
+    import_dependency(root, data['cacheSeed'], visited, recursive=False)
 
 
 def build_windows_fonts(data, framework):
