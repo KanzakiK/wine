@@ -114,7 +114,41 @@
      {
          WARN("Failed to map staging texture, hr %#lx.\n", hr);
          goto done;
-@@ -1867,6 +1922,7 @@
+@@ -1843,19 +1898,29 @@
+ }
+ 
+ /* A composition swapchain this dxgi did not create -- DXVK's, in practice -- has no
+  * composition window to hand over, so its content is read back like a texture's.
+- * Buffer 0 holds the frame of the last Present, in DXVK as in wined3d.  The
++ * DXVK rotates sequential back-buffer storage after Present. The last buffer
++ * then holds the presented frame; buffer 0 is the application's next draw target.
+- * reference lasts for one readback only: a back buffer held across frames makes
++ * The reference lasts for one readback only: a back buffer held across frames makes
+  * the application's ResizeBuffers() fail. */
+ static BOOL dcomp_texture_acquire_swapchain_buffer(struct dcomp_texture *texture)
+ {
+     D3D11_TEXTURE2D_DESC desc;
++    DXGI_SWAP_CHAIN_DESC1 swapchain_desc;
++    UINT index = 0;
+     HRESULT hr;
+ 
+-    if (FAILED(hr = IDXGISwapChain1_GetBuffer(texture->swapchain, 0, &IID_ID3D11Texture2D,
++    if (SUCCEEDED(IDXGISwapChain1_GetDesc1(texture->swapchain, &swapchain_desc))
++            && (swapchain_desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL
++                || swapchain_desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL)
++            && swapchain_desc.BufferCount > 1)
++        index = swapchain_desc.BufferCount - 1;
++
++    TRACE("Foreign swapchain %p readback buffer %u.\n", texture->swapchain, index);
++    if (FAILED(hr = IDXGISwapChain1_GetBuffer(texture->swapchain, index, &IID_ID3D11Texture2D,
+             (void **)&texture->texture)))
+     {
+-        WARN("Failed to get buffer 0 of swapchain %p, hr %#lx.\n", texture->swapchain, hr);
++        WARN("Failed to get buffer %u of swapchain %p, hr %#lx.\n", index, texture->swapchain, hr);
+         texture->texture = NULL;
+         return FALSE;
+     }
+@@ -1867,6 +1932,7 @@
          if (texture->staging)
              ID3D11Texture2D_Release(texture->staging);
          texture->staging = NULL;
@@ -122,7 +156,7 @@
      }
      texture->desc = desc;
      return TRUE;
-@@ -1974,24 +2030,21 @@
+@@ -1974,24 +2040,21 @@
  static HRESULT dcomp_dynamic_texture_set_texture(struct dcomp_dynamic_texture *dynamic,
          IDCompositionTexture *texture, ULONG_PTR rect_count)
  {
@@ -155,7 +189,7 @@
      return S_OK;
  }
  
-@@ -2778,44 +2831,47 @@
+@@ -2778,44 +2841,47 @@
      return refcount;
  }
  
@@ -238,7 +272,7 @@
  }
  
  static HRESULT STDMETHODCALLTYPE dcomp_visual_SetOffsetXAnimation(IDCompositionVisual *iface,
-@@ -2938,17 +2994,6 @@
+@@ -2938,17 +3004,6 @@
          return NULL;
      }
      return swapchain;
@@ -256,7 +290,7 @@
  }
  
  /* Show a foreign swapchain through an internal child at the bottom of the
-@@ -3014,19 +3059,22 @@
+@@ -3014,19 +3069,22 @@
  {
      struct dcomp_visual *visual = impl_from_IDCompositionVisual(iface);
      IDCompositionSurface *surface_iface = NULL;
@@ -287,7 +321,7 @@
      if (content)
      {
          IDXGISwapChain1 *foreign;
-@@ -3034,8 +3082,8 @@
+@@ -3034,8 +3092,8 @@
          /* The proxy holds the swapchain; the visual itself has to stay without
           * content, or the tree counts as one whose root presents for itself. */
          if ((foreign = dcomp_content_as_foreign_swapchain(content))
@@ -298,7 +332,7 @@
      }
      if (content)
      {
-@@ -3048,27 +3096,49 @@
+@@ -3048,27 +3106,49 @@
          if (SUCCEEDED(IUnknown_QueryInterface(content, &IID_IDCompositionSurface,
                  (void **)&surface_iface)))
          {
@@ -353,7 +387,7 @@
  
      /* Only redirect root visuals (no parent) to target_hwnd.
       * Child visuals keep their hidden comp window; the root's
-@@ -3107,6 +3177,9 @@
+@@ -3107,6 +3187,9 @@
  }
  
  static HRESULT STDMETHODCALLTYPE dcomp_visual_AddVisual(IDCompositionVisual *iface,
@@ -363,7 +397,7 @@
          IDCompositionVisual *visual, BOOL insert_above, IDCompositionVisual *reference_visual)
  {
      struct dcomp_visual *parent = impl_from_IDCompositionVisual(iface);
-@@ -3125,8 +3198,9 @@
+@@ -3125,8 +3208,9 @@
      if (child->parent)
      {
          dcomp_visual_unlink(child);
@@ -375,7 +409,7 @@
  
      /* Inherit target_hwnd from root of tree */
      if (parent->target_hwnd)
-@@ -3151,74 +3225,83 @@
+@@ -3151,74 +3235,83 @@
              dcomp_visual_insert_before(ref, child);
      }
  
@@ -496,7 +530,7 @@
      return S_OK;
  }
  
-@@ -3642,6 +3725,7 @@
+@@ -3642,6 +3735,7 @@
       * leaves (surface/texture content) are never skipped. */
      DWORD walk_leaf_hash;
      BOOL walk_leaf_hash_valid;
@@ -504,7 +538,7 @@
      DWORD last_blit_leaf_hash;
      BOOL last_blit_leaf_valid;
      RECT last_blit_clip_rc;               /* clip box of the last blit that really painted */
-@@ -4040,6 +4124,9 @@
+@@ -4040,6 +4134,9 @@
   * removed code: an application that does build such a tree says so in the log
   * instead of losing its pixels in silence. */
  static unsigned int dcomp_serialize_visual_leaves(HWND target_hwnd, struct dcomp_visual *visual,
@@ -514,7 +548,7 @@
          int base_x, int base_y, float base_opacity, unsigned int idx, struct dcomp_leaf_stats *stats)
  {
      WCHAR prop_name[64];
-@@ -4141,6 +4228,17 @@
+@@ -4141,6 +4238,17 @@
          idx = dcomp_serialize_visual_leaves(target_hwnd, child, vx, vy, op, idx, stats);
  
      return idx;
@@ -532,7 +566,7 @@
  }
  
  /* What a target last reported about itself.  Two reports must not repeat every
-@@ -4655,27 +4753,27 @@
+@@ -4655,27 +4763,27 @@
      return h;
  }
  
@@ -568,7 +602,7 @@
      return ((((h0 * 16777619u) ^ h1) * 16777619u ^ h2) * 16777619u ^ h3) * 16777619u;
  }
  
-@@ -4882,48 +4980,139 @@
+@@ -4882,48 +4990,139 @@
      SetRectEmpty(&surface->pending_dirty);
  }
  
@@ -736,7 +770,7 @@
      {
          WCHAR prop_name[64];
          HWND comp_wnd;
-@@ -4932,7 +5121,7 @@
+@@ -4932,7 +5131,7 @@
  
          /* Same lookup the serializer uses: comp window via desktop prop. */
          swprintf(prop_name, ARRAY_SIZE(prop_name),
@@ -745,7 +779,7 @@
          comp_wnd = (HWND)GetPropW(GetDesktopWindow(), prop_name);
          if (comp_wnd)
          {
-@@ -4948,7 +5137,7 @@
+@@ -4948,7 +5147,7 @@
                      UINT64 lt = (UINT64)LOWORD(dims) * HIWORD(dims);
                      DWORD h;
  
@@ -754,7 +788,7 @@
                      h = (h ^ (DWORD)(ULONG_PTR)comp_wnd) * 16777619u;
                      h = (h ^ (DWORD)dims) * 16777619u;
                      h = (h ^ (DWORD)(vx * 65599 + vy)) * 16777619u;
-@@ -4961,8 +5150,38 @@
+@@ -4961,8 +5160,38 @@
          }
      }
  
@@ -795,7 +829,7 @@
  }
  
  /* Does any visual below this one carry content of its own?  Pointer walk over
-@@ -5029,7 +5248,9 @@
+@@ -5029,7 +5258,9 @@
   * dcomp_target_composite_leaves() derives it — but without paying for it: no
   * texture readback, no pixel pointer, only the dimensions.  FALSE when the
   * visual carries no content of its own or its size is not known yet. */
@@ -806,7 +840,7 @@
  {
      struct dcomp_texture *tex;
  
-@@ -5071,6 +5292,16 @@
+@@ -5071,6 +5302,16 @@
          return *w && *h;
      }
      return FALSE;
@@ -823,7 +857,7 @@
  }
  
  /* -------------------------------------------------------------------------
-@@ -5638,7 +5869,7 @@
+@@ -5638,7 +5879,7 @@
  }
  
  /* Caller holds device->cs. */
@@ -832,7 +866,7 @@
  {
      struct dcomp_visual *root = target->root_visual;
      unsigned int w = rc->right, h = rc->bottom, back, n, i;
-@@ -5772,11 +6003,21 @@
+@@ -5772,11 +6013,21 @@
      target->layer_back = back ^ 1;
  }
  
@@ -855,7 +889,7 @@
  {
      struct dcomp_visual *root = target->root_visual;
      struct dcomp_visual *child;
-@@ -5991,6 +6232,16 @@
+@@ -5991,6 +6242,16 @@
      ReleaseDC(target->hwnd, hdc);
  }
  
@@ -872,7 +906,7 @@
  /* -------------------------------------------------------------------------
   * Delivering from a thread of our own (issue 190).
   *
-@@ -6149,7 +6400,56 @@
+@@ -6149,7 +6410,56 @@
      }
  }
  
@@ -930,7 +964,7 @@
  {
      struct dcomp_visual *root;
      struct dcomp_visual *child;
-@@ -6280,7 +6580,7 @@
+@@ -6280,7 +6590,7 @@
           * Re-deliver only once the mismatch has persisted past
           * DCOMP_TARGET_REPAIR_MS, so the tab-switch repaint from issue 99 --
           * which resolves within a few hundred ms -- never triggers it. */
@@ -939,7 +973,7 @@
          {
              DWORD now = GetTickCount();
  
-@@ -6304,6 +6604,7 @@
+@@ -6304,6 +6614,7 @@
              }
          }
  
@@ -947,7 +981,7 @@
          for (child = root->children; child; child = child->next_sibling)
              dcomp_target_composite_leaves(target, child,
                      (int)root->offset_x, (int)root->offset_y, dcomp_visual_root_opacity(root));
-@@ -6323,6 +6624,8 @@
+@@ -6323,6 +6634,8 @@
          hdc = target->present_layered ? NULL : GetDC(target->hwnd);
          if (hdc)
          {
@@ -956,7 +990,7 @@
              /* Paint only as far as the tree reaches (issue 187).  Everything
               * outside comes straight out of the backdrop read back from this
               * very window a moment ago, so writing it back is at best a no-op
-@@ -6391,6 +6694,7 @@
+@@ -6391,6 +6704,7 @@
              else
                  TRACE("issue-99 skip-unchanged: target %p hwnd %p %ux%u clip %d.\n",
                          target, target->hwnd, target->comp_width, target->comp_height, clip_out);
@@ -964,7 +998,7 @@
              ReleaseDC(target->hwnd, hdc);
          }
          else if (target->present_layered)
-@@ -6526,6 +6830,16 @@
+@@ -6526,6 +6840,16 @@
      }
  }
  
