@@ -36,7 +36,7 @@
 #include "dxgi1_2.h"
 #include "wine/hwnd_dmabuf.h"
 #include "wine/debug.h"
-WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
+WINE_DEFAULT_DEBUG_CHANNEL(hwndgdi);
 
 struct wayland_hwnd_dmabuf_surface;
 

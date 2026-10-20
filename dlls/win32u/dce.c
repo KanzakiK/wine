@@ -37,6 +37,7 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(win);
+WINE_DECLARE_DEBUG_CHANNEL(hwndgdi);
 
 struct dce
 {
@@ -116,7 +117,7 @@ static BOOL foreign_gdi_slot_create( struct foreign_gdi_slot *slot, unsigned int
                               NULL, &section_size, PAGE_READWRITE, SEC_COMMIT, 0 );
     if (status)
     {
-        WARN( "failed to create foreign GDI shm section status %#lx\n", status );
+        WARN_(hwndgdi)( "failed to create foreign GDI shm section status %#lx\n", status );
         return FALSE;
     }
 
@@ -124,7 +125,7 @@ static BOOL foreign_gdi_slot_create( struct foreign_gdi_slot *slot, unsigned int
                                  &view_size, ViewUnmap, 0, PAGE_READWRITE );
     if (status)
     {
-        WARN( "failed to map foreign GDI shm section status %#lx\n", status );
+        WARN_(hwndgdi)( "failed to map foreign GDI shm section status %#lx\n", status );
         foreign_gdi_slot_destroy( slot );
         return FALSE;
     }
@@ -132,7 +133,7 @@ static BOOL foreign_gdi_slot_create( struct foreign_gdi_slot *slot, unsigned int
     status = wine_server_handle_to_fd( slot->section, FILE_READ_DATA, &slot->fd, NULL );
     if (status)
     {
-        WARN( "failed to export foreign GDI shm section status %#lx\n", status );
+        WARN_(hwndgdi)( "failed to export foreign GDI shm section status %#lx\n", status );
         foreign_gdi_slot_destroy( slot );
         return FALSE;
     }
@@ -154,7 +155,7 @@ static BOOL foreign_gdi_surface_ensure_slots( struct foreign_gdi_surface *surfac
         }
 
     surface->slots_created = TRUE;
-    TRACE( "foreign_gdi hwnd=%p allocated %u shm slots size=%d\n",
+    TRACE_(hwndgdi)( "foreign_gdi hwnd=%p allocated %u shm slots size=%d\n",
            surface->hwnd, FOREIGN_GDI_RING_SIZE, surface->size );
     return TRUE;
 }
@@ -178,7 +179,7 @@ static BOOL foreign_gdi_surface_ensure_channel( struct foreign_gdi_surface *surf
     if ((surface->channel_fd = hwnd_dmabuf_open_channel( surface->hwnd )) < 0)
     {
         surface->lost = TRUE;
-        TRACE( "foreign_gdi hwnd=%p failed to open producer channel\n", surface->hwnd );
+        TRACE_(hwndgdi)( "foreign_gdi hwnd=%p failed to open producer channel\n", surface->hwnd );
         return FALSE;
     }
 
@@ -187,7 +188,7 @@ static BOOL foreign_gdi_surface_ensure_channel( struct foreign_gdi_surface *surf
     surface->producer_unique_id = ((UINT64)HandleToULong(NtCurrentTeb()->ClientId.UniqueProcess) << 32) | (UINT32)producer_id;
     surface->ring_generation++;
     if (!surface->ring_generation) surface->ring_generation++;
-    TRACE( "foreign_gdi hwnd=%p opened producer channel fd=%d producer=%s generation=%u\n",
+    TRACE_(hwndgdi)( "foreign_gdi hwnd=%p opened producer channel fd=%d producer=%s generation=%u\n",
            surface->hwnd, surface->channel_fd, wine_dbgstr_longlong(surface->producer_unique_id),
            surface->ring_generation );
     return TRUE;
@@ -212,7 +213,7 @@ static void foreign_gdi_surface_drain_releases( struct foreign_gdi_surface *surf
 
         slot->busy = FALSE;
         slot->release_token = 0;
-        TRACE( "foreign_gdi hwnd=%p released slot=%u flags=%#x\n",
+        TRACE_(hwndgdi)( "foreign_gdi hwnd=%p released slot=%u flags=%#x\n",
                surface->hwnd, rel.image_id, rel.flags );
     }
 
@@ -286,7 +287,7 @@ static BOOL foreign_gdi_surface_flush( struct window_surface *window_surface, co
     if (!foreign_gdi_surface_ensure_channel( surface )) return TRUE;
     if (!(slot = foreign_gdi_surface_get_free_slot( surface )))
     {
-        TRACE( "foreign_gdi hwnd=%p no free shm slot, keeping dirty=%s\n",
+        TRACE_(hwndgdi)( "foreign_gdi hwnd=%p no free shm slot, keeping dirty=%s\n",
                surface->hwnd, wine_dbgstr_rect(dirty) );
         return FALSE;
     }
@@ -317,7 +318,7 @@ static BOOL foreign_gdi_surface_flush( struct window_surface *window_surface, co
     ret = hwnd_dmabuf_channel_publish( surface->hwnd, surface->channel_fd, &desc, slot->fd );
     if (ret == HWND_DMABUF_CHANNEL_OK)
     {
-        TRACE( "foreign_gdi hwnd=%p published shm slot=%u seq=%u size=%ux%u dirty=%s token=%s\n",
+        TRACE_(hwndgdi)( "foreign_gdi hwnd=%p published shm slot=%u seq=%u size=%ux%u dirty=%s token=%s\n",
                surface->hwnd, slot->image_id, desc.frame_seq, desc.width, desc.height,
                wine_dbgstr_rect(dirty), wine_dbgstr_longlong(desc.release_token) );
         return TRUE;
@@ -325,7 +326,7 @@ static BOOL foreign_gdi_surface_flush( struct window_surface *window_surface, co
 
     slot->busy = FALSE;
     slot->release_token = 0;
-    WARN( "foreign_gdi hwnd=%p failed to publish shm slot=%u ret=%d\n",
+    WARN_(hwndgdi)( "foreign_gdi hwnd=%p failed to publish shm slot=%u ret=%d\n",
           surface->hwnd, slot->image_id, ret );
     if (ret == HWND_DMABUF_CHANNEL_CLOSED)
     {
@@ -404,7 +405,7 @@ static struct foreign_gdi_surface *foreign_gdi_surface_create( HWND hwnd, int wi
     for (i = 0; i < FOREIGN_GDI_RING_SIZE; i++)
         surface->slots[i].fd = -1;
 
-    TRACE( "foreign_gdi hwnd=%p created producer surface %p size=%dx%d\n",
+    TRACE_(hwndgdi)( "foreign_gdi hwnd=%p created producer surface %p size=%dx%d\n",
            hwnd, surface, width, height );
     return surface;
 }

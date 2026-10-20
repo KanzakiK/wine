@@ -1332,14 +1332,16 @@ static void hwnd_dmabuf_fill_frame_info( struct window *host, struct window *win
 {
     struct window *child;
 
+    /* The consumer places this front-to-back list in reverse order. Children
+     * must precede their parent, or an opaque parent covers their newer pixels. */
+    LIST_FOR_EACH_ENTRY( child, &win->children, struct window, entry )
+        hwnd_dmabuf_fill_frame_info( host, child, frames, max_count, count );
     if (hwnd_dmabuf_is_listed( win ) && is_visible( win ))
     {
         if (*count < max_count)
             hwnd_dmabuf_frame_info_from_window( host, win, &frames[*count] );
         (*count)++;
     }
-    LIST_FOR_EACH_ENTRY( child, &win->children, struct window, entry )
-        hwnd_dmabuf_fill_frame_info( host, child, frames, max_count, count );
 }
 
 
