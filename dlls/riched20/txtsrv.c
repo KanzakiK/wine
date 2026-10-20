@@ -129,9 +129,9 @@ HRESULT __thiscall fnTextSrv_TxSendMessage( ITextServices *iface, UINT msg, WPAR
     return hr;
 }
 
-static HRESULT update_client_rect( struct text_services *services, const RECT *client )
+static HRESULT update_client_rect( struct text_services *services, const RECT *client, HDC draw )
 {
-    RECT rect;
+    RECT rect, inset = {0};
     HRESULT hr;
 
     if (!client)
@@ -141,6 +141,28 @@ static HRESULT update_client_rect( struct text_services *services, const RECT *c
         if (FAILED( hr )) return hr;
     }
     else rect = *client;
+
+    if (SUCCEEDED( ITextHost_TxGetViewInset( services->editor->texthost, &inset ) ) &&
+        (inset.left || inset.top || inset.right || inset.bottom))
+    {
+        HDC dc = draw ? draw : ITextHost_TxGetDC( services->editor->texthost );
+        INT dpi_x = dc ? GetDeviceCaps( dc, LOGPIXELSX ) : 96;
+        INT dpi_y = dc ? GetDeviceCaps( dc, LOGPIXELSY ) : 96;
+        POINT points[3] = {{0, 0}, {MulDiv( inset.left, dpi_x, 2540 ), MulDiv( inset.top, dpi_y, 2540 )},
+                                 {MulDiv( inset.right, dpi_x, 2540 ), MulDiv( inset.bottom, dpi_y, 2540 )}};
+
+        /* The host supplies HIMETRIC margins, not client coordinates. Convert
+         * their vectors rather than points so a translated drawing DC does
+         * not add its viewport origin to the formatting rectangle. */
+        if (dc) DPtoLP( dc, points, ARRAY_SIZE(points) );
+        rect.left += points[1].x - points[0].x;
+        rect.top += points[1].y - points[0].y;
+        rect.right -= points[2].x - points[0].x;
+        rect.bottom -= points[2].y - points[0].y;
+        if (dc && !draw) ITextHost_TxReleaseDC( services->editor->texthost, dc );
+        TRACE( "host %p inset %s format %s\n", services->editor->texthost,
+               wine_dbgstr_rect( &inset ), wine_dbgstr_rect( &rect ) );
+    }
 
     rect.left += services->editor->selofs;
 
@@ -170,7 +192,7 @@ HRESULT __thiscall fnTextSrv_TxDraw( ITextServices *iface, DWORD aspect, LONG in
 
     if (view_id == TXTVIEW_ACTIVE && services->editor->freeze_count) return E_UNEXPECTED;
 
-    hr = update_client_rect( services, (RECT *)bounds );
+    hr = update_client_rect( services, (RECT *)bounds, draw );
     if (FAILED( hr )) return hr;
     if (hr == S_OK) rewrap = TRUE;
 
@@ -261,7 +283,7 @@ HRESULT __thiscall fnTextSrv_OnTxInPlaceActivate( ITextServices *iface, const RE
     TRACE( "%p: %s\n", services, wine_dbgstr_rect( client ) );
 
     services->editor->in_place_active = TRUE;
-    hr = update_client_rect( services, client );
+    hr = update_client_rect( services, client, NULL );
     if (FAILED( hr ))
     {
         services->editor->in_place_active = old_active;
@@ -377,7 +399,7 @@ HRESULT __thiscall fnTextSrv_TxGetNaturalSize( ITextServices *iface, DWORD aspec
 
     SetRect( &rect, 0, 0, *width, *height );
 
-    hr = update_client_rect( services, &rect );
+    hr = update_client_rect( services, &rect, draw );
     if (FAILED( hr )) return hr;
     if (hr == S_OK) rewrap = TRUE;
 
@@ -453,9 +475,9 @@ HRESULT __thiscall fnTextSrv_OnTxPropertyBitsChange( ITextServices *iface, DWORD
         }
     }
 
-    if (mask & TXTBIT_CLIENTRECTCHANGE)
+    if (mask & (TXTBIT_CLIENTRECTCHANGE | TXTBIT_VIEWINSETCHANGE))
     {
-        hr = update_client_rect( services, NULL );
+        hr = update_client_rect( services, NULL, NULL );
         if (SUCCEEDED( hr )) repaint = TRUE;
     }
 
