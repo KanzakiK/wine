@@ -377,7 +377,9 @@ def fetch_product(reference, output):
         archive=download_capsule(record, directory)
         audio=record['stage']=='wine-pulse'
         product=('audio' if audio else 'diagnostics' if record['stage']=='wine-diagnostics'
-                 else 'wine-capture' if record['stage']=='wine-capture' else 'wine')
+                 else 'wine-capture' if record['stage']=='wine-capture' else None)
+        if product is None:
+            raise ValueError('Compiler capsules are not deployable runtime producers')
         prefix='framework/build/artifacts/'+product+'/'
         output.mkdir(parents=True,exist_ok=True)
         with archive.open('rb') as source,zstandard.ZstdDecompressor().stream_reader(source) as decoded:
@@ -406,13 +408,6 @@ def fetch_product(reference, output):
             files={str(p.relative_to(output)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest()
                    for folder in ('jni','assets') for p in (output/folder).rglob('*') if p.is_file()}
             (output/'build-receipt.json').write_text(json.dumps(dict(format=1,component=reference,files=files),indent=2)+'\n')
-        elif product=='wine':
-            archive=output/'arlinux-wine-bionic.tar.gz'
-            with archive.open('rb') as source:
-                digest=hashlib.file_digest(source,'sha256').hexdigest()
-            expected=(output/(archive.name+'.sha256')).read_text().split()[0]
-            if digest!=expected:
-                raise ValueError('Wine checksum does not match the downloaded product')
         files={p.relative_to(output).as_posix():sha256_file(p)
                for p in output.rglob('*') if p.is_file() and p!=cache_receipt}
         cache_receipt.write_text(json.dumps(dict(format=1,reference=reference,files=files),indent=2)+'\n')
