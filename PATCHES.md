@@ -774,7 +774,13 @@ This is the recommended branch. What it changes, by subsystem:
   `CultureInfo.Parent` up to a neutral culture, which never ends for the invariant culture.
   vatSys sets the invariant UI culture, so saving an ATIS hung forever in
   `SpeechSynthesizer.Speak()`. `GetDefaultTokenId()` and `EnumTokens()` now store the
-  default as Windows does, and `SetDefaultTokenId()` is implemented
+  default as Windows does, and `SetDefaultTokenId()` is implemented.
+  [scripts/speechsdk51-setup.sh](scripts/speechsdk51-setup.sh) prepares a 64-bit prefix
+  for the SDK voices: it installs the SDK from `SpeechSDK51.exe` in Windows 2000 mode (its
+  MSI installs the runtime only there), returns to the previous Windows version, and points
+  the four classes at the renamed copy of the SDK's `sapi.dll`; `--check` reports the state.
+  In a fresh prefix with .NET 4.8, the vatSys ATIS pattern then speaks without any further
+  registration step
 - **msvcp**: the stream classes' move constructors and move assignment were exported as
   stubs, so a C++ application calling one aborted with "Call to unimplemented function" —
   Ableton Live's indexer did, on startup in a fresh prefix, so Live restarted it in a loop
