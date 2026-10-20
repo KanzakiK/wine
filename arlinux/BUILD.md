@@ -209,14 +209,25 @@ Source references use the already published checksum-addressed source objects.
 
 After promotion, compare every public asset digest/size with the prepared
 product, then use a new instance with no candidate override. Normal launch must
-resolve GitHub releases and select the same runtime identity, using verified
+resolve GitHub releases and select the same component archive hashes, using verified
 shared downloads where available. Do not write latest cache state manually or
 restore an old prefix. Retain actual process maps and finish the application/
 game journey again. Existing successful lookups expire after one hour; a fresh
 instance verifies publication without that previous-instance cache.
+The local selection receipt hash can differ between candidate and public paths
+because their URLs differ; compare the component hashes and embedded metadata,
+not only that receipt filename.
 An interrupted upload or incompatible snapshot is not permission to use the
 frozen legacy bundle. A consumer APK/distribution update is required for this
 new protocol; an APK upgrade alone does not replace an existing rootfs's scripts.
+
+Runner packaging verification on 2026-10-20 used producer inputs from Wine
+integration `6ae74513401427716cc81b83dc70797b48ee8879`. Hashing each tar member
+while copying it removed gzip rewinds: the i386 release job changed from 315
+seconds (run `39382419742`) to 24 seconds (run `39383104749`). Both produced
+the identical 77,981,623-byte archive SHA-256
+`158696aac158668a5188786fda7171f3f26c67e1271dad9ffa9c92ce18bc2ba6`.
+These are candidate packaging/job timings, not compiler or whole-graph timings.
 
 ## Optional diagnostics
 
