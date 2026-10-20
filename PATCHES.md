@@ -378,6 +378,15 @@ This is the recommended branch. What it changes, by subsystem:
   language, and resource lookup walks that list with en-US as the last resort. The message
   is gone and the answer is the real list; notepad and winecfg titles under `de_DE` and
   `en_US` unchanged, `kernel32:locale` passes
+- **ntdll (debugger attach, wow64)**: attaching winedbg to a 32-bit process — `attach`,
+  `bt all` — killed it with a page fault on execute access at an address like
+  `0xffbb11b0`. A 64-bit debugger creates its break-in thread at its own
+  `DbgUiRemoteBreakin`, and a thread of a wow64 process starts in 32-bit code, so it ran at
+  the low half of the 64-bit address (upstream as well; only the old wow64 had a
+  workaround). The target process now starts that thread at the `DbgUiRemoteBreakin` of its
+  32-bit ntdll. A 32-bit program in `Sleep()` and vatSys 1.4.20 (78 threads) survive
+  `bt all` and an attach/detach; 64-bit processes and the automatic crash handler, which
+  does not attach this way, are unchanged
 - **Per-pixel alpha for GPU-painted layered windows**: `DwmExtendFrameIntoClientArea`
   with `margins = -1` asks for full glass, which on Windows makes the client area
   per-pixel alpha capable. Wine stubbed it, so a plugin dragging a bitmap around — Serum
