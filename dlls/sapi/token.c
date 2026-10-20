@@ -50,17 +50,17 @@ static struct data_key *impl_from_ISpRegDataKey( ISpRegDataKey *iface )
 
 struct object_token
 {
-    ISpObjectToken ISpObjectToken_iface;
+    ISpObjectTokenInit ISpObjectTokenInit_iface;
     ISpeechObjectToken ISpeechObjectToken_iface;
     LONG ref;
 
-    ISpRegDataKey *data_key;
+    ISpDataKey *data_key;
     WCHAR *token_id;
 };
 
-static struct object_token *impl_from_ISpObjectToken( ISpObjectToken *iface )
+static struct object_token *impl_from_ISpObjectTokenInit( ISpObjectTokenInit *iface )
 {
-    return CONTAINING_RECORD( iface, struct object_token, ISpObjectToken_iface );
+    return CONTAINING_RECORD( iface, struct object_token, ISpObjectTokenInit_iface );
 }
 
 static struct object_token *impl_from_ISpeechObjectToken( ISpeechObjectToken *iface )
@@ -1485,17 +1485,18 @@ HRESULT token_enum_create( IUnknown *outer, REFIID iid, void **obj )
     return hr;
 }
 
-static HRESULT WINAPI token_QueryInterface( ISpObjectToken *iface,
+static HRESULT WINAPI token_QueryInterface( ISpObjectTokenInit *iface,
                                             REFIID iid, void **obj )
 {
-    struct object_token *This = impl_from_ISpObjectToken( iface );
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
 
     TRACE( "(%p)->(%s %p)\n", This, debugstr_guid( iid ), obj );
 
     if (IsEqualIID( iid, &IID_IUnknown ) ||
         IsEqualIID( iid, &IID_ISpDataKey ) ||
-        IsEqualIID( iid, &IID_ISpObjectToken ))
-        *obj = &This->ISpObjectToken_iface;
+        IsEqualIID( iid, &IID_ISpObjectToken ) ||
+        IsEqualIID( iid, &IID_ISpObjectTokenInit ))
+        *obj = &This->ISpObjectTokenInit_iface;
     else if (IsEqualIID( iid, &IID_IDispatch ) ||
              IsEqualIID( iid, &IID_ISpeechObjectToken ))
         *obj = &This->ISpeechObjectToken_iface;
@@ -1510,25 +1511,25 @@ static HRESULT WINAPI token_QueryInterface( ISpObjectToken *iface,
     return S_OK;
 }
 
-static ULONG WINAPI token_AddRef( ISpObjectToken *iface )
+static ULONG WINAPI token_AddRef( ISpObjectTokenInit *iface )
 {
-    struct object_token *This = impl_from_ISpObjectToken( iface );
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
     ULONG ref = InterlockedIncrement( &This->ref );
 
     TRACE( "(%p) ref = %lu\n", This, ref );
     return ref;
 }
 
-static ULONG WINAPI token_Release( ISpObjectToken *iface )
+static ULONG WINAPI token_Release( ISpObjectTokenInit *iface )
 {
-    struct object_token *This = impl_from_ISpObjectToken( iface );
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
     ULONG ref = InterlockedDecrement(&This->ref);
 
     TRACE( "(%p) ref = %lu\n", This, ref );
 
     if (!ref)
     {
-        if (This->data_key) ISpRegDataKey_Release( This->data_key );
+        if (This->data_key) ISpDataKey_Release( This->data_key );
         free( This->token_id );
         free( This );
     }
@@ -1536,7 +1537,7 @@ static ULONG WINAPI token_Release( ISpObjectToken *iface )
     return ref;
 }
 
-static HRESULT WINAPI token_SetData( ISpObjectToken *iface,
+static HRESULT WINAPI token_SetData( ISpObjectTokenInit *iface,
                                      LPCWSTR name, ULONG size,
                                      const BYTE *data )
 {
@@ -1544,7 +1545,7 @@ static HRESULT WINAPI token_SetData( ISpObjectToken *iface,
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_GetData( ISpObjectToken *iface,
+static HRESULT WINAPI token_GetData( ISpObjectTokenInit *iface,
                                      LPCWSTR name, ULONG *size,
                                      BYTE *data )
 {
@@ -1552,93 +1553,94 @@ static HRESULT WINAPI token_GetData( ISpObjectToken *iface,
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_SetStringValue( ISpObjectToken *iface,
+static HRESULT WINAPI token_SetStringValue( ISpObjectTokenInit *iface,
                                             LPCWSTR name, LPCWSTR value )
 {
-    struct object_token *This = impl_from_ISpObjectToken( iface );
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
 
     TRACE( "%p, %s, %s\n", This, debugstr_w(name), debugstr_w(value) );
 
-    return ISpRegDataKey_SetStringValue( This->data_key, name, value );
+    return ISpDataKey_SetStringValue( This->data_key, name, value );
 }
 
-static HRESULT WINAPI token_GetStringValue( ISpObjectToken *iface,
+static HRESULT WINAPI token_GetStringValue( ISpObjectTokenInit *iface,
                                             LPCWSTR name, LPWSTR *value )
 {
-    struct object_token *This = impl_from_ISpObjectToken( iface );
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
 
     TRACE( "%p, %s, %p\n", This, debugstr_w(name), value );
 
-    return ISpRegDataKey_GetStringValue( This->data_key, name, value );
+    return ISpDataKey_GetStringValue( This->data_key, name, value );
 }
 
-static HRESULT WINAPI token_SetDWORD( ISpObjectToken *iface,
+static HRESULT WINAPI token_SetDWORD( ISpObjectTokenInit *iface,
                                       LPCWSTR name, DWORD value )
 {
     FIXME( "stub\n" );
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_GetDWORD( ISpObjectToken *iface,
+static HRESULT WINAPI token_GetDWORD( ISpObjectTokenInit *iface,
                                       LPCWSTR name, DWORD *pdwValue )
 {
     FIXME( "stub\n" );
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_OpenKey( ISpObjectToken *iface,
+static HRESULT WINAPI token_OpenKey( ISpObjectTokenInit *iface,
                                      LPCWSTR name, ISpDataKey **sub_key )
 {
-    struct object_token *This = impl_from_ISpObjectToken( iface );
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
 
     TRACE( "%p, %s, %p\n", This, debugstr_w(name), sub_key );
 
-    return ISpRegDataKey_OpenKey( This->data_key, name, sub_key );
+    return ISpDataKey_OpenKey( This->data_key, name, sub_key );
 }
 
-static HRESULT WINAPI token_CreateKey( ISpObjectToken *iface,
+static HRESULT WINAPI token_CreateKey( ISpObjectTokenInit *iface,
                                        LPCWSTR name, ISpDataKey **sub_key )
 {
-    struct object_token *This = impl_from_ISpObjectToken( iface );
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
 
     TRACE( "%p, %s, %p\n", iface, debugstr_w(name), sub_key );
 
-    return ISpRegDataKey_CreateKey( This->data_key, name, sub_key );
+    return ISpDataKey_CreateKey( This->data_key, name, sub_key );
 }
 
-static HRESULT WINAPI token_DeleteKey( ISpObjectToken *iface,
+static HRESULT WINAPI token_DeleteKey( ISpObjectTokenInit *iface,
                                        LPCWSTR name )
 {
     FIXME( "stub\n" );
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_DeleteValue( ISpObjectToken *iface,
+static HRESULT WINAPI token_DeleteValue( ISpObjectTokenInit *iface,
                                          LPCWSTR name )
 {
     FIXME( "stub\n" );
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_EnumKeys( ISpObjectToken *iface,
+static HRESULT WINAPI token_EnumKeys( ISpObjectTokenInit *iface,
                                       ULONG index, LPWSTR *sub_key )
 {
     FIXME( "stub\n" );
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_EnumValues( ISpObjectToken *iface,
+static HRESULT WINAPI token_EnumValues( ISpObjectTokenInit *iface,
                                         ULONG index, LPWSTR *value )
 {
     FIXME( "stub\n" );
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_SetId( ISpObjectToken *iface,
+static HRESULT WINAPI token_SetId( ISpObjectTokenInit *iface,
                                    LPCWSTR category_id, LPCWSTR token_id,
                                    BOOL create )
 {
-    struct object_token *This = impl_from_ISpObjectToken( iface );
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
+    ISpRegDataKey *data_key;
     BOOL res;
     HRESULT hr;
     HKEY root, key;
@@ -1660,22 +1662,23 @@ static HRESULT WINAPI token_SetId( ISpObjectToken *iface,
         res = RegOpenKeyExW( root, subkey, 0, KEY_ALL_ACCESS, &key );
     if (res) return SPERR_NOT_FOUND;
 
-    hr = create_data_key_with_hkey( key, &This->data_key );
+    hr = create_data_key_with_hkey( key, &data_key );
     if (FAILED(hr))
     {
         RegCloseKey( key );
         return hr;
     }
+    This->data_key = (ISpDataKey *)data_key;
 
     This->token_id = wcsdup(token_id);
 
     return S_OK;
 }
 
-static HRESULT WINAPI token_GetId( ISpObjectToken *iface,
+static HRESULT WINAPI token_GetId( ISpObjectTokenInit *iface,
                                    LPWSTR *token_id )
 {
-    struct object_token *This = impl_from_ISpObjectToken( iface );
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
 
     TRACE( "%p, %p\n", This, token_id);
 
@@ -1699,14 +1702,14 @@ static HRESULT WINAPI token_GetId( ISpObjectToken *iface,
     return S_OK;
 }
 
-static HRESULT WINAPI token_GetCategory( ISpObjectToken *iface,
+static HRESULT WINAPI token_GetCategory( ISpObjectTokenInit *iface,
                                          ISpObjectTokenCategory **category )
 {
     FIXME( "stub\n" );
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_CreateInstance( ISpObjectToken *iface,
+static HRESULT WINAPI token_CreateInstance( ISpObjectTokenInit *iface,
                                             IUnknown *outer,
                                             DWORD class_context,
                                             REFIID riid,
@@ -1720,7 +1723,7 @@ static HRESULT WINAPI token_CreateInstance( ISpObjectToken *iface,
 
     TRACE( "%p, %p, %#lx, %s, %p\n", iface, outer, class_context, debugstr_guid( riid ), object );
 
-    if (FAILED(hr = ISpObjectToken_GetStringValue( iface, L"CLSID", &clsid_str )))
+    if (FAILED(hr = ISpObjectTokenInit_GetStringValue( iface, L"CLSID", &clsid_str )))
         return hr;
 
     hr = CLSIDFromString( clsid_str, &clsid );
@@ -1734,7 +1737,7 @@ static HRESULT WINAPI token_CreateInstance( ISpObjectToken *iface,
     /* Call ISpObjectWithToken::SetObjectToken if the interface is available. */
     if (SUCCEEDED(IUnknown_QueryInterface( unk, &IID_ISpObjectWithToken, (void **)&obj_token_iface )))
     {
-        hr = ISpObjectWithToken_SetObjectToken( obj_token_iface, iface );
+        hr = ISpObjectWithToken_SetObjectToken( obj_token_iface, (ISpObjectToken *)iface );
         ISpObjectWithToken_Release( obj_token_iface );
         if (FAILED(hr))
             goto done;
@@ -1747,7 +1750,7 @@ done:
     return hr;
 }
 
-static HRESULT WINAPI token_GetStorageFileName( ISpObjectToken *iface,
+static HRESULT WINAPI token_GetStorageFileName( ISpObjectTokenInit *iface,
                                                 REFCLSID caller,
                                                 LPCWSTR key_name,
                                                 LPCWSTR filename,
@@ -1758,7 +1761,7 @@ static HRESULT WINAPI token_GetStorageFileName( ISpObjectToken *iface,
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_RemoveStorageFileName( ISpObjectToken *iface,
+static HRESULT WINAPI token_RemoveStorageFileName( ISpObjectTokenInit *iface,
                                                    REFCLSID caller,
                                                    LPCWSTR key_name,
                                                    BOOL delete_file )
@@ -1767,14 +1770,14 @@ static HRESULT WINAPI token_RemoveStorageFileName( ISpObjectToken *iface,
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_Remove( ISpObjectToken *iface,
+static HRESULT WINAPI token_Remove( ISpObjectTokenInit *iface,
                                     REFCLSID caller )
 {
     FIXME( "stub\n" );
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_IsUISupported( ISpObjectToken *iface,
+static HRESULT WINAPI token_IsUISupported( ISpObjectTokenInit *iface,
                                            LPCWSTR ui_type,
                                            void *extra_data,
                                            ULONG extra_data_size,
@@ -1785,7 +1788,7 @@ static HRESULT WINAPI token_IsUISupported( ISpObjectToken *iface,
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_DisplayUI( ISpObjectToken *iface,
+static HRESULT WINAPI token_DisplayUI( ISpObjectTokenInit *iface,
                                        HWND parent,
                                        LPCWSTR title,
                                        LPCWSTR ui_type,
@@ -1797,7 +1800,7 @@ static HRESULT WINAPI token_DisplayUI( ISpObjectToken *iface,
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI token_MatchesAttributes( ISpObjectToken *iface,
+static HRESULT WINAPI token_MatchesAttributes( ISpObjectTokenInit *iface,
                                                LPCWSTR attributes,
                                                BOOL *matches )
 {
@@ -1805,7 +1808,25 @@ static HRESULT WINAPI token_MatchesAttributes( ISpObjectToken *iface,
     return E_NOTIMPL;
 }
 
-const struct ISpObjectTokenVtbl token_vtbl =
+static HRESULT WINAPI token_InitFromDataKey( ISpObjectTokenInit *iface,
+                                             LPCWSTR category_id,
+                                             LPCWSTR token_id,
+                                             ISpDataKey *data_key )
+{
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
+
+    TRACE( "%p, %s, %s, %p\n", iface, debugstr_w(category_id), debugstr_w(token_id), data_key );
+
+    if (This->data_key) return SPERR_ALREADY_INITIALIZED;
+    if (!token_id || !data_key) return E_POINTER;
+
+    if (!(This->token_id = wcsdup( token_id ))) return E_OUTOFMEMORY;
+    ISpDataKey_AddRef( data_key );
+    This->data_key = data_key;
+    return S_OK;
+}
+
+const struct ISpObjectTokenInitVtbl token_vtbl =
 {
     token_QueryInterface,
     token_AddRef,
@@ -1831,7 +1852,8 @@ const struct ISpObjectTokenVtbl token_vtbl =
     token_Remove,
     token_IsUISupported,
     token_DisplayUI,
-    token_MatchesAttributes
+    token_MatchesAttributes,
+    token_InitFromDataKey
 };
 
 static HRESULT WINAPI speech_token_QueryInterface( ISpeechObjectToken *iface,
@@ -1841,7 +1863,7 @@ static HRESULT WINAPI speech_token_QueryInterface( ISpeechObjectToken *iface,
 
     TRACE( "(%p)->(%s %p)\n", This, debugstr_guid( iid ), obj );
 
-    return ISpObjectToken_QueryInterface( &This->ISpObjectToken_iface, iid, obj );
+    return ISpObjectTokenInit_QueryInterface( &This->ISpObjectTokenInit_iface, iid, obj );
 }
 
 static ULONG WINAPI speech_token_AddRef( ISpeechObjectToken *iface )
@@ -1850,7 +1872,7 @@ static ULONG WINAPI speech_token_AddRef( ISpeechObjectToken *iface )
 
     TRACE( "(%p)\n", This );
 
-    return ISpObjectToken_AddRef( &This->ISpObjectToken_iface );
+    return ISpObjectTokenInit_AddRef( &This->ISpObjectTokenInit_iface );
 }
 
 static ULONG WINAPI speech_token_Release( ISpeechObjectToken *iface )
@@ -1859,7 +1881,7 @@ static ULONG WINAPI speech_token_Release( ISpeechObjectToken *iface )
 
     TRACE( "(%p)\n", This );
 
-    return ISpObjectToken_Release( &This->ISpObjectToken_iface );
+    return ISpObjectTokenInit_Release( &This->ISpObjectTokenInit_iface );
 }
 
 static HRESULT WINAPI speech_token_GetTypeInfoCount( ISpeechObjectToken *iface,
@@ -1959,9 +1981,9 @@ static HRESULT WINAPI speech_token_GetDescription( ISpeechObjectToken *iface,
 
     swprintf( langid, ARRAY_SIZE( langid ), L"%X", LANGIDFROMLCID( locale ) );
 
-    hr = ISpObjectToken_GetStringValue( &This->ISpObjectToken_iface, langid, &desc_wstr );
+    hr = ISpObjectTokenInit_GetStringValue( &This->ISpObjectTokenInit_iface, langid, &desc_wstr );
     if (hr == SPERR_NOT_FOUND)
-        hr = ISpObjectToken_GetStringValue( &This->ISpObjectToken_iface, NULL, &desc_wstr );
+        hr = ISpObjectTokenInit_GetStringValue( &This->ISpObjectTokenInit_iface, NULL, &desc_wstr );
     if (FAILED(hr))
         return hr;
 
@@ -2081,15 +2103,15 @@ HRESULT token_create( IUnknown *outer, REFIID iid, void **obj )
     HRESULT hr;
 
     if (!This) return E_OUTOFMEMORY;
-    This->ISpObjectToken_iface.lpVtbl = &token_vtbl;
+    This->ISpObjectTokenInit_iface.lpVtbl = &token_vtbl;
     This->ISpeechObjectToken_iface.lpVtbl = &speech_token_vtbl;
     This->ref = 1;
 
     This->data_key = NULL;
     This->token_id = NULL;
 
-    hr = ISpObjectToken_QueryInterface( &This->ISpObjectToken_iface, iid, obj );
+    hr = ISpObjectTokenInit_QueryInterface( &This->ISpObjectTokenInit_iface, iid, obj );
 
-    ISpObjectToken_Release( &This->ISpObjectToken_iface );
+    ISpObjectTokenInit_Release( &This->ISpObjectTokenInit_iface );
     return hr;
 }

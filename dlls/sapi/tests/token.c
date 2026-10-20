@@ -1017,6 +1017,94 @@ static void test_object_token(void)
     RegDeleteTreeA( HKEY_LOCAL_MACHINE, "Software\\Winetest\\sapi" );
 }
 
+static const WCHAR storage_token_id[] = L"HKEY_CURRENT_USER\\Software\\Winetest\\sapi\\StorageToken";
+
+static ISpObjectToken *create_storage_token( ISpDataKey **attrs )
+{
+    ISpObjectToken *token;
+    HRESULT hr;
+
+    hr = CoCreateInstance( &CLSID_SpObjectToken, NULL, CLSCTX_INPROC_SERVER,
+                           &IID_ISpObjectToken, (void **)&token );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    hr = ISpObjectToken_SetId( token, NULL, storage_token_id, TRUE );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    hr = ISpObjectToken_CreateKey( token, L"Attributes", attrs );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    hr = ISpDataKey_SetStringValue( *attrs, L"Language", L"409;9" );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    hr = ISpDataKey_SetStringValue( *attrs, L"Gender", L"Female" );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    return token;
+}
+
+static void test_object_token_init(void)
+{
+    ISpObjectTokenInit *init;
+    ISpObjectToken *token, *token2;
+    ISpDataKey *attrs;
+    WCHAR *str;
+    HRESULT hr;
+
+    hr = CoCreateInstance( &CLSID_SpObjectToken, NULL, CLSCTX_INPROC_SERVER,
+                           &IID_ISpObjectToken, (void **)&token );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    hr = ISpObjectToken_QueryInterface( token, &IID_ISpObjectTokenInit, (void **)&init );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    ok( (void *)init == (void *)token, "got %p, %p\n", init, token );
+    ISpObjectTokenInit_Release( init );
+    ISpObjectToken_Release( token );
+
+    token = create_storage_token( &attrs );
+
+    hr = CoCreateInstance( &CLSID_SpObjectToken, NULL, CLSCTX_INPROC_SERVER,
+                           &IID_ISpObjectTokenInit, (void **)&init );
+    ok( hr == S_OK, "got %08lx\n", hr );
+
+    hr = ISpObjectTokenInit_InitFromDataKey( init, NULL, NULL, attrs );
+    ok( hr == E_POINTER, "got %08lx\n", hr );
+    hr = ISpObjectTokenInit_InitFromDataKey( init, NULL, L"TestToken", NULL );
+    ok( hr == E_POINTER, "got %08lx\n", hr );
+    hr = ISpObjectTokenInit_InitFromDataKey( init, NULL, L"TestToken", attrs );
+    ok( hr == S_OK, "got %08lx\n", hr );
+
+    str = NULL;
+    hr = ISpObjectTokenInit_GetId( init, &str );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    ok( str && !wcscmp( str, L"TestToken" ), "got %s\n", wine_dbgstr_w(str) );
+    CoTaskMemFree( str );
+
+    str = NULL;
+    hr = ISpObjectTokenInit_GetStringValue( init, L"Gender", &str );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    ok( str && !wcscmp( str, L"Female" ), "got %s\n", wine_dbgstr_w(str) );
+    CoTaskMemFree( str );
+
+    hr = ISpObjectTokenInit_InitFromDataKey( init, NULL, L"TestToken2", attrs );
+    ok( hr == SPERR_ALREADY_INITIALIZED, "got %08lx\n", hr );
+    hr = ISpObjectTokenInit_SetId( init, NULL, storage_token_id, FALSE );
+    ok( hr == SPERR_ALREADY_INITIALIZED, "got %08lx\n", hr );
+
+    hr = ISpObjectTokenInit_QueryInterface( init, &IID_ISpObjectToken, (void **)&token2 );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    ok( (void *)token2 == (void *)init, "got %p, %p\n", token2, init );
+    ISpObjectToken_Release( token2 );
+    ISpObjectTokenInit_Release( init );
+
+    hr = CoCreateInstance( &CLSID_SpObjectToken, NULL, CLSCTX_INPROC_SERVER,
+                           &IID_ISpObjectTokenInit, (void **)&init );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    hr = ISpObjectTokenInit_SetId( init, NULL, storage_token_id, FALSE );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    hr = ISpObjectTokenInit_InitFromDataKey( init, NULL, L"TestToken", attrs );
+    ok( hr == SPERR_ALREADY_INITIALIZED, "got %08lx\n", hr );
+    ISpObjectTokenInit_Release( init );
+
+    ISpDataKey_Release( attrs );
+    ISpObjectToken_Release( token );
+    RegDeleteTreeA( HKEY_CURRENT_USER, "Software\\Winetest\\sapi" );
+}
+
 START_TEST(token)
 {
     CoInitialize( NULL );
@@ -1027,6 +1115,7 @@ START_TEST(token)
     test_token_enum();
     test_default_token_id();
     test_object_token();
+    test_object_token_init();
     tests_token_voices();
     CoUninitialize();
 }
