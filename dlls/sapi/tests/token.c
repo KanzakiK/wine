@@ -688,25 +688,25 @@ static void test_default_token_choice(void)
     langs[0] = other; langs[1] = ui; langs[2] = ui;
     cat = create_default_category( langs, 3 );
     check_stored_default( NULL );
-    todo_wine check_default( cat, S_OK, L"B" );
-    todo_wine check_stored_default( L"B" );
+    check_default( cat, S_OK, L"B" );
+    check_stored_default( L"B" );
     ISpObjectTokenCategory_Release( cat );
 
     /* A token that only shares the primary language does not count, the first token wins. */
     langs[0] = other; langs[1] = primary;
     cat = create_default_category( langs, 2 );
-    todo_wine check_default( cat, S_OK, L"A" );
-    todo_wine check_stored_default( L"A" );
+    check_default( cat, S_OK, L"A" );
+    check_stored_default( L"A" );
     ISpObjectTokenCategory_Release( cat );
 
     langs[0] = other; langs[1] = list;
     cat = create_default_category( langs, 2 );
-    todo_wine check_default( cat, S_OK, L"B" );
+    check_default( cat, S_OK, L"B" );
     ISpObjectTokenCategory_Release( cat );
 
     langs[0] = NULL; langs[1] = ui;
     cat = create_default_category( langs, 2 );
-    todo_wine check_default( cat, S_OK, L"B" );
+    check_default( cat, S_OK, L"B" );
     ISpObjectTokenCategory_Release( cat );
 
     cat = create_default_category( langs, 0 );
@@ -720,22 +720,22 @@ static void test_default_token_choice(void)
     hr = ISpObjectTokenCategory_EnumTokens( cat, NULL, NULL, &enum_tokens );
     ok( hr == S_OK, "got %08lx\n", hr );
     IEnumSpObjectTokens_Release( enum_tokens );
-    todo_wine check_stored_default( L"B" );
+    check_stored_default( L"B" );
     ISpObjectTokenCategory_Release( cat );
 
     /* SetDefaultTokenId() stores any id, even one without a token. */
     cat = create_default_category( langs, 2 );
     swprintf( path, ARRAY_SIZE(path), L"HKEY_CURRENT_USER\\%ls\\Tokens\\A", default_cat_key );
     hr = ISpObjectTokenCategory_SetDefaultTokenId( cat, path );
-    todo_wine ok( hr == S_OK, "got %08lx\n", hr );
-    todo_wine check_stored_default( L"A" );
-    todo_wine check_default( cat, S_OK, L"A" );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    check_stored_default( L"A" );
+    check_default( cat, S_OK, L"A" );
     swprintf( path, ARRAY_SIZE(path), L"HKEY_CURRENT_USER\\%ls\\Tokens\\Missing", default_cat_key );
     hr = ISpObjectTokenCategory_SetDefaultTokenId( cat, path );
-    todo_wine ok( hr == S_OK, "got %08lx\n", hr );
-    todo_wine check_stored_default( L"Missing" );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    check_stored_default( L"Missing" );
     hr = ISpObjectTokenCategory_SetDefaultTokenId( cat, NULL );
-    todo_wine ok( hr == E_INVALIDARG, "got %08lx\n", hr );
+    ok( hr == E_INVALIDARG, "got %08lx\n", hr );
     ISpObjectTokenCategory_Release( cat );
 
     RegDeleteTreeW( HKEY_CURRENT_USER, default_cat_key );

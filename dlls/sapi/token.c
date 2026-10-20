@@ -653,6 +653,144 @@ static struct enum_var *impl_from_IEnumVARIANT( IEnumVARIANT *iface )
     return CONTAINING_RECORD( iface, struct enum_var, IEnumVARIANT_iface );
 }
 
+static HRESULT score_attributes( ISpObjectToken *token, const WCHAR *attrs,
+                                 BOOL match_all, uint64_t *score );
+
+/* The user's default token is stored as DefaultTokenId in the category's key under
+ * HKEY_CURRENT_USER, for a category under HKEY_LOCAL_MACHINE as well. */
+static HRESULT set_user_default_token_id( struct token_category *This, const WCHAR *id )
+{
+    const WCHAR *sub_key;
+    HKEY root, key;
+    LONG res;
+
+    if (parse_cat_id( This->id, &root, &sub_key ) != S_OK)
+        return SPERR_INVALID_REGISTRY_KEY;
+
+    res = RegCreateKeyExW( HKEY_CURRENT_USER, sub_key, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL );
+    if (!res)
+    {
+        res = RegSetValueExW( key, L"DefaultTokenId", 0, REG_SZ, (const BYTE *)id,
+                              (wcslen( id ) + 1) * sizeof(WCHAR) );
+        RegCloseKey( key );
+    }
+    return HRESULT_FROM_WIN32( res );
+}
+
+/* A category without a default gets the first token whose Language attribute contains the
+ * user's UI language, or else its first token; a token that only shares the primary language
+ * does not count. */
+static HRESULT pick_default_token_id( struct token_category *This, WCHAR **id )
+{
+    struct data_key *this_data_key = impl_from_ISpRegDataKey( This->data_key );
+    DWORD count = 0, max_subkey_size = 0, root_len, token_id_size, size, i;
+    WCHAR lang[32], *token_id, *first = NULL, *match = NULL;
+    ISpObjectToken *token;
+    HKEY tokens_key;
+    uint64_t score;
+    HRESULT hr = S_OK;
+
+    if (RegOpenKeyExW( this_data_key->key, L"Tokens", 0, KEY_READ, &tokens_key ))
+        return SPERR_NOT_FOUND;
+
+    RegQueryInfoKeyW( tokens_key, NULL, NULL, NULL, &count, &max_subkey_size, NULL,
+                      NULL, NULL, NULL, NULL, NULL );
+    max_subkey_size++;
+
+    root_len = wcslen( This->id );
+    token_id_size = root_len + sizeof("\\Tokens\\") + max_subkey_size;
+    if (!(token_id = malloc( token_id_size * sizeof(WCHAR) )))
+    {
+        RegCloseKey( tokens_key );
+        return E_OUTOFMEMORY;
+    }
+    root_len = swprintf( token_id, token_id_size, L"%ls%lsTokens\\",
+                         This->id, This->id[root_len - 1] == L'\\' ? L"" : L"\\" );
+    swprintf( lang, ARRAY_SIZE(lang), L"Language=%x", GetUserDefaultUILanguage() );
+
+    for (i = 0; i < count && !match; i++)
+    {
+        size = max_subkey_size;
+        if (RegEnumKeyExW( tokens_key, i, token_id + root_len, &size, NULL, NULL, NULL, NULL ))
+            break;
+
+        if (FAILED(hr = token_create( NULL, &IID_ISpObjectToken, (void **)&token )))
+            break;
+        score = 0;
+        if (SUCCEEDED(ISpObjectToken_SetId( token, NULL, token_id, FALSE )))
+            score_attributes( token, lang, TRUE, &score );
+        ISpObjectToken_Release( token );
+
+        if ((!first && !(first = wcsdup( token_id ))) || (score && !(match = wcsdup( token_id ))))
+            hr = E_OUTOFMEMORY;
+        if (FAILED(hr)) break;
+    }
+
+    if (SUCCEEDED(hr))
+    {
+        const WCHAR *pick = match ? match : first;
+
+        if (!pick)
+            hr = SPERR_NOT_FOUND;
+        else if (!(*id = CoTaskMemAlloc( (wcslen( pick ) + 1) * sizeof(WCHAR) )))
+            hr = E_OUTOFMEMORY;
+        else
+            wcscpy( *id, pick );
+    }
+
+    free( match );
+    free( first );
+    free( token_id );
+    RegCloseKey( tokens_key );
+    return hr;
+}
+
+static HRESULT get_default_token_id( struct token_category *This, WCHAR **id )
+{
+    struct data_key *this_data_key = impl_from_ISpRegDataKey( This->data_key );
+    const WCHAR *sub_key;
+    HKEY root;
+    LONG res = ERROR_FILE_NOT_FOUND;
+    WCHAR regvalue[512];
+    DWORD regvalue_size = sizeof( regvalue );
+    HRESULT hr;
+
+    /* The user's choice (DefaultTokenId under HKCU) wins over the machine's
+     * (DefaultTokenId under HKLM), and the DefaultDefaultTokenId is the last resort. */
+    if (parse_cat_id( This->id, &root, &sub_key ) == S_OK && root == HKEY_LOCAL_MACHINE)
+        res = RegGetValueW( HKEY_CURRENT_USER, sub_key, L"DefaultTokenId", RRF_RT_REG_SZ,
+                            NULL, regvalue, &regvalue_size );
+
+    if (res != ERROR_SUCCESS)
+    {
+        regvalue_size = sizeof( regvalue );
+        res = RegGetValueW( this_data_key->key, NULL, L"DefaultTokenId", RRF_RT_REG_SZ,
+                            NULL, regvalue, &regvalue_size );
+    }
+    if (res != ERROR_SUCCESS)
+    {
+        regvalue_size = sizeof( regvalue );
+        res = RegGetValueW( this_data_key->key, NULL, L"DefaultDefaultTokenId", RRF_RT_REG_SZ,
+                            NULL, regvalue, &regvalue_size );
+    }
+    if (res == ERROR_FILE_NOT_FOUND)
+    {
+        /* Without any of them Windows picks a token and stores it as the user's default,
+         * which .NET's System.Speech then reads from the registry. */
+        if ((hr = pick_default_token_id( This, id )) == S_OK)
+            set_user_default_token_id( This, *id );
+        return hr;
+    }
+    if (res != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32( res );
+
+    if (!(*id = CoTaskMemAlloc( regvalue_size )))
+        return E_OUTOFMEMORY;
+    wcscpy( *id, regvalue );
+
+    return S_OK;
+}
+
 static HRESULT WINAPI token_category_EnumTokens( ISpObjectTokenCategory *iface,
                                                  LPCWSTR req, LPCWSTR opt,
                                                  IEnumSpObjectTokens **enum_tokens )
@@ -663,7 +801,7 @@ static HRESULT WINAPI token_category_EnumTokens( ISpObjectTokenCategory *iface,
     HKEY tokens_key;
     DWORD count, max_subkey_size, root_len, token_id_size;
     DWORD size, i;
-    WCHAR *token_id = NULL;
+    WCHAR *token_id = NULL, *default_id;
     ISpObjectToken *token = NULL;
     HRESULT hr;
 
@@ -722,6 +860,10 @@ static HRESULT WINAPI token_category_EnumTokens( ISpObjectTokenCategory *iface,
     hr = ISpObjectTokenEnumBuilder_QueryInterface( builder, &IID_IEnumSpObjectTokens,
                                                    (void **)enum_tokens );
 
+    /* Windows stores the default of a category without one here as well. */
+    if (SUCCEEDED(hr) && SUCCEEDED(get_default_token_id( This, &default_id )))
+        CoTaskMemFree( default_id );
+
 fail:
     ISpObjectTokenEnumBuilder_Release( builder );
     if ( token ) ISpObjectToken_Release( token );
@@ -732,20 +874,23 @@ fail:
 static HRESULT WINAPI token_category_SetDefaultTokenId( ISpObjectTokenCategory *iface,
                                                         LPCWSTR id )
 {
-    FIXME( "stub\n" );
-    return E_NOTIMPL;
+    struct token_category *This = impl_from_ISpObjectTokenCategory( iface );
+
+    TRACE( "(%p)->(%s)\n", iface, debugstr_w( id ) );
+
+    if (!This->data_key)
+        return SPERR_UNINITIALIZED;
+
+    if (!id)
+        return E_INVALIDARG;
+
+    return set_user_default_token_id( This, id );
 }
 
 static HRESULT WINAPI token_category_GetDefaultTokenId( ISpObjectTokenCategory *iface,
                                                         LPWSTR *id )
 {
     struct token_category *This = impl_from_ISpObjectTokenCategory( iface );
-    struct data_key *this_data_key;
-    const WCHAR *sub_key;
-    HKEY root;
-    LONG res = ERROR_FILE_NOT_FOUND;
-    WCHAR regvalue[512];
-    DWORD regvalue_size = sizeof( regvalue );
 
     TRACE( "(%p)->(%p)\n", iface, id );
 
@@ -755,36 +900,7 @@ static HRESULT WINAPI token_category_GetDefaultTokenId( ISpObjectTokenCategory *
     if (!id)
         return E_POINTER;
 
-    /* The user's choice (DefaultTokenId under HKCU) wins over the machine's
-     * (DefaultTokenId under HKLM), and the DefaultDefaultTokenId is the last resort. */
-    if (parse_cat_id( This->id, &root, &sub_key ) == S_OK && root == HKEY_LOCAL_MACHINE)
-        res = RegGetValueW( HKEY_CURRENT_USER, sub_key, L"DefaultTokenId", RRF_RT_REG_SZ,
-                            NULL, regvalue, &regvalue_size );
-
-    this_data_key = impl_from_ISpRegDataKey( This->data_key );
-
-    if (res != ERROR_SUCCESS)
-    {
-        regvalue_size = sizeof( regvalue );
-        res = RegGetValueW( this_data_key->key, NULL, L"DefaultTokenId", RRF_RT_REG_SZ,
-                            NULL, regvalue, &regvalue_size );
-    }
-    if (res != ERROR_SUCCESS)
-    {
-        regvalue_size = sizeof( regvalue );
-        res = RegGetValueW( this_data_key->key, NULL, L"DefaultDefaultTokenId", RRF_RT_REG_SZ,
-                            NULL, regvalue, &regvalue_size );
-    }
-    if (res == ERROR_FILE_NOT_FOUND)
-        return SPERR_NOT_FOUND;
-    if (res != ERROR_SUCCESS)
-        return HRESULT_FROM_WIN32( res );
-
-    if (!(*id = CoTaskMemAlloc( regvalue_size )))
-        return E_OUTOFMEMORY;
-    wcscpy( *id, regvalue );
-
-    return S_OK;
+    return get_default_token_id( This, id );
 }
 
 const struct ISpObjectTokenCategoryVtbl token_category_vtbl =
