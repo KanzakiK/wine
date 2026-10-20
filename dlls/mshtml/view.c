@@ -34,6 +34,7 @@
 #include "htmlevent.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
+WINE_DECLARE_DEBUG_CHANNEL(mshtml_layout);
 
 #define TIMER_ID 0x1000
 
@@ -563,6 +564,9 @@ static HRESULT WINAPI OleDocumentView_SetRect(IOleDocumentView *iface, LPRECT pr
 
     if(!prcView)
         return E_INVALIDARG;
+
+    TRACE_(mshtml_layout)("doc=%p hwnd=%p rect=%s dpi=%u\n", This, This->hwnd,
+            wine_dbgstr_rect(prcView), GetDpiForWindow(This->hwnd));
 
     if(This->hwnd) {
         GetClientRect(This->hwnd, &rect);

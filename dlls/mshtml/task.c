@@ -31,6 +31,7 @@
 #include "mshtml_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
+WINE_DECLARE_DEBUG_CHANNEL(mshtml_layout);
 
 #define WM_PROCESSTASK 0x8008
 #define TIMER_ID 0x3000
@@ -226,6 +227,9 @@ HRESULT set_task_timer(HTMLInnerWindow *window, LONG msec, enum timer_type timer
     IDispatch_AddRef(disp);
     timer->disp = disp;
 
+    TRACE_(mshtml_layout)("queue window=%p id=%lu type=%u delay=%ld callback=%p locked=%u xhr=%p\n",
+            window, timer->id, timer_type, msec, disp, thread_data->tasks_locked, thread_data->blocking_xhr);
+
     if(queue_timer(thread_data, timer)) {
         if(thread_data->tasks_locked || thread_data->blocking_xhr)
             thread_data->timer_blocked = TRUE;
@@ -306,7 +310,11 @@ static void call_timer_disp(IDispatch *disp, enum timer_type timer_type)
     }
 
     TRACE("%p %s >>>\n", disp, debugstr_timer_type(timer_type));
+    TRACE_(mshtml_layout)("begin callback=%p type=%s\n", disp, debugstr_timer_type(timer_type));
     hres = IDispatch_Invoke(disp, DISPID_VALUE, &IID_NULL, 0, DISPATCH_METHOD, &dp, &res, &ei, NULL);
+    TRACE_(mshtml_layout)("end callback=%p type=%s result=%08lx exception=%08lx source=%s description=%s\n",
+            disp, debugstr_timer_type(timer_type), hres, ei.scode,
+            debugstr_w(ei.bstrSource), debugstr_w(ei.bstrDescription));
     if(hres == S_OK)
         TRACE("%p %s <<<\n", disp, debugstr_timer_type(timer_type));
     else
@@ -329,6 +337,8 @@ static LRESULT process_timer(void)
     assert(thread_data != NULL);
 
     if(list_empty(&thread_data->timer_list) || thread_data->tasks_locked || thread_data->blocking_xhr) {
+        TRACE_(mshtml_layout)("blocked empty=%u locked=%u xhr=%p\n", list_empty(&thread_data->timer_list),
+                thread_data->tasks_locked, thread_data->blocking_xhr);
         if(!list_empty(&thread_data->timer_list))
             thread_data->timer_blocked = TRUE;
         KillTimer(thread_data->thread_hwnd, TIMER_ID);

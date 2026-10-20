@@ -37,6 +37,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 WINE_DECLARE_DEBUG_CHANNEL(gecko);
+WINE_DECLARE_DEBUG_CHANNEL(mshtml_layout);
 
 #define NS_APPSTARTUPNOTIFIER_CONTRACTID "@mozilla.org/embedcomp/appstartup-notifier;1"
 #define NS_WEBBROWSER_CONTRACTID "@mozilla.org/embedding/browser/nsWebBrowser;1"
@@ -366,6 +367,8 @@ static LRESULT WINAPI nsembed_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     switch(msg) {
     case WM_SIZE:
         TRACE("(%p)->(WM_SIZE)\n", This);
+        TRACE_(mshtml_layout)("browser=%p hwnd=%p size=%ux%u dpi=%u\n", This, hwnd,
+                LOWORD(lParam), HIWORD(lParam), GetDpiForWindow(hwnd));
 
         nsres = nsIBaseWindow_SetSize(This->window,
                 LOWORD(lParam), HIWORD(lParam), TRUE);
@@ -1307,27 +1310,20 @@ BOOL is_gecko_path(const char *path)
     return ret;
 }
 
-static double get_viewer_device_scale(GeckoBrowser *browser)
-{
-    double scale;
-    nsresult nsres;
-
-    nsres = nsIBaseWindow_GetUnscaledDevicePixelsPerCSSPixel(browser->window, &scale);
-    if(NS_FAILED(nsres) || !(scale > 0.0)) {
-        WARN("Could not get device scale: %08lx\n", nsres);
-        return 1.0;
-    }
-    return scale;
-}
-
 void set_viewer_zoom(GeckoBrowser *browser, float factor)
 {
     nsIContentViewer *content_viewer;
     nsIDocShell *doc_shell;
     nsresult nsres;
-    double scale = get_viewer_device_scale(browser);
 
-    TRACE("Setting optical zoom %f with device scale %f\n", factor, scale);
+    if(TRACE_ON(mshtml_layout)) {
+        double scale = 0;
+        nsresult scale_result = nsIBaseWindow_GetUnscaledDevicePixelsPerCSSPixel(browser->window, &scale);
+        TRACE_(mshtml_layout)("browser=%p optical=%f device_scale=%f result=%08lx\n",
+                browser, factor, scale, scale_result);
+    }
+
+    TRACE("Setting to %f\n", factor);
 
     nsres = get_nsinterface((nsISupports*)browser->navigation, &IID_nsIDocShell, (void**)&doc_shell);
     assert(nsres == NS_OK);
@@ -1336,10 +1332,7 @@ void set_viewer_zoom(GeckoBrowser *browser, float factor)
     assert(nsres == NS_OK && content_viewer);
     nsIDocShell_Release(doc_shell);
 
-    /* Optical zoom includes display DPI; Gecko's full zoom is relative to
-     * its already DPI-scaled CSS pixels. Applying the same factor directly
-     * scales embedded documents twice on a high-DPI display. */
-    nsres = nsIContentViewer_SetFullZoom(content_viewer, factor / scale);
+    nsres = nsIContentViewer_SetFullZoom(content_viewer, factor);
     if(NS_FAILED(nsres))
         ERR("SetFullZoom failed: %08lx\n", nsres);
 
@@ -1366,7 +1359,7 @@ float get_viewer_zoom(GeckoBrowser *browser)
     TRACE("Got %f\n", factor);
 
     nsIContentViewer_Release(content_viewer);
-    return factor * get_viewer_device_scale(browser);
+    return factor;
 }
 
 struct nsWeakReference {

@@ -34,6 +34,7 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
+WINE_DECLARE_DEBUG_CHANNEL(mshtml_layout);
 
 typedef enum {
     LISTENER_TYPE_CAPTURE,
@@ -283,6 +284,8 @@ static listener_container_t *get_listener_container(EventTarget *event_target, c
         return NULL;
 
     eid = str_to_eid(type);
+    if(eid == EVENTID_RESIZE || !wcscmp(type, L"mselementresize"))
+        TRACE_(mshtml_layout)("target=%p listener=%s eventid=%u\n", event_target, debugstr_w(type), eid);
     if(event_info[eid].flags & EVENT_FIXME)
         FIXME("unimplemented event %s\n", debugstr_w(event_info[eid].name));
 
