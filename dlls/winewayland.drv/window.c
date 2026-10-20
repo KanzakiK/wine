@@ -489,6 +489,9 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, UINT swp_flags, BOOL shaped, const str
 static void activation_token_done(void *context, struct xdg_activation_token_v1 *token,
                                   const char *value)
 {
+    /* Query USER state before taking win_data_mutex. The window thread can
+     * flush a surface while holding the USER lock, then wait for our mutex. */
+    DWORD style = NtUserGetWindowLongW(context, GWL_STYLE);
     struct wayland_win_data *data = wayland_win_data_get(context);
 
     if (data)
@@ -497,7 +500,7 @@ static void activation_token_done(void *context, struct xdg_activation_token_v1 
         {
             data->activation_token = NULL;
             if (data->wayland_surface && wayland_surface_is_toplevel(data->wayland_surface) &&
-                (NtUserGetWindowLongW(data->hwnd, GWL_STYLE) & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE)
+                (style & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE)
                 xdg_activation_v1_activate(process_wayland.xdg_activation_v1, value,
                                             data->wayland_surface->wl_surface);
         }
@@ -517,13 +520,15 @@ static const struct xdg_activation_token_v1_listener activation_token_listener =
 void WAYLAND_ActivateWindow(HWND hwnd, HWND previous)
 {
     struct wayland_win_data *data;
+    DWORD style;
     uint32_t serial;
 
     if (!process_wayland.xdg_activation_v1 || wayland_keyboard_get_focused_hwnd() == hwnd) return;
+    style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
     if (!(data = wayland_win_data_get(hwnd))) return;
     if (!data->activation_token && data->wayland_surface &&
         wayland_surface_is_toplevel(data->wayland_surface) &&
-        (NtUserGetWindowLongW(hwnd, GWL_STYLE) & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE)
+        (style & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE)
     {
         data->activation_token = xdg_activation_v1_get_activation_token(process_wayland.xdg_activation_v1);
         if (data->activation_token)
