@@ -31,7 +31,7 @@ def sha(path):
 def request():
     data = json.loads(os.environ['ARLINUX_COMPONENT_REQUEST'])
     framework = Path(__file__).resolve().parents[2]
-    plan = load_plan()
+    plan = load_plan(framework/'arlinux/build')
     stage = plan['stages'].get(data.get('stage'))
     if not stage or os.environ.get('GITHUB_REPOSITORY') != stage['repository']:
         raise ValueError('Component must run in its owning repository')
@@ -63,7 +63,7 @@ def prepare(data, framework):
         for name in ('framework',):
             shutil.move(str(framework.parent / name), root / name)
         framework = root / 'framework'
-        plan = load_plan()
+        plan = load_plan(framework/'arlinux/build')
         if plan['stages'][data['stage']].get('artifactInputsOnly'):
             # Standard hosted runners already provide Python, Git and tar.
             # Assembly needs the capsule decoder, not any compiler toolchain.
@@ -118,7 +118,7 @@ def prepare(data, framework):
         cross = bin_dir / 'aarch64-linux-gnu-pkg-config'
         cross.write_text('#!/bin/sh\nexport PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig\nexec pkg-config "$@"\n')
         cross.chmod(0o755)
-        plan = load_plan()
+        plan = load_plan(framework/'arlinux/build')
         modules, _ = requirements(data['stage'], plan)
         if modules:
             run('git', '-C', framework, 'submodule', 'update', '--init', '--depth', '1', '--', *modules)
@@ -157,7 +157,7 @@ def prepare(data, framework):
 def toolchains(root, framework):
     lock = json.loads((framework / 'arlinux/build/github-inputs.json').read_text())
     stage = json.loads(os.environ['ARLINUX_COMPONENT_REQUEST'])['stage']
-    plan = load_plan()
+    plan = load_plan(framework/'arlinux/build')
     _, resources = requirements(stage, plan)
     cache = root / 'cache/downloads'
     tools = root / 'toolchains'
@@ -209,7 +209,7 @@ def toolchains(root, framework):
             target.chmod(0o755)
         else:
             target.symlink_to(compiler)
-    plan=load_plan()
+    plan=load_plan(framework/'arlinux/build')
     if not plan['stages'][stage].get('artifactInputsOnly'):
         run('ccache', '--max-size', str(plan['stages'][stage]['compilerCacheMiB'])+'M',
             env=dict(os.environ,CCACHE_DIR=str(root/'cache/ccache')))
@@ -342,7 +342,7 @@ def build(data, framework):
         globals()['build_'+stage.replace('-', '_')](data, framework)
         return
     visited = set()
-    plan = load_plan()
+    plan = load_plan(framework/'arlinux/build')
     assembly = plan['stages'][stage].get('artifactInputsOnly', False)
     restore_seed(root, framework, data, visited, recursive=not assembly)
     artifacts = {}
@@ -403,7 +403,7 @@ def publish(data, framework):
                     file.relative_to(p).as_posix(): sha(file) for file in sorted(p.rglob('*')) if file.is_file()}
                     for p in paths})
     record['outputIdentity'] = hashlib.sha256(json.dumps(contents, sort_keys=True).encode()).hexdigest()
-    tag = load_plan()['stages'][stage]['release']
+    tag = load_plan(framework/'arlinux/build')['stages'][stage]['release']
     repository = os.environ['GITHUB_REPOSITORY']
     previous = subprocess.run(['gh','api',f'repos/{repository}/releases/tags/{tag}'], capture_output=True, text=True)
     if not previous.returncode:
@@ -469,7 +469,7 @@ def publish(data, framework):
             shutil.copyfileobj(source, writer)
     archive.unlink()
     record['archiveSha256'] = sha(compressed)
-    tag = load_plan()['stages'][stage]['release']
+    tag = load_plan(framework/'arlinux/build')['stages'][stage]['release']
     repository = os.environ['GITHUB_REPOSITORY']
     record['parts'] = []
     with compressed.open('rb') as source:
