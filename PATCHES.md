@@ -167,6 +167,14 @@ This is the recommended branch. What it changes, by subsystem:
   draws the icons of its "Add Track" submenu into one WIC render target after another
   (38 for 19 icons); opening the submenu took 1.42 s, during which the menu ignored the
   mouse, and takes 0.22 s now
+- **D2D1 device context options**: `CreateDeviceContext()` printed a `FIXME` for
+  `D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS`, the option JUCE's
+  Direct2D backend passes for the device context it creates per paint. The option is a
+  hint, and this implementation does not spread rendering across threads, so there is
+  nothing for it to switch on: it is accepted silently now, and the `FIXME` is left for
+  bits the enumeration does not define. Cymatics Hotline with its editor open, 25 s with
+  `+fixme`: 661 of 815 log lines were that message, 0 of 154 now. Under `+d2d` the
+  contexts remain visible as one `Created device context` line per call (561 in 10 s)
 - **DComp**: IDCompositionDesktopDevice implementation with a D2D1 bitmap rendering path,
   dirty-rect clipping and DIB+BitBlt presentation; IDCompositionDevice3/4/5, composition
   and dynamic textures, D3D11 BeginDraw and surface handle export; rootless visual trees
