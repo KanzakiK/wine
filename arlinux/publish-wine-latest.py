@@ -13,13 +13,12 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent/'build'))
 from artifact_download import download
-from runtime_distribution import INDEX, COMPONENT_BASE, read_index
+from runtime_distribution import INDEX, read_index, runtime_url
 
 
 def component_source_archives(metadata, directory):
     component_sources = []
-    for name in ('wine', 'fex', 'dxvk', 'support'):
-        record = metadata.get('originalSources', {}).get(name, {})
+    for name, record in metadata['originalSources'].items():
         filename, expected = record.get('asset'), record.get('sha256')
         if not isinstance(filename, str) or Path(filename).name != filename or not expected:
             raise ValueError('Missing component source record: ' + name)
@@ -87,7 +86,7 @@ def main():
     for item in index['sources']:
         name, checksum_source = item['file'], item['sha256']
         if (Path(name).name != name or '\\' in name or ':' in name
-                or item['url'] != COMPONENT_BASE+'source-'+checksum_source+'.tar.gz'):
+                or not runtime_url(item['url'], 'source-'+checksum_source+'.tar.gz')):
             raise ValueError('Invalid component source archive')
         downloaded = download(item['url'], archive.parent/name, checksum_source)
         if downloaded.stat().st_size != item['bytes']:

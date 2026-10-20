@@ -121,18 +121,6 @@
       "product": "wine",
       "compilerCacheMiB": 256
     },
-    "runtime-support": {
-      "artifactInputsOnly": true,
-      "repository": "taowen/wine",
-      "runner": "ubuntu-24.04",
-      "dependencies": [
-        "steamworks",
-        "windows-accessibility",
-        "windows-tray"
-      ],
-      "product": "wine",
-      "compilerCacheMiB": 256
-    },
     "wine-product": {
       "execution": "local",
       "artifactInputsOnly": true,
@@ -140,7 +128,9 @@
       "runner": "ubuntu-24.04",
       "dependencies": [
         "wine-bionic",
-        "runtime-support"
+        "steamworks",
+        "windows-accessibility",
+        "windows-tray"
       ],
       "product": "wine",
       "compilerCacheMiB": 256

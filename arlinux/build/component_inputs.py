@@ -24,14 +24,12 @@ SOURCES = {
     'wine-bionic-compile': ('@wine', *PE, 'arlinux/build/wine-bionic.sh', 'arlinux/components/FEX'),
     'wine-bionic': ('arlinux/package-wine-bionic.py', 'arlinux/wine_pe_debug.py',
                     'arlinux/wine_fonts.py', 'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB',
-                    'arlinux/build/runtime_assembly.py'),
-    'steamworks': ('arlinux/components/steamworks',),
-    'windows-accessibility': ('arlinux/components/windows-integration',),
-    'windows-tray': ('arlinux/components/windows-integration',),
+                    'arlinux/build/runtime_assembly.py', 'arlinux/build/runtime_distribution.py'),
+    'steamworks': ('arlinux/components/steamworks', 'arlinux/build/runtime_distribution.py'),
+    'windows-accessibility': ('arlinux/components/windows-integration', 'arlinux/build/runtime_distribution.py'),
+    'windows-tray': ('arlinux/components/windows-integration', 'arlinux/build/runtime_distribution.py'),
     'wine-diagnostics': ('arlinux/build/windows-debug.sh', 'arlinux/windows-debug.py',
                          'arlinux/components/windows-integration'),
-    'runtime-support': ('arlinux/components/steamworks', 'arlinux/components/windows-integration',
-                        'arlinux/build/runtime_assembly.py'),
     'wine-product': ('arlinux/build/local_product.py', 'arlinux/build/runtime_distribution.py'),
     'wine-capture': ('arlinux/components/gfxreconstruct', 'arlinux/vulkan-capture.py'),
     'windows-fonts': ('arlinux/wine_fonts.py',),
@@ -40,14 +38,13 @@ RESOURCES = {name: ('mingw',) for name in SOURCES}
 for name in ('bionic-deps', 'bionic-x11', 'wine-pulse', 'wine-tls', 'wine-graphics', 'wine-vulkan'):
     RESOURCES[name] = ('ndk',)
 RESOURCES.update({'wine-pe-package': ('addons',), 'wine-bionic-compile': ('mingw', 'ndk'), 'wine-bionic': ('ndk',),
-                  'runtime-support': (), 'wine-product': (), 'wine-capture': ('ndk',), 'windows-fonts': ()})
+                  'wine-product': (), 'wine-capture': ('ndk',), 'windows-fonts': ()})
 SHARED = ('arlinux/build/github-component.py',
           'arlinux/build/wine-pipeline.py', 'arlinux/build/pipeline_cache.py',
           'arlinux/build/wine_graph.py', 'arlinux/build.sh')
 ASSEMBLY_CODE = {
     'wine-pe-package': ('package_pe',),
     'wine-bionic': ('package_bionic',),
-    'runtime-support': ('assemble_support', 'cached_support', 'build_target'),
 }
 
 

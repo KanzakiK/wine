@@ -315,7 +315,14 @@ def fetch_product(reference, output):
                 raise ValueError('Duplicate product artifact name')
             with ThreadPoolExecutor(max_workers=4) as pool:
                 files.update(pool.map(fetch_artifact, artifacts))
-            from runtime_distribution import INDEX, read_index
+            from runtime_distribution import INDEX, read_index, resolve_index
+            def fetch_manifest(item):
+                name, checksum = fetch_artifact(dict(item, name=item['file']))
+                files[name] = checksum
+                return output/name
+            resolved = resolve_index(output/INDEX, fetch=fetch_manifest)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                files.update(pool.map(fetch_artifact, [dict(item, name=item['file']) for item in resolved['components']]))
             read_index(output/INDEX)
             (output/'github-component.json').write_text(json.dumps(record, indent=2)+'\n')
             files['github-component.json'] = sha256_file(output/'github-component.json')

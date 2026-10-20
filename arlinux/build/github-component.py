@@ -492,7 +492,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
     data, framework = request()
     try:
-        globals()[args.action](data, framework)
+        from runtime_distribution import RUNTIME_STAGES, publish_runtime_component
+        if args.action == 'publish' and data['stage'] in RUNTIME_STAGES:
+            publish_runtime_component(data, framework)
+        else:
+            globals()[args.action](data, framework)
     except subprocess.CalledProcessError:
         # Existing recipes retain detailed compiler logs in their work trees.
         # Surface them when a hosted build fails so diagnosis needs no SSH.
