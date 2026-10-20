@@ -17,6 +17,13 @@ There is no `wine-product` stage, total runtime manifest, version combination
 selection or product-wide compatibility hash. `build/github-components.json` is
 the sole compiler dependency graph; it is not an installed version lock.
 
+The DXVK fork carries upstream incremental `Present1` support, including dirty
+rectangles, scrolling and complete-frame preservation across sequential buffers.
+Its offscreen composition path applies the same operations before rotating
+buffers, so Wine's DirectComposition readback receives a complete presented
+frame. The shader integration uses the existing Vulkan 1.3-compatible API;
+this does not require a newer Vulkan baseline or application-specific flags.
+
 The producers are `wine-bionic`, `wine-pe-aarch64`, `wine-pe-x86_64`,
 `wine-pe-i386`, `fex`, `dxvk`, `windows-fonts`, `wine-addons`, `steamworks`,
 `windows-accessibility` and `windows-tray`. Their independently hashed compiler
