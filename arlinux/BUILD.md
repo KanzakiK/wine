@@ -229,6 +229,39 @@ the identical 77,981,623-byte archive SHA-256
 `158696aac158668a5188786fda7171f3f26c67e1271dad9ffa9c92ce18bc2ba6`.
 These are candidate packaging/job timings, not compiler or whole-graph timings.
 
+The runner-only publication was exercised for all 11 producers using publisher
+`5e034d293e16d8c7d7df68ca7d759269f1e40b40`. Candidate and public assets matched
+the previously tested archives exactly (569,209,277 bytes total). For example,
+promotion run `39383641288` executed only the release job; no compiler work,
+workstation runtime download/upload or repackaging occurred. All public digests
+were checked again after completion.
+
+X300 USB `10AFA31610002QH`, fresh instance `yibu-8fcc27f5`, used APK SHA-256
+`439f599b55f305482af378ccaa2796ab758c6e56463e7c028f00c4923f3a840b`.
+ADB transferred only the 788,510-byte candidate selection with SHA-256
+`b90455f0f090f8ff12a69933c22e8c4e2d37f576834d97ad71c4fab9fc7e7a48`.
+Before first use, no prefix/runtime existed for this selection; 10 archives were
+already cached and the 208,690-byte tray archive had deliberately been evicted.
+Normal Steam startup downloaded that missing archive directly on the phone;
+all 11 cache hashes and 5,391 installed file hashes then passed. Only private
+Steam authentication was restored, not an installed home or prefix.
+
+The desktop-mode Steam launcher reached the signed-in library. An actual Play
+click launched Lost Castle PID 624 through native Wayland and DXVK/Mali at
+2358x1216. The screen controller selected a new save, confirmed Start and advanced
+visible Chinese dialogue; normal window close removed the game. Relaunch was
+not accepted: Steam warned that the same account was playing My Little Shark
+on another computer. The attempt was cancelled without disconnecting that game;
+Steam was exited normally and authentication backed up privately. Cloud sync
+also warned and was not accepted. This is download/install and scoped first-run
+acceptance, not complete Steam/Big Picture, relaunch or task-stop acceptance.
+Evidence remains in the Android checkout's ignored
+`build/validation-20261020/runner-candidate-evidence` and adjacent screenshots.
+An earlier public-path instance `yibu-9c134919` resolved all 11 fixed releases and
+passed file-hash validation, but its Big Picture screen remained black. That
+observation is retained under `releases-public-evidence/black-ui`; it is not a
+successful Big Picture regression or a diagnosed cause.
+
 ## Optional diagnostics
 
 `build.ps1 diagnostics` produces matching Windows exception helpers;
