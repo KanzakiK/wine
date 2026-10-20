@@ -589,6 +589,158 @@ static void test_default_token_id(void)
     ISpObjectTokenCategory_Release( cat );
 }
 
+static const WCHAR default_cat_key[] = L"Software\\Winetest\\sapi\\DefaultChoice";
+
+/* Recreates the category HKEY_CURRENT_USER\Software\Winetest\sapi\DefaultChoice with tokens
+ * named "A", "B", ... and the given Language attributes (NULL: no Attributes key). */
+static ISpObjectTokenCategory *create_default_category( const WCHAR **langs, unsigned int count )
+{
+    ISpObjectTokenCategory *cat;
+    WCHAR path[MAX_PATH];
+    unsigned int i;
+    LSTATUS ret;
+    HRESULT hr;
+    HKEY key;
+
+    RegDeleteTreeW( HKEY_CURRENT_USER, default_cat_key );
+    swprintf( path, ARRAY_SIZE(path), L"%ls\\Tokens", default_cat_key );
+    ret = RegCreateKeyExW( HKEY_CURRENT_USER, path, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &key, NULL );
+    ok( ret == ERROR_SUCCESS, "got %ld\n", ret );
+    RegCloseKey( key );
+
+    for (i = 0; i < count; i++)
+    {
+        if (langs[i])
+            swprintf( path, ARRAY_SIZE(path), L"%ls\\Tokens\\%c\\Attributes", default_cat_key, 'A' + i );
+        else
+            swprintf( path, ARRAY_SIZE(path), L"%ls\\Tokens\\%c", default_cat_key, 'A' + i );
+        ret = RegCreateKeyExW( HKEY_CURRENT_USER, path, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &key, NULL );
+        ok( ret == ERROR_SUCCESS, "got %ld\n", ret );
+        if (langs[i])
+            RegSetValueExW( key, L"Language", 0, REG_SZ, (const BYTE *)langs[i],
+                            (wcslen( langs[i] ) + 1) * sizeof(WCHAR) );
+        RegCloseKey( key );
+    }
+
+    hr = CoCreateInstance( &CLSID_SpObjectTokenCategory, NULL, CLSCTX_INPROC_SERVER,
+                           &IID_ISpObjectTokenCategory, (void **)&cat );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    swprintf( path, ARRAY_SIZE(path), L"HKEY_CURRENT_USER\\%ls", default_cat_key );
+    hr = ISpObjectTokenCategory_SetId( cat, path, FALSE );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    return cat;
+}
+
+/* Checks the DefaultTokenId stored in the category key: the token name, or NULL for none. */
+#define check_stored_default(a) check_stored_default_(__LINE__, a)
+static void check_stored_default_( unsigned int line, const WCHAR *name )
+{
+    WCHAR value[MAX_PATH] = { 0 }, expect[MAX_PATH];
+    DWORD size = sizeof(value);
+    LSTATUS ret;
+
+    ret = RegGetValueW( HKEY_CURRENT_USER, default_cat_key, L"DefaultTokenId", RRF_RT_REG_SZ,
+                        NULL, value, &size );
+    if (!name)
+    {
+        ok_(__FILE__, line)( ret == ERROR_FILE_NOT_FOUND, "got %ld, %s\n", ret, wine_dbgstr_w(value) );
+        return;
+    }
+    swprintf( expect, ARRAY_SIZE(expect), L"HKEY_CURRENT_USER\\%ls\\Tokens\\%ls", default_cat_key, name );
+    ok_(__FILE__, line)( ret == ERROR_SUCCESS, "got %ld\n", ret );
+    ok_(__FILE__, line)( !wcscmp( value, expect ), "got %s\n", wine_dbgstr_w(value) );
+}
+
+#define check_default(a, b, c) check_default_(__LINE__, a, b, c)
+static void check_default_( unsigned int line, ISpObjectTokenCategory *cat, HRESULT expect_hr,
+                            const WCHAR *name )
+{
+    WCHAR expect[MAX_PATH], *id = NULL;
+    HRESULT hr;
+
+    hr = ISpObjectTokenCategory_GetDefaultTokenId( cat, &id );
+    ok_(__FILE__, line)( hr == expect_hr, "got %08lx\n", hr );
+    if (hr != S_OK) return;
+    swprintf( expect, ARRAY_SIZE(expect), L"HKEY_CURRENT_USER\\%ls\\Tokens\\%ls", default_cat_key, name );
+    ok_(__FILE__, line)( !wcscmp( id, expect ), "got %s\n", wine_dbgstr_w(id) );
+    CoTaskMemFree( id );
+}
+
+static void test_default_token_choice(void)
+{
+    WCHAR ui[16], primary[16], other[16], list[32], path[MAX_PATH];
+    LANGID lang = GetUserDefaultUILanguage();
+    IEnumSpObjectTokens *enum_tokens;
+    ISpObjectTokenCategory *cat;
+    const WCHAR *langs[3];
+    HRESULT hr;
+
+    /* the user's UI language, the same primary language with another sublanguage, and
+     * another language */
+    swprintf( ui, ARRAY_SIZE(ui), L"%x", lang );
+    swprintf( primary, ARRAY_SIZE(primary), L"%x",
+              MAKELANGID( PRIMARYLANGID(lang), SUBLANGID(lang) == SUBLANG_DEFAULT ? 2 : SUBLANG_DEFAULT ) );
+    swprintf( other, ARRAY_SIZE(other), L"%x", PRIMARYLANGID(lang) == LANG_FRENCH ? 0x410 : 0x40c );
+    swprintf( list, ARRAY_SIZE(list), L"%ls;%ls", other, ui );
+
+    /* Without a default, the first token of the UI language becomes the default and is
+     * stored in the category key. */
+    langs[0] = other; langs[1] = ui; langs[2] = ui;
+    cat = create_default_category( langs, 3 );
+    check_stored_default( NULL );
+    todo_wine check_default( cat, S_OK, L"B" );
+    todo_wine check_stored_default( L"B" );
+    ISpObjectTokenCategory_Release( cat );
+
+    /* A token that only shares the primary language does not count, the first token wins. */
+    langs[0] = other; langs[1] = primary;
+    cat = create_default_category( langs, 2 );
+    todo_wine check_default( cat, S_OK, L"A" );
+    todo_wine check_stored_default( L"A" );
+    ISpObjectTokenCategory_Release( cat );
+
+    langs[0] = other; langs[1] = list;
+    cat = create_default_category( langs, 2 );
+    todo_wine check_default( cat, S_OK, L"B" );
+    ISpObjectTokenCategory_Release( cat );
+
+    langs[0] = NULL; langs[1] = ui;
+    cat = create_default_category( langs, 2 );
+    todo_wine check_default( cat, S_OK, L"B" );
+    ISpObjectTokenCategory_Release( cat );
+
+    cat = create_default_category( langs, 0 );
+    check_default( cat, SPERR_NOT_FOUND, NULL );
+    check_stored_default( NULL );
+    ISpObjectTokenCategory_Release( cat );
+
+    /* EnumTokens() stores the default as well. */
+    langs[0] = other; langs[1] = ui;
+    cat = create_default_category( langs, 2 );
+    hr = ISpObjectTokenCategory_EnumTokens( cat, NULL, NULL, &enum_tokens );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    IEnumSpObjectTokens_Release( enum_tokens );
+    todo_wine check_stored_default( L"B" );
+    ISpObjectTokenCategory_Release( cat );
+
+    /* SetDefaultTokenId() stores any id, even one without a token. */
+    cat = create_default_category( langs, 2 );
+    swprintf( path, ARRAY_SIZE(path), L"HKEY_CURRENT_USER\\%ls\\Tokens\\A", default_cat_key );
+    hr = ISpObjectTokenCategory_SetDefaultTokenId( cat, path );
+    todo_wine ok( hr == S_OK, "got %08lx\n", hr );
+    todo_wine check_stored_default( L"A" );
+    todo_wine check_default( cat, S_OK, L"A" );
+    swprintf( path, ARRAY_SIZE(path), L"HKEY_CURRENT_USER\\%ls\\Tokens\\Missing", default_cat_key );
+    hr = ISpObjectTokenCategory_SetDefaultTokenId( cat, path );
+    todo_wine ok( hr == S_OK, "got %08lx\n", hr );
+    todo_wine check_stored_default( L"Missing" );
+    hr = ISpObjectTokenCategory_SetDefaultTokenId( cat, NULL );
+    todo_wine ok( hr == E_INVALIDARG, "got %08lx\n", hr );
+    ISpObjectTokenCategory_Release( cat );
+
+    RegDeleteTreeW( HKEY_CURRENT_USER, default_cat_key );
+}
+
 static void tests_token_voices(void)
 {
     ISpObjectTokenCategory *cat;
@@ -1255,6 +1407,7 @@ START_TEST(token)
     test_token_category();
     test_token_enum();
     test_default_token_id();
+    test_default_token_choice();
     test_object_token();
     test_object_token_init();
     test_object_token_matches();
