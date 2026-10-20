@@ -52,12 +52,13 @@ def build(request, directory, repository, object_cache):
                 checksum = None
                 if entry.isfile() or entry.islnk():
                     checksum = hashlib.file_digest(archive.extractfile(entry), 'sha256').hexdigest()
-                if name in members:
-                    if checksum is None or hashes.get(name) != checksum:
-                        raise ValueError('Conflicting vendor addon path: '+name)
-                    continue
+                # Preserve the declared vendor archive overlay order, exactly
+                # as extracting them into one shared addon directory does.
+                # Architecture packages intentionally share support filenames.
                 if checksum is not None:
                     hashes[name] = checksum
+                else:
+                    hashes.pop(name, None)
                 target = copy.copy(entry)
                 target.name = name
                 target.uid = target.gid = target.mtime = 0
