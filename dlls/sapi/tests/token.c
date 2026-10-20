@@ -22,6 +22,7 @@
 
 #include "initguid.h"
 #include "sapiddk.h"
+#include "shlobj.h"
 #include "sperror.h"
 
 #include "wine/test.h"
@@ -1161,6 +1162,90 @@ static void test_object_token_matches(void)
     RegDeleteTreeA( HKEY_CURRENT_USER, "Software\\Winetest\\sapi" );
 }
 
+static void test_object_token_storage(void)
+{
+    static const WCHAR files_key[] = L"Software\\Winetest\\sapi\\StorageToken\\" TESTCLASS_CLSID L"\\Files";
+    static const WCHAR stored_prefix[] = L"%1a%\\Microsoft\\Speech\\Files\\Winetest\\SP_";
+    WCHAR appdata[MAX_PATH], dir[MAX_PATH], expect[MAX_PATH], buf[MAX_PATH], *path, *path2;
+    ISpObjectToken *token;
+    ISpDataKey *attrs;
+    DWORD size;
+    HRESULT hr;
+    LONG res;
+
+    hr = CoCreateInstance( &CLSID_SpObjectToken, NULL, CLSCTX_INPROC_SERVER,
+                           &IID_ISpObjectToken, (void **)&token );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    hr = ISpObjectToken_GetStorageFileName( token, &CLSID_TestClass, L"Datafile", L"Winetest\\",
+                                            CSIDL_APPDATA | CSIDL_FLAG_CREATE, &path );
+    ok( hr == SPERR_UNINITIALIZED, "got %08lx\n", hr );
+    ISpObjectToken_Release( token );
+
+    token = create_storage_token( &attrs );
+
+    hr = ISpObjectToken_GetStorageFileName( token, &CLSID_TestClass, NULL, L"Winetest\\",
+                                            CSIDL_APPDATA | CSIDL_FLAG_CREATE, &path );
+    ok( hr == E_INVALIDARG, "got %08lx\n", hr );
+    hr = ISpObjectToken_GetStorageFileName( token, &CLSID_TestClass, L"Datafile", L"Winetest\\",
+                                            CSIDL_APPDATA | CSIDL_FLAG_CREATE, NULL );
+    ok( hr == E_POINTER, "got %08lx\n", hr );
+
+    /* Without a folder, nothing is created. */
+    hr = ISpObjectToken_GetStorageFileName( token, &CLSID_TestClass, L"Datafile", NULL, 0, &path );
+    ok( hr == SPERR_NOT_FOUND, "got %08lx\n", hr );
+    hr = ISpObjectToken_GetStorageFileName( token, &CLSID_TestClass, L"Datafile", L"C:\\winetest-sapi\\", 0, &path );
+    ok( hr == SPERR_NOT_FOUND, "got %08lx\n", hr );
+
+    SHGetFolderPathW( NULL, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT, appdata );
+    swprintf( dir, ARRAY_SIZE(dir), L"%s\\Microsoft\\Speech\\Files\\Winetest", appdata );
+    swprintf( expect, ARRAY_SIZE(expect), L"%s\\SP_", dir );
+
+    /* A new file gets a generated name and S_FALSE. */
+    path = NULL;
+    hr = ISpObjectToken_GetStorageFileName( token, &CLSID_TestClass, L"Datafile", L"Winetest\\",
+                                            CSIDL_APPDATA | CSIDL_FLAG_CREATE, &path );
+    ok( hr == S_FALSE, "got %08lx\n", hr );
+    ok( path && !wcsncmp( path, expect, wcslen( expect ) ) && wcslen( path ) == wcslen( expect ) + 36 &&
+        !wcscmp( path + wcslen( path ) - 4, L".dat" ), "got %s\n", wine_dbgstr_w(path) );
+    ok( GetFileAttributesW( path ) != INVALID_FILE_ATTRIBUTES, "file %s not created\n", wine_dbgstr_w(path) );
+
+    size = sizeof(buf);
+    res = RegGetValueW( HKEY_CURRENT_USER, files_key, L"Datafile", RRF_RT_REG_SZ, NULL, buf, &size );
+    ok( !res, "got %ld\n", res );
+    ok( !wcsncmp( buf, stored_prefix, wcslen( stored_prefix ) ) &&
+        !wcscmp( buf + wcslen( stored_prefix ), path + wcslen( expect ) ), "got %s\n", wine_dbgstr_w(buf) );
+
+    /* From now on the stored file is returned, whatever the other arguments are. */
+    path2 = NULL;
+    hr = ISpObjectToken_GetStorageFileName( token, &CLSID_TestClass, L"Datafile", L"Other\\",
+                                            CSIDL_LOCAL_APPDATA, &path2 );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    ok( path2 && !wcscmp( path, path2 ), "got %s, expected %s\n", wine_dbgstr_w(path2), wine_dbgstr_w(path) );
+    CoTaskMemFree( path2 );
+
+    path2 = NULL;
+    hr = ISpObjectToken_GetStorageFileName( token, &CLSID_TestClass, L"Named", L"Winetest\\named.dat",
+                                            CSIDL_APPDATA | CSIDL_FLAG_CREATE, &path2 );
+    ok( hr == S_FALSE, "got %08lx\n", hr );
+    swprintf( expect, ARRAY_SIZE(expect), L"%s\\named.dat", dir );
+    ok( path2 && !wcscmp( path2, expect ), "got %s\n", wine_dbgstr_w(path2) );
+    ok( GetFileAttributesW( path2 ) != INVALID_FILE_ATTRIBUTES, "file %s not created\n", wine_dbgstr_w(path2) );
+    size = sizeof(buf);
+    res = RegGetValueW( HKEY_CURRENT_USER, files_key, L"Named", RRF_RT_REG_SZ, NULL, buf, &size );
+    ok( !res, "got %ld\n", res );
+    ok( !wcscmp( buf, L"%1a%\\Microsoft\\Speech\\Files\\Winetest\\named.dat" ), "got %s\n", wine_dbgstr_w(buf) );
+
+    DeleteFileW( path2 );
+    CoTaskMemFree( path2 );
+    DeleteFileW( path );
+    CoTaskMemFree( path );
+    RemoveDirectoryW( dir );
+
+    ISpDataKey_Release( attrs );
+    ISpObjectToken_Release( token );
+    RegDeleteTreeA( HKEY_CURRENT_USER, "Software\\Winetest\\sapi" );
+}
+
 START_TEST(token)
 {
     CoInitialize( NULL );
@@ -1173,6 +1258,7 @@ START_TEST(token)
     test_object_token();
     test_object_token_init();
     test_object_token_matches();
+    test_object_token_storage();
     tests_token_voices();
     CoUninitialize();
 }

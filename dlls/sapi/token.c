@@ -26,6 +26,7 @@
 #include "windef.h"
 #include "winbase.h"
 #include "objbase.h"
+#include "shlobj.h"
 #include "sapiddk.h"
 #include "sperror.h"
 
@@ -1750,6 +1751,56 @@ done:
     return hr;
 }
 
+/* A stored file path either is absolute or starts with "%<CSIDL in hex>%",
+ * which stands for that shell folder. */
+static HRESULT expand_storage_path( const WCHAR *stored, WCHAR **filepath )
+{
+    WCHAR folder[MAX_PATH] = L"";
+    const WCHAR *rest = stored, *end;
+    HRESULT hr;
+    size_t len;
+
+    if (stored[0] == '%' && (end = wcschr( stored + 1, '%' )))
+    {
+        ULONG csidl = wcstoul( stored + 1, NULL, 16 );
+
+        if (FAILED(hr = SHGetFolderPathW( NULL, csidl | CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, folder )))
+            return hr;
+        rest = end + 1;
+    }
+
+    len = wcslen( folder ) + wcslen( rest ) + 1;
+    if (!(*filepath = CoTaskMemAlloc( len * sizeof(WCHAR) )))
+        return E_OUTOFMEMORY;
+    wcscpy( *filepath, folder );
+    wcscat( *filepath, rest );
+    return S_OK;
+}
+
+static HRESULT create_storage_file( const WCHAR *path )
+{
+    WCHAR *dir, *p;
+    HANDLE file;
+
+    if (!(dir = wcsdup( path ))) return E_OUTOFMEMORY;
+    for (p = wcschr( dir, '\\' ); p; p = wcschr( p + 1, '\\' ))
+    {
+        if (p == dir || p[-1] == ':') continue;
+        *p = 0;
+        CreateDirectoryW( dir, NULL );
+        *p = '\\';
+    }
+    free( dir );
+
+    /* An existing file is kept as it is. */
+    file = CreateFileW( path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL );
+    if (file != INVALID_HANDLE_VALUE)
+        CloseHandle( file );
+    else if (GetLastError() != ERROR_FILE_EXISTS)
+        return HRESULT_FROM_WIN32( GetLastError() );
+    return S_OK;
+}
+
 static HRESULT WINAPI token_GetStorageFileName( ISpObjectTokenInit *iface,
                                                 REFCLSID caller,
                                                 LPCWSTR key_name,
@@ -1757,8 +1808,76 @@ static HRESULT WINAPI token_GetStorageFileName( ISpObjectTokenInit *iface,
                                                 ULONG folder,
                                                 LPWSTR *filepath )
 {
-    FIXME( "stub\n" );
-    return E_NOTIMPL;
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
+    ISpDataKey *caller_key, *files_key;
+    WCHAR clsid[39], name[40], *stored;
+    size_t len;
+    HRESULT hr;
+    GUID guid;
+
+    TRACE( "%p, %s, %s, %s, %#lx, %p\n", iface, debugstr_guid(caller), debugstr_w(key_name),
+           debugstr_w(filename), folder, filepath );
+
+    if (!This->data_key) return SPERR_UNINITIALIZED;
+    if (!filepath) return E_POINTER;
+    if (!key_name) return E_INVALIDARG;
+
+    /* The path is kept in <token>\<caller CLSID>\Files, under key_name. */
+    StringFromGUID2( caller, clsid, ARRAY_SIZE(clsid) );
+    if (FAILED(hr = ISpDataKey_CreateKey( This->data_key, clsid, &caller_key )))
+        return hr;
+    hr = ISpDataKey_CreateKey( caller_key, L"Files", &files_key );
+    ISpDataKey_Release( caller_key );
+    if (FAILED(hr)) return hr;
+
+    if (SUCCEEDED(hr = ISpDataKey_GetStringValue( files_key, key_name, &stored )))
+    {
+        hr = expand_storage_path( stored, filepath );
+        CoTaskMemFree( stored );
+        ISpDataKey_Release( files_key );
+        return hr;
+    }
+    if (hr != SPERR_NOT_FOUND || !folder)
+    {
+        ISpDataKey_Release( files_key );
+        return hr;
+    }
+
+    /* Not stored yet: the new file goes to "<folder>\Microsoft\Speech\Files\<filename>",
+     * with a generated name unless filename names a file. */
+    name[0] = 0;
+    if (!filename || !*filename || filename[wcslen( filename ) - 1] == '\\')
+    {
+        CoCreateGuid( &guid );
+        swprintf( name, ARRAY_SIZE(name), L"SP_%08lX%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X.dat",
+                  guid.Data1, guid.Data2, guid.Data3, guid.Data4[0], guid.Data4[1], guid.Data4[2],
+                  guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7] );
+    }
+
+    len = 64 + (filename ? wcslen( filename ) : 0) + wcslen( name );
+    if (!(stored = malloc( len * sizeof(WCHAR) )))
+    {
+        ISpDataKey_Release( files_key );
+        return E_OUTOFMEMORY;
+    }
+    swprintf( stored, len, L"%%%lx%%\\Microsoft\\Speech\\Files\\%s%s",
+              folder & ~CSIDL_FLAG_MASK, filename ? filename : L"", name );
+
+    if (SUCCEEDED(hr = expand_storage_path( stored, filepath )))
+    {
+        if (SUCCEEDED(hr = create_storage_file( *filepath )) &&
+            SUCCEEDED(hr = ISpDataKey_SetStringValue( files_key, key_name, stored )))
+            hr = S_FALSE; /* tells the caller that the file is new and empty */
+        if (FAILED(hr))
+        {
+            CoTaskMemFree( *filepath );
+            *filepath = NULL;
+        }
+    }
+
+    free( stored );
+    ISpDataKey_Release( files_key );
+    return hr;
 }
 
 static HRESULT WINAPI token_RemoveStorageFileName( ISpObjectTokenInit *iface,
