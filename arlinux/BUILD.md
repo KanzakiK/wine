@@ -178,3 +178,10 @@ products are independent of ordinary runtime assembly and are disabled by
 default. The rootfs/glibc capture product is separate. Retain capture limits,
 exact module identity and an uncaptured control run; initialization records do
 not establish rendered frames, successful replay or application compatibility.
+
+The ordinary component build also publishes its immutable, content-addressed
+release in the owning repository. The product's `download-receipt.json` records
+the exact release URL and hashes; retain it with the tested capture archive.
+No combined Wine archive or runtime-producer promotion is needed for these
+optional tools. Updating their source pin does not change an installed runtime
+or enable capture in normal application launches.
