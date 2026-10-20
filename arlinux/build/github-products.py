@@ -360,11 +360,6 @@ def fetch_product(reference, output):
                 import shutil
                 shutil.copyfile(cached, output/name)
                 return name, item['sha256']
-            artifacts = [item for item in record['artifacts'] if item['role'] in ('runtime', 'manifest')]
-            if len({item['name'] for item in artifacts}) != len(artifacts):
-                raise ValueError('Duplicate product artifact name')
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                files.update(pool.map(fetch_artifact, artifacts))
             # Each producer is ready independently; no product selection is
             # generated and no other producer blocks device deployment.
             manifest = record['runtimeManifest']
