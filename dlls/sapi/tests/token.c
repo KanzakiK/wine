@@ -1105,6 +1105,62 @@ static void test_object_token_init(void)
     RegDeleteTreeA( HKEY_CURRENT_USER, "Software\\Winetest\\sapi" );
 }
 
+static void test_object_token_matches(void)
+{
+    static const struct
+    {
+        const WCHAR *attrs;
+        BOOL match;
+    }
+    tests[] =
+    {
+        { L"Language=409", TRUE },
+        { L"Language=9", TRUE },
+        { L"Language=407", FALSE },
+        { L"Gender=Female;Language=409", TRUE },
+        { L"Gender=Male;Language=409", FALSE },
+        { L"Gender", TRUE },
+        { L"Age", FALSE },
+        { L"Age!=Adult", TRUE },
+        { L"Gender!=Female", FALSE },
+        { L"Gender!=Male", TRUE },
+        { L"gender=female", TRUE },
+        { L"", TRUE },
+        { NULL, TRUE },
+    };
+    ISpObjectToken *token;
+    ISpDataKey *attrs;
+    unsigned int i;
+    BOOL match;
+    HRESULT hr;
+
+    hr = CoCreateInstance( &CLSID_SpObjectToken, NULL, CLSCTX_INPROC_SERVER,
+                           &IID_ISpObjectToken, (void **)&token );
+    ok( hr == S_OK, "got %08lx\n", hr );
+    match = 0xdeadbeef;
+    hr = ISpObjectToken_MatchesAttributes( token, L"Language=409", &match );
+    ok( hr == SPERR_UNINITIALIZED, "got %08lx\n", hr );
+    ok( match == 0xdeadbeef, "got %d\n", match );
+    ISpObjectToken_Release( token );
+
+    token = create_storage_token( &attrs );
+
+    for (i = 0; i < ARRAY_SIZE(tests); i++)
+    {
+        match = !tests[i].match;
+        hr = ISpObjectToken_MatchesAttributes( token, tests[i].attrs, &match );
+        ok( hr == S_OK, "%u: got %08lx\n", i, hr );
+        ok( match == tests[i].match, "%u: got %d\n", i, match );
+    }
+
+    hr = ISpObjectToken_MatchesAttributes( token, L"Language=409", NULL );
+    ok( hr == E_INVALIDARG, "got %08lx\n", hr );
+
+    ISpDataKey_Release( attrs );
+    ISpObjectToken_Release( token );
+    RegDeleteTreeA( HKEY_CURRENT_USER, "Software\\Winetest\\sapi" );
+}
+
 START_TEST(token)
 {
     CoInitialize( NULL );
@@ -1116,6 +1172,7 @@ START_TEST(token)
     test_default_token_id();
     test_object_token();
     test_object_token_init();
+    test_object_token_matches();
     tests_token_voices();
     CoUninitialize();
 }
