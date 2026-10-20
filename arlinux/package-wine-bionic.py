@@ -164,7 +164,7 @@ def main():
     shutil.copyfile(gamepad_sources / 'dlls/winebus.sys/bus_arlinux.h', gamepad_destination / 'bus_arlinux.h')
     shutil.copyfile(gamepad_sources / 'arlinux/winebus/README.md', gamepad_destination / 'README.md')
     shutil.copyfile(gamepad_sources / 'COPYING.LIB', gamepad_destination / 'COPYING.LIB')
-    packaging = optimize(args.output, strip)
+    packaging = optimize(args.output, strip, remove_x64=False)
     for path in sorted(destination.rglob('*')):
         if path.is_file() and not path.is_symlink():
             with path.open('rb') as stream:

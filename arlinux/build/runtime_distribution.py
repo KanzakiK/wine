@@ -123,7 +123,7 @@ def publish_runtime_component(data, framework, record, built, complete=True):
                 spec = spec_from_file_location('wine_pe_debug', framework/'arlinux/wine_pe_debug.py')
                 optimizer = module_from_spec(spec)
                 spec.loader.exec_module(optimizer)
-                optimizer.optimize(runtime, framework.parent/'toolchains/mingw/bin/llvm-strip')
+                optimizer.optimize(runtime, framework.parent/'toolchains/mingw/bin/llvm-strip', remove_x64=False)
             metadata['files'] = {path.relative_to(runtime).as_posix(): sha(path)
                                   for path in sorted(runtime.rglob('*')) if path.is_file()}
             (runtime/'bionic-runtime.json').write_text(json.dumps(metadata, sort_keys=True)+'\n')
@@ -290,7 +290,7 @@ def resolve_index(path, fetch=None):
     names, paths, sources = set(), set(), {}
     for item in index['manifests']:
         name, filename, checksum = item['name'], item['file'], item['sha256']
-        if (not re.fullmatch('[a-z0-9-]+', name) or filename != 'arlinux-'+name+'.json'
+        if (not re.fullmatch('[a-z0-9_-]+', name) or filename != 'arlinux-'+name+'.json'
                 or name in names or not re.fullmatch('[0-9a-f]{64}', checksum)
                 or not runtime_url(item['url'], filename)
                 or type(item['bytes']) is not int or item['bytes'] <= 0):
@@ -337,7 +337,7 @@ def read_index(path):
     seen = set()
     for item in index['components']:
         if (not re.fullmatch('[0-9a-f]{64}', item['sha256'])
-                or not re.fullmatch(r'[a-z0-9-]+-'+item['sha256']+r'\.tar\.gz', item['file'])
+                or not re.fullmatch(r'[a-z0-9_-]+-'+item['sha256']+r'\.tar\.gz', item['file'])
                 or not runtime_url(item['url'], item['file']) or item['name'] in seen):
             raise ValueError('Invalid runtime component')
         seen.add(item['name'])
