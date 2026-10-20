@@ -1056,7 +1056,7 @@ static HRESULT score_attributes( ISpObjectToken *token, const WCHAR *attrs,
                 match[i] = FALSE;
                 for ( val = wcstok_s( res,  L";", &val_ctx ); val && !match[i];
                       val = wcstok_s( NULL, L";", &val_ctx ) )
-                    match[i] = !wcscmp( val, value );
+                    match[i] = !wcsicmp( val, value );
 
                 if (op == L'!') match[i] = !match[i];
             }
@@ -1804,8 +1804,20 @@ static HRESULT WINAPI token_MatchesAttributes( ISpObjectTokenInit *iface,
                                                LPCWSTR attributes,
                                                BOOL *matches )
 {
-    FIXME( "stub\n" );
-    return E_NOTIMPL;
+    struct object_token *This = impl_from_ISpObjectTokenInit( iface );
+    uint64_t score;
+    HRESULT hr;
+
+    TRACE( "%p, %s, %p\n", iface, debugstr_w(attributes), matches );
+
+    if (!This->data_key) return SPERR_UNINITIALIZED;
+    if (!matches) return E_INVALIDARG;
+
+    if (FAILED(hr = score_attributes( (ISpObjectToken *)iface, attributes, TRUE, &score )))
+        return hr;
+
+    *matches = !!score;
+    return S_OK;
 }
 
 static HRESULT WINAPI token_InitFromDataKey( ISpObjectTokenInit *iface,
