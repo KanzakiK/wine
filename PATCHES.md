@@ -765,7 +765,16 @@ This is the recommended branch. What it changes, by subsystem:
   `S_FALSE`). `ISpVoice` output is then byte-identical to that of Microsoft's complete
   5.1 `sapi.dll`, and vatSys 1.4.20's ATIS pattern (System.Speech into a 48 kHz stream)
   speaks, as do `SelectVoice()` and `<phoneme>` prompts. System.Speech itself needs SAPI
-  5.3 interfaces and does not start with the 5.1 `sapi.dll` as a whole
+  5.3 interfaces and does not start with the 5.1 `sapi.dll` as a whole. Windows 10 ships no
+  default voice in the registry either, but its SAPI picks one when a category without
+  `DefaultTokenId` is enumerated or asked for its default (the first token whose `Language`
+  contains the user's UI language, else the first token) and stores it under HKCU;
+  System.Speech, which enumerates the voices when a `SpeechSynthesizer` is constructed, reads
+  only that value and otherwise compares the voices with the thread's UI culture by walking
+  `CultureInfo.Parent` up to a neutral culture, which never ends for the invariant culture.
+  vatSys sets the invariant UI culture, so saving an ATIS hung forever in
+  `SpeechSynthesizer.Speak()`. `GetDefaultTokenId()` and `EnumTokens()` now store the
+  default as Windows does, and `SetDefaultTokenId()` is implemented
 - **msvcp**: the stream classes' move constructors and move assignment were exported as
   stubs, so a C++ application calling one aborted with "Call to unimplemented function" —
   Ableton Live's indexer did, on startup in a fresh prefix, so Live restarted it in a loop
