@@ -40,6 +40,23 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
 
+/* Serializes every mutation of a visual tree -- content, children, root --
+ * against the walks that read it.  A visual does not know its device, and
+ * SetContent()/SetTexture() arrive from the application's compositor thread
+ * while the tree timer walks the same tree in the window's thread (issue 248):
+ * the walk takes a snapshot of the leaves with references under this lock and
+ * reads the pixels outside it.  Ordering: taken after a device lock, never
+ * before one, and nothing that can enter DXGI or D3D runs under it -- replaced
+ * content is released and read back outside. */
+static CRITICAL_SECTION dcomp_content_cs;
+static CRITICAL_SECTION_DEBUG dcomp_content_cs_debug =
+{
+    0, 0, &dcomp_content_cs,
+    { &dcomp_content_cs_debug.ProcessLocksList, &dcomp_content_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": dcomp_content_cs") }
+};
+static CRITICAL_SECTION dcomp_content_cs = { &dcomp_content_cs_debug, -1, 0, 0, 0, 0 };
+
 /* Bumped by every change to a visual tree -- offset, opacity, visibility,
  * content, children.  dcomp_commit_visual_tree() records the value it
  * serialized against on the root, and Commit() writes the leaf set again only
@@ -1988,7 +2005,7 @@ static ULONG STDMETHODCALLTYPE dcomp_dynamic_texture_Release(IDCompositionDynami
 static HRESULT dcomp_dynamic_texture_set_texture(struct dcomp_dynamic_texture *dynamic,
         IDCompositionTexture *texture, ULONG_PTR rect_count)
 {
-    struct dcomp_texture *impl = NULL;
+    struct dcomp_texture *impl = NULL, *old;
 
     if (texture && !(impl = unsafe_impl_from_IDCompositionTexture(texture)))
     {
@@ -1996,16 +2013,17 @@ static HRESULT dcomp_dynamic_texture_set_texture(struct dcomp_dynamic_texture *d
         return E_INVALIDARG;
     }
 
-    if (impl)
+    if (texture)
         IDCompositionTexture_AddRef(texture);
-    if (dynamic->texture)
-        IDCompositionTexture_Release(&dynamic->texture->IDCompositionTexture_iface);
+    EnterCriticalSection(&dcomp_content_cs);
+    old = dynamic->texture;
     dynamic->texture = impl;
-
-    /* Force a fresh readback so the next tree composite shows this frame. */
     if (impl)
         impl->last_readback_tick = 0;
-
+    LeaveCriticalSection(&dcomp_content_cs);
+    /* Destruction can enter DXGI. Never release an old frame under the tree lock. */
+    if (old)
+        IDCompositionTexture_Release(&old->IDCompositionTexture_iface);
     return S_OK;
 }
 
@@ -2795,41 +2813,36 @@ static ULONG STDMETHODCALLTYPE dcomp_visual_AddRef(IDCompositionVisual *iface)
 static ULONG STDMETHODCALLTYPE dcomp_visual_Release(IDCompositionVisual *iface)
 {
     struct dcomp_visual *visual = impl_from_IDCompositionVisual(iface);
-    ULONG refcount = InterlockedDecrement(&visual->refcount);
+    struct dcomp_visual *child;
+    IUnknown *content;
+    ULONG refcount;
+    unsigned int p;
 
-    TRACE("%p, refcount %lu.\n", iface, refcount);
-
-    if (!refcount)
+    EnterCriticalSection(&dcomp_content_cs);
+    refcount = InterlockedDecrement(&visual->refcount);
+    if (refcount)
     {
-        /* Unlink from parent if still in a tree */
-        if (visual->parent)
-            dcomp_visual_unlink(visual);
-
-        /* Release all children */
-        {
-            struct dcomp_visual *child = visual->children;
-            while (child)
-            {
-                struct dcomp_visual *next = child->next_sibling;
-                child->parent = NULL;
-                child->prev_sibling = NULL;
-                child->next_sibling = NULL;
-                IDCompositionVisual_Release(&child->IDCompositionVisual_iface);
-                child = next;
-            }
-            visual->children = NULL;
-        }
-
-        if (visual->content)
-            IUnknown_Release(visual->content);
-        {
-            unsigned int p;
-            for (p = 0; p < DCOMP_ANIMATED_COUNT; ++p)
-                dcomp_visual_animation_clear(&visual->animations[p]);
-        }
-        free(visual);
+        LeaveCriticalSection(&dcomp_content_cs);
+        return refcount;
     }
-    return refcount;
+    if (visual->parent)
+        dcomp_visual_unlink(visual);
+    while ((child = visual->children))
+    {
+        dcomp_visual_unlink(child);
+        LeaveCriticalSection(&dcomp_content_cs);
+        IDCompositionVisual_Release(&child->IDCompositionVisual_iface);
+        EnterCriticalSection(&dcomp_content_cs);
+    }
+    content = visual->content;
+    visual->content = NULL;
+    LeaveCriticalSection(&dcomp_content_cs);
+    if (content)
+        IUnknown_Release(content);
+    for (p = 0; p < DCOMP_ANIMATED_COUNT; ++p)
+        dcomp_visual_animation_clear(&visual->animations[p]);
+    free(visual);
+    return 0;
 }
 
 static HRESULT STDMETHODCALLTYPE dcomp_visual_SetOffsetXAnimation(IDCompositionVisual *iface,
@@ -2954,17 +2967,6 @@ static IDXGISwapChain1 *dcomp_content_as_foreign_swapchain(IUnknown *content)
     return swapchain;
 }
 
-static void dcomp_visual_drop_foreign_proxy(struct dcomp_visual *visual)
-{
-    struct dcomp_visual *proxy = visual->foreign_proxy;
-
-    if (!proxy)
-        return;
-    visual->foreign_proxy = NULL;
-    dcomp_visual_unlink(proxy);
-    IDCompositionVisual_Release(&proxy->IDCompositionVisual_iface);
-}
-
 /* Show a foreign swapchain through an internal child at the bottom of the
  * visual's children, where the content of a visual belongs.  The child is an
  * ordinary texture visual in every respect but its source, so the composite
@@ -3028,19 +3030,22 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_SetContent(IDCompositionVisual *if
 {
     struct dcomp_visual *visual = impl_from_IDCompositionVisual(iface);
     IDCompositionSurface *surface_iface = NULL;
+    struct dcomp_visual prepared = {0};
+    struct dcomp_visual *old_proxy;
+    IUnknown *old_content;
 
     FIXME("iface %p, content %p (visual: target_hwnd %p).\n",
             iface, content, visual->target_hwnd);
     dcomp_visual_tree_changed();
 
-    if (visual->content)
-        IUnknown_Release(visual->content);
-    dcomp_visual_drop_foreign_proxy(visual);
-
-    visual->content = content;
-    visual->surface_content = NULL;
-    visual->texture_content = NULL;
-    visual->dynamic_content = NULL;
+    /* Query external graphics interfaces without the tree lock. In
+     * particular GetDesc1 can take a DXGI lock held by a concurrent SetContent
+     * caller. Build a detached visual, then atomically publish its content. */
+    prepared.target_hwnd = visual->target_hwnd;
+    prepared.content = content;
+    prepared.surface_content = NULL;
+    prepared.texture_content = NULL;
+    prepared.dynamic_content = NULL;
     if (content)
     {
         IDXGISwapChain1 *foreign;
@@ -3048,8 +3053,8 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_SetContent(IDCompositionVisual *if
         /* The proxy holds the swapchain; the visual itself has to stay without
          * content, or the tree counts as one whose root presents for itself. */
         if ((foreign = dcomp_content_as_foreign_swapchain(content))
-                && dcomp_visual_attach_foreign_swapchain(visual, foreign))
-            content = visual->content = NULL;
+                && dcomp_visual_attach_foreign_swapchain(&prepared, foreign))
+            content = prepared.content = NULL;
     }
     if (content)
     {
@@ -3062,27 +3067,48 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_SetContent(IDCompositionVisual *if
         if (SUCCEEDED(IUnknown_QueryInterface(content, &IID_IDCompositionSurface,
                 (void **)&surface_iface)))
         {
-            visual->surface_content = impl_from_IDCompositionSurface(surface_iface);
+            prepared.surface_content = impl_from_IDCompositionSurface(surface_iface);
             IDCompositionSurface_Release(surface_iface);
             FIXME("Visual %p: content is DComp surface %p (%ux%u).\n",
-                    visual, visual->surface_content,
-                    visual->surface_content->width, visual->surface_content->height);
+                    visual, prepared.surface_content,
+                    prepared.surface_content->width, prepared.surface_content->height);
         }
         /* ... or one of our composition textures (issue 90) */
         else if (SUCCEEDED(IUnknown_QueryInterface(content, &IID_IDCompositionTexture,
                 (void **)&texture_iface)))
         {
-            visual->texture_content = unsafe_impl_from_IDCompositionTexture(texture_iface);
+            prepared.texture_content = unsafe_impl_from_IDCompositionTexture(texture_iface);
             IDCompositionTexture_Release(texture_iface);
         }
         /* ... or a dynamic texture (issue 95) */
         else if (SUCCEEDED(IUnknown_QueryInterface(content, &IID_IDCompositionDynamicTexture,
                 (void **)&dynamic_iface)))
         {
-            visual->dynamic_content = unsafe_impl_from_IDCompositionDynamicTexture(dynamic_iface);
+            prepared.dynamic_content = unsafe_impl_from_IDCompositionDynamicTexture(dynamic_iface);
             IDCompositionDynamicTexture_Release(dynamic_iface);
         }
     }
+
+    EnterCriticalSection(&dcomp_content_cs);
+    old_content = visual->content;
+    old_proxy = visual->foreign_proxy;
+    if (old_proxy)
+        dcomp_visual_unlink(old_proxy);
+    visual->content = prepared.content;
+    visual->surface_content = prepared.surface_content;
+    visual->texture_content = prepared.texture_content;
+    visual->dynamic_content = prepared.dynamic_content;
+    visual->foreign_proxy = prepared.foreign_proxy;
+    if (prepared.foreign_proxy)
+    {
+        dcomp_visual_unlink(prepared.foreign_proxy);
+        dcomp_visual_prepend(visual, prepared.foreign_proxy);
+    }
+    LeaveCriticalSection(&dcomp_content_cs);
+    if (old_content)
+        IUnknown_Release(old_content);
+    if (old_proxy)
+        IDCompositionVisual_Release(&old_proxy->IDCompositionVisual_iface);
 
     /* Only redirect root visuals (no parent) to target_hwnd.
      * Child visuals keep their hidden comp window; the root's
@@ -3121,6 +3147,9 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_SetContent(IDCompositionVisual *if
 }
 
 static HRESULT STDMETHODCALLTYPE dcomp_visual_AddVisual(IDCompositionVisual *iface,
+        IDCompositionVisual *visual, BOOL insert_above, IDCompositionVisual *reference_visual);
+
+static HRESULT STDMETHODCALLTYPE dcomp_visual_AddVisual_locked(IDCompositionVisual *iface,
         IDCompositionVisual *visual, BOOL insert_above, IDCompositionVisual *reference_visual)
 {
     struct dcomp_visual *parent = impl_from_IDCompositionVisual(iface);
@@ -3139,8 +3168,9 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_AddVisual(IDCompositionVisual *ifa
     if (child->parent)
     {
         dcomp_visual_unlink(child);
-        IDCompositionVisual_Release(visual);
     }
+    else
+        IDCompositionVisual_AddRef(visual);
 
     /* Inherit target_hwnd from root of tree */
     if (parent->target_hwnd)
@@ -3165,74 +3195,94 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_AddVisual(IDCompositionVisual *ifa
             dcomp_visual_insert_before(ref, child);
     }
 
-    IDCompositionVisual_AddRef(visual);
+    return S_OK;
+}
 
-    /* If child already has content, enable child mode on its swapchain */
-    if (child->content)
-        dcomp_send_child_mode(child->content);
+static HRESULT STDMETHODCALLTYPE dcomp_visual_AddVisual(IDCompositionVisual *iface,
+        IDCompositionVisual *visual, BOOL insert_above, IDCompositionVisual *reference_visual)
+{
+    HRESULT result;
+    struct dcomp_visual *root = impl_from_IDCompositionVisual(iface);
 
-    /* Serialize tree info for the root's target window */
+    EnterCriticalSection(&dcomp_content_cs);
+    result = dcomp_visual_AddVisual_locked(iface, visual, insert_above, reference_visual);
+    LeaveCriticalSection(&dcomp_content_cs);
+    if (SUCCEEDED(result))
     {
-        struct dcomp_visual *root = parent;
+        dcomp_send_child_mode(impl_from_IDCompositionVisual(visual)->content);
         while (root->parent)
             root = root->parent;
         if (root->target_hwnd)
             dcomp_commit_visual_tree(root->target_hwnd, root);
     }
-
-    return S_OK;
+    return result;
 }
 
 static HRESULT STDMETHODCALLTYPE dcomp_visual_RemoveVisual(IDCompositionVisual *iface,
         IDCompositionVisual *visual)
 {
-    struct dcomp_visual *child = impl_from_IDCompositionVisual(visual);
+    struct dcomp_visual *child, *root = impl_from_IDCompositionVisual(iface);
+    BOOL removed;
 
     FIXME("iface %p, visual %p.\n", iface, visual);
-    dcomp_visual_tree_changed();
 
     if (!visual)
         return E_INVALIDARG;
-
-    if (child->parent)
+    child = impl_from_IDCompositionVisual(visual);
+    EnterCriticalSection(&dcomp_content_cs);
+    removed = child->parent == root;
+    if (removed)
     {
-        struct dcomp_visual *root = child->parent;
+        dcomp_visual_tree_changed();
         dcomp_visual_unlink(child);
+    }
+    LeaveCriticalSection(&dcomp_content_cs);
+    if (removed)
+    {
         IDCompositionVisual_Release(visual);
-
-        /* Re-serialize tree after removal */
         while (root->parent)
             root = root->parent;
         if (root->target_hwnd)
             dcomp_commit_visual_tree(root->target_hwnd, root);
     }
-
     return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE dcomp_visual_RemoveAllVisuals(IDCompositionVisual *iface)
 {
     struct dcomp_visual *parent = impl_from_IDCompositionVisual(iface);
-    struct dcomp_visual *child = parent->children;
+    struct dcomp_visual *child, **children;
+    SIZE_T count = 0, i = 0;
 
     FIXME("iface %p.\n", iface);
-    dcomp_visual_tree_changed();
 
-    while (child)
+    EnterCriticalSection(&dcomp_content_cs);
+    for (child = parent->children; child; child = child->next_sibling)
+        if (!child->is_foreign_proxy) ++count;
+    if (count && !(children = calloc(count, sizeof(*children))))
+    {
+        LeaveCriticalSection(&dcomp_content_cs);
+        return E_OUTOFMEMORY;
+    }
+    if (!count) children = NULL;
+    dcomp_visual_tree_changed();
+    /* A detached child may immediately be reparented on another thread. Keep
+     * owned references in a private array, never in its mutable sibling links. */
+    for (child = parent->children; child; )
     {
         struct dcomp_visual *next = child->next_sibling;
-        child->parent = NULL;
-        child->prev_sibling = NULL;
-        child->next_sibling = NULL;
         /* Not one of the application's visuals: it is the parent's content. */
         if (!child->is_foreign_proxy)
-            IDCompositionVisual_Release(&child->IDCompositionVisual_iface);
+        {
+            children[i++] = child;
+            dcomp_visual_unlink(child);
+        }
         child = next;
     }
-    parent->children = NULL;
-    if (parent->foreign_proxy)
-        dcomp_visual_prepend(parent, parent->foreign_proxy);
-
+    LeaveCriticalSection(&dcomp_content_cs);
+    for (i = 0; i < count; ++i)
+        IDCompositionVisual_Release(&children[i]->IDCompositionVisual_iface);
+    free(children);
     return S_OK;
 }
 
@@ -4053,6 +4103,9 @@ struct dcomp_leaf_stats
  * removed code: an application that does build such a tree says so in the log
  * instead of losing its pixels in silence. */
 static unsigned int dcomp_serialize_visual_leaves(HWND target_hwnd, struct dcomp_visual *visual,
+        int base_x, int base_y, float base_opacity, unsigned int idx, struct dcomp_leaf_stats *stats);
+
+static unsigned int dcomp_serialize_visual_leaves_locked(HWND target_hwnd, struct dcomp_visual *visual,
         int base_x, int base_y, float base_opacity, unsigned int idx, struct dcomp_leaf_stats *stats)
 {
     WCHAR prop_name[64];
@@ -4154,6 +4207,17 @@ static unsigned int dcomp_serialize_visual_leaves(HWND target_hwnd, struct dcomp
         idx = dcomp_serialize_visual_leaves(target_hwnd, child, vx, vy, op, idx, stats);
 
     return idx;
+}
+
+static unsigned int dcomp_serialize_visual_leaves(HWND target_hwnd, struct dcomp_visual *visual,
+        int base_x, int base_y, float base_opacity, unsigned int idx, struct dcomp_leaf_stats *stats)
+{
+    unsigned int result;
+
+    EnterCriticalSection(&dcomp_content_cs);
+    result = dcomp_serialize_visual_leaves_locked(target_hwnd, visual, base_x, base_y, base_opacity, idx, stats);
+    LeaveCriticalSection(&dcomp_content_cs);
+    return result;
 }
 
 /* What a target last reported about itself.  Two reports must not repeat every
@@ -4895,38 +4959,77 @@ static void dcomp_surface_ensure_bits(struct dcomp_surface *surface)
     SetRectEmpty(&surface->pending_dirty);
 }
 
-static void dcomp_target_composite_leaves(struct dcomp_target *target, struct dcomp_visual *visual,
-        int base_x, int base_y, float base_opacity)
+/* The composite walk does not read a D3D or DXGI resource under the tree
+ * lock: a readback can wait for the application's immediate context, and the
+ * thread holding that may be the one calling SetContent().  The walk takes a
+ * flat snapshot of the leaves instead, each with a reference, so a mutation
+ * cannot free the content while the readback and the pixel blend consume it. */
+struct dcomp_composite_leaf
+{
+    struct dcomp_composite_leaf *next;
+    struct dcomp_surface *surface;
+    struct dcomp_texture *texture;
+    IUnknown *content;
+    int x, y;
+    unsigned int opacity;
+};
+
+static BOOL dcomp_snapshot_leaves(struct dcomp_visual *visual, int base_x, int base_y,
+        float base_opacity, struct dcomp_composite_leaf ***tail)
 {
     struct dcomp_visual *child;
-    int vx = base_x + (int)visual->offset_x;
-    int vy = base_y + (int)visual->offset_y;
-    float op = base_opacity * visual->opacity;
-    unsigned int opacity;
+    struct dcomp_composite_leaf *leaf;
+    struct dcomp_texture *texture;
+    int x = base_x + (int)visual->offset_x;
+    int y = base_y + (int)visual->offset_y;
+    float opacity = base_opacity * visual->opacity;
 
-    /* An invisible visual hides its subtree; opacity multiplies down it
-     * (issue 363).  Note the backdrop of this path is the window itself: a
-     * translucent leaf composited over its own previous delivery converges to
-     * opaque across timer passes, as any leaf pixel below alpha 255 does here. */
-    if (!visual->visible || op <= 0.0f)
-        return;
-    opacity = wine_dcomp_opacity_to_prop(op);
+    if (!visual->visible || opacity <= 0.0f)
+        return TRUE;
+    texture = dcomp_visual_effective_texture(visual);
+    if (visual->surface_content || texture || visual->content)
+    {
+        if (!(leaf = calloc(1, sizeof(*leaf))))
+            return FALSE;
+        leaf->x = x;
+        leaf->y = y;
+        leaf->opacity = wine_dcomp_opacity_to_prop(opacity);
+        if ((leaf->surface = visual->surface_content))
+            IDCompositionSurface_AddRef(&leaf->surface->IDCompositionSurface_iface);
+        else if ((leaf->texture = texture))
+            IDCompositionTexture_AddRef(&texture->IDCompositionTexture_iface);
+        else if ((leaf->content = visual->content))
+            IUnknown_AddRef(leaf->content);
+        **tail = leaf;
+        *tail = &leaf->next;
+    }
+    for (child = visual->children; child; child = child->next_sibling)
+        if (!dcomp_snapshot_leaves(child, x, y, opacity, tail))
+            return FALSE;
+    return TRUE;
+}
 
-    if (visual->surface_content && visual->surface_content->bits)
+static void dcomp_composite_leaf(struct dcomp_target *target, struct dcomp_composite_leaf *leaf)
+{
+    int vx = leaf->x, vy = leaf->y;
+    unsigned int opacity = leaf->opacity;
+
+    if (leaf->surface && leaf->surface->bits)
     {
         /* Not hashed — never skip-unchanged this tree. */
         target->walk_leaf_hash_valid = FALSE;
-        dcomp_surface_ensure_bits(visual->surface_content);
+        dcomp_surface_ensure_bits(leaf->surface);
         dcomp_composite_premul_over(target->comp_bits, target->comp_width, target->comp_height,
-                visual->surface_content->bits, visual->surface_content->width,
-                visual->surface_content->height, vx, vy, opacity);
+                leaf->surface->bits, leaf->surface->width,
+                leaf->surface->height, vx, vy, opacity);
     }
-    else if (dcomp_visual_effective_texture(visual))
+    else if (leaf->texture)
     {
         /* Composition texture leaf (issue 90) or dynamic texture frame (issue 95) */
-        struct dcomp_texture *tex = dcomp_visual_effective_texture(visual);
+        struct dcomp_texture *tex = leaf->texture;
 
-        /* Not hashed — never skip-unchanged this tree. */
+        /* Not hashed — never skip-unchanged this tree.  The leaf holds a
+         * reference, so the readback below works on the texture itself. */
         target->walk_leaf_hash_valid = FALSE;
 
         dcomp_texture_ensure_bits(tex);
@@ -4936,7 +5039,7 @@ static void dcomp_target_composite_leaves(struct dcomp_target *target, struct dc
                     tex->bits, tex->bits_width, tex->bits_height, vx, vy, opacity);
         }
     }
-    else if (visual->content)
+    else if (leaf->content)
     {
         WCHAR prop_name[64];
         HWND comp_wnd;
@@ -4945,7 +5048,7 @@ static void dcomp_target_composite_leaves(struct dcomp_target *target, struct dc
 
         /* Same lookup the serializer uses: comp window via desktop prop. */
         swprintf(prop_name, ARRAY_SIZE(prop_name),
-                WINE_DCOMP_WND_PROP_FMT, GetCurrentProcessId(), (UINT_PTR)visual->content);
+                WINE_DCOMP_WND_PROP_FMT, GetCurrentProcessId(), (UINT_PTR)leaf->content);
         comp_wnd = (HWND)GetPropW(GetDesktopWindow(), prop_name);
         if (comp_wnd)
         {
@@ -4974,8 +5077,42 @@ static void dcomp_target_composite_leaves(struct dcomp_target *target, struct dc
         }
     }
 
-    for (child = visual->children; child; child = child->next_sibling)
-        dcomp_target_composite_leaves(target, child, vx, vy, op);
+}
+
+static BOOL dcomp_target_composite_leaves(struct dcomp_target *target, struct dcomp_visual *root,
+        int base_x, int base_y, float base_opacity)
+{
+    struct dcomp_composite_leaf *leaves = NULL, **tail = &leaves, *leaf, *next;
+    struct dcomp_visual *child;
+    BOOL complete = TRUE;
+
+    EnterCriticalSection(&dcomp_content_cs);
+    /* Snapshot the complete child list under the mutation lock. Taking the
+     * lock separately for each child leaves the first/next pointer exposed to
+     * SetContent replacing and destroying its private swapchain proxy. */
+    for (child = root->children; child; child = child->next_sibling)
+        if (!(complete = dcomp_snapshot_leaves(child, base_x, base_y, base_opacity, &tail)))
+            break;
+    LeaveCriticalSection(&dcomp_content_cs);
+    if (complete)
+        for (leaf = leaves; leaf; leaf = leaf->next)
+            dcomp_composite_leaf(target, leaf);
+    else
+        WARN("Could not allocate a composition frame snapshot.\n");
+    /* Destruction may release an external graphics object, so it must also be
+     * outside the tree lock. The frame's references close the lifetime gap. */
+    for (leaf = leaves; leaf; leaf = next)
+    {
+        next = leaf->next;
+        if (leaf->surface)
+            IDCompositionSurface_Release(&leaf->surface->IDCompositionSurface_iface);
+        if (leaf->texture)
+            IDCompositionTexture_Release(&leaf->texture->IDCompositionTexture_iface);
+        if (leaf->content)
+            IUnknown_Release(leaf->content);
+        free(leaf);
+    }
+    return complete;
 }
 
 /* Does any visual below this one carry content of its own?  Pointer walk over
@@ -5014,7 +5151,7 @@ static BOOL dcomp_visual_subtree_has_content(struct dcomp_visual *visual)
  * composition.  So the verdict latches on first content and never goes back —
  * from then on this target behaves exactly as it did before.  Only a tree that
  * has never carried a single leaf stays out of the way. */
-static BOOL dcomp_target_tree_carries_content(struct dcomp_target *target)
+static BOOL dcomp_target_tree_carries_content_locked(struct dcomp_target *target)
 {
     struct dcomp_visual *child;
 
@@ -5038,11 +5175,23 @@ static BOOL dcomp_target_tree_carries_content(struct dcomp_target *target)
     return FALSE;
 }
 
+static BOOL dcomp_target_tree_carries_content(struct dcomp_target *target)
+{
+    BOOL result;
+
+    EnterCriticalSection(&dcomp_content_cs);
+    result = dcomp_target_tree_carries_content_locked(target);
+    LeaveCriticalSection(&dcomp_content_cs);
+    return result;
+}
+
 /* Pixel extent this leaf would occupy in the composition, derived the same way
  * dcomp_target_composite_leaves() derives it — but without paying for it: no
  * texture readback, no pixel pointer, only the dimensions.  FALSE when the
  * visual carries no content of its own or its size is not known yet. */
-static BOOL dcomp_visual_leaf_extent(struct dcomp_visual *visual, UINT *w, UINT *h)
+static BOOL dcomp_visual_leaf_extent(struct dcomp_visual *visual, UINT *w, UINT *h);
+
+static BOOL dcomp_visual_leaf_extent_locked(struct dcomp_visual *visual, UINT *w, UINT *h)
 {
     struct dcomp_texture *tex;
 
@@ -5084,6 +5233,16 @@ static BOOL dcomp_visual_leaf_extent(struct dcomp_visual *visual, UINT *w, UINT 
         return *w && *h;
     }
     return FALSE;
+}
+
+static BOOL dcomp_visual_leaf_extent(struct dcomp_visual *visual, UINT *w, UINT *h)
+{
+    BOOL result;
+
+    EnterCriticalSection(&dcomp_content_cs);
+    result = dcomp_visual_leaf_extent_locked(visual, w, h);
+    LeaveCriticalSection(&dcomp_content_cs);
+    return result;
 }
 
 /* -------------------------------------------------------------------------
@@ -5222,7 +5381,7 @@ static void dcomp_target_collect_covered(struct dcomp_visual *visual, int base_x
         dcomp_target_collect_covered(child, vx, vy, op, region, unresolved);
 }
 
-static void dcomp_target_update_covered(struct dcomp_target *target, const RECT *client_rc)
+static void dcomp_target_update_covered_locked(struct dcomp_target *target, const RECT *client_rc)
 {
     struct dcomp_visual *child;
     BOOL unresolved = FALSE;
@@ -5326,6 +5485,13 @@ static void dcomp_target_update_covered(struct dcomp_target *target, const RECT 
     }
 
     DeleteObject(current);
+}
+
+static void dcomp_target_update_covered(struct dcomp_target *target, const RECT *client_rc)
+{
+    EnterCriticalSection(&dcomp_content_cs);
+    dcomp_target_update_covered_locked(target, client_rc);
+    LeaveCriticalSection(&dcomp_content_cs);
 }
 
 /* Blit a region rectangle by rectangle.  Clipping the destination and running
@@ -5657,10 +5823,10 @@ static void dcomp_target_publish_layer(struct dcomp_target *target, const RECT *
     unsigned int w = rc->right, h = rc->bottom, back, n, i;
     RECT rects[WINE_DCOMP_LAYER_MAX_RECTS];
     struct wine_dcomp_layer *layer;
-    struct dcomp_visual *child;
     UINT saved_w, saved_h;
     DWORD *saved_bits;
     RECT clip, box;
+    BOOL composed;
 
     if (!root || !w || !h)
         return;
@@ -5754,12 +5920,14 @@ static void dcomp_target_publish_layer(struct dcomp_target *target, const RECT *
     target->comp_bits = target->layer_buf[back];
     target->comp_width = w;
     target->comp_height = h;
-    for (child = root->children; child; child = child->next_sibling)
-        dcomp_target_composite_leaves(target, child, (int)root->offset_x, (int)root->offset_y,
-                dcomp_visual_root_opacity(root));
+    composed = dcomp_target_composite_leaves(target, root, (int)root->offset_x, (int)root->offset_y,
+            dcomp_visual_root_opacity(root));
     target->comp_bits = saved_bits;
     target->comp_width = saved_w;
     target->comp_height = saved_h;
+
+    if (!composed)
+        return;
 
     memcpy(target->layer_dirty[back], rects, n * sizeof(*rects));
     target->layer_dirty_n[back] = n;
@@ -5792,10 +5960,10 @@ static void dcomp_target_publish_layer(struct dcomp_target *target, const RECT *
 static void dcomp_target_deliver_region(struct dcomp_target *target, const RECT *rc, HRGN rgn)
 {
     struct dcomp_visual *root = target->root_visual;
-    struct dcomp_visual *child;
     RECT box, clip_rc;
     HRGN vacated;
     HDC hdc;
+    BOOL composed = TRUE;
 
     if (!dcomp_region_delivery() || !rgn)
         return;
@@ -5913,13 +6081,12 @@ static void dcomp_target_deliver_region(struct dcomp_target *target, const RECT 
             ReleaseDC(target->hwnd, hdc_win);
         }
 
-        for (child = root->children; child; child = child->next_sibling)
-            dcomp_target_composite_leaves(target, child,
-                    (int)root->offset_x, (int)root->offset_y, dcomp_visual_root_opacity(root));
+        composed = dcomp_target_composite_leaves(target, root,
+                (int)root->offset_x, (int)root->offset_y, dcomp_visual_root_opacity(root));
     }
     LeaveCriticalSection(&target->device->cs);
 
-    if (!target->comp_dc || !(hdc = GetDC(target->hwnd)))
+    if (!composed || !target->comp_dc || !(hdc = GetDC(target->hwnd)))
         return;
 
     /* An empty clip means the blit cannot reach the window -- BitBlt returns
@@ -6165,9 +6332,9 @@ static void dcomp_target_join_deliver_thread(struct dcomp_target *target)
 static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_timer)
 {
     struct dcomp_visual *root;
-    struct dcomp_visual *child;
     RECT rc;
     HDC hdc;
+    BOOL composed = TRUE;
 
     if (!target->device || !target->hwnd || !IsWindow(target->hwnd))
         return;
@@ -6317,15 +6484,17 @@ static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_t
             }
         }
 
-        for (child = root->children; child; child = child->next_sibling)
-            dcomp_target_composite_leaves(target, child,
-                    (int)root->offset_x, (int)root->offset_y, dcomp_visual_root_opacity(root));
+        composed = dcomp_target_composite_leaves(target, root,
+                (int)root->offset_x, (int)root->offset_y, dcomp_visual_root_opacity(root));
 
         if (++comp_tree_log <= 5 || !(comp_tree_log % 100))
             FIXME("Composited visual tree #%u onto target hwnd %p (%ldx%ld).\n",
                     comp_tree_log, target->hwnd, (long)rc.right, (long)rc.bottom);
     }
     LeaveCriticalSection(&target->device->cs);
+
+    if (!composed)
+        return;
 
     if (target->comp_dc)
     {
@@ -7126,7 +7295,9 @@ static BOOL dcomp_target_animate(struct dcomp_target *target, LONGLONG now, BOOL
 
     if (!target->root_visual)
         return FALSE;
+    EnterCriticalSection(&dcomp_content_cs);
     active = dcomp_visual_animate(target->root_visual, now, commit);
+    LeaveCriticalSection(&dcomp_content_cs);
     if (target->foreign || !target->hwnd)
         return active;
     if (active && (target->root_visual->surface_content || target->root_visual->content))
