@@ -989,7 +989,14 @@ static void get_window_list( struct desktop *desktop, struct window *win, struct
     }
     else if (!is_desktop_window( win ))  /* siblings starting from specified window */
     {
-        for (child = win; child; child = get_next_window( child ))
+        /* A window that is not linked into its parent's z-order sits in the
+         * parent's unlinked list (set_parent_window() with a NULL parent, the
+         * first step of destroying it from another thread).  Walking from there
+         * towards the end of the children list never gets there: it loops
+         * through the unlinked list, and the server with it. */
+        append_window_to_list( win, thread, 0, handles, count, max_count );
+        if (!win->is_linked) return;
+        for (child = get_next_window( win ); child; child = get_next_window( child ))
             append_window_to_list( child, thread, 0, handles, count, max_count );
     }
     else  /* desktop window siblings */
@@ -2744,7 +2751,8 @@ DECL_HANDLER(get_class_windows)
         if (!parent) parent = get_desktop_window( current );
         if (!(win = get_window( req->child ))) return;
         if (win->parent != parent) return;
-        if (!(win = get_next_window( win ))) return;
+        /* an unlinked window has no successor in the z-order, see get_window_list() */
+        if (!win->is_linked || !(win = get_next_window( win ))) return;
     }
     else if (parent && !(win = get_first_child( parent ))) return;
 
