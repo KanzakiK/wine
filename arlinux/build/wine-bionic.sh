@@ -32,7 +32,6 @@ mkdir "$stage/source"
 git -C "$source_dir" archive HEAD | tar -xf - -C "$stage/source"
 source_dir="$stage/source"
 python3 "$repo/arlinux/build/refresh-wine-vkd3d.py" "$source_dir"
-bash "$repo/arlinux/build/prepare-wine-dcomp.sh" "$source_dir"
 (cd "$source_dir" && perl tools/make_requests)
 # Maintained Wine fixes are part of the archived fork, shared with PE builds.
 (cd "$source_dir/dlls/winevulkan" && python3 make_vulkan)
@@ -110,8 +109,7 @@ for source in files:
 shutil.copytree(stage/'fex', output/'fex', ignore=shutil.ignore_patterns('*.cpp', '*.h', '*.o'))
 metadata = dict(wine_commit=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip(),
                 wine_version=(stage/'source/VERSION').read_text().strip(),
-                fex_commit=subprocess.check_output(['git','-C',str(fex),'rev-parse','HEAD'],text=True).strip(),
-                directComposition=json.loads((stage/'source/arlinux-dcomp.json').read_text()))
+                fex_commit=subprocess.check_output(['git','-C',str(fex),'rev-parse','HEAD'],text=True).strip())
 vkd3d = stage/'source/arlinux-vkd3d.json'
 if vkd3d.is_file(): metadata['vkd3d'] = json.loads(vkd3d.read_text())
 (output/'wine-build.json').write_text(json.dumps(metadata,sort_keys=True)+'\n')

@@ -1589,8 +1589,10 @@ struct x11drv_window_surface
     GC                    gc;
     struct x11drv_image  *image;
     BOOL                  byteswap;
-    Pixmap                input_shape; /* cached alpha mask, independent of WS_EX_TRANSPARENT */
-    BOOL                  per_pixel_alpha; /* which X shape owns the current mask */
+    BOOL                  glass_alpha; /* per-pixel alpha from a DWM-glass window */
+    int                   shape_kind;  /* ShapeBounding or ShapeInput once a mask is set, 0 before */
+    DWORD                 input_shape_time;    /* tick of the last ShapeInput update */
+    BOOL                  input_shape_pending; /* a contour change is waiting for the throttle */
 };
 
 static struct x11drv_window_surface *get_x11_surface( struct window_surface *surface )
@@ -1778,37 +1780,20 @@ static void x11drv_surface_set_clip( struct window_surface *window_surface, cons
 
     TRACE( "surface %p, rects %p, count %u\n", surface, rects, count );
 
-    if (!count)
+    /* No region and an empty region are opposites: the first lifts the clip, the
+     * second leaves nothing to flush.  A top-level that a pixel format child
+     * covers completely has an empty surface region (an embedded plug-in editor
+     * is exactly as large as its top-level), and flushing it unclipped paints
+     * the surface over what the child presented. */
+    if (!rects)
         XSetClipMask( gdi_display, surface->gc, None );
+    else if (!count)
+        XSetClipRectangles( gdi_display, surface->gc, 0, 0, NULL, 0, YXBanded );
     else if ((xrects = xrectangles_from_rects( rects, count )))
     {
         XSetClipRectangles( gdi_display, surface->gc, 0, 0, xrects, count, YXBanded );
         free( xrects );
     }
-}
-
-/* Keep input-mask synchronization separate from the surface mutex: window
- * style callbacks already hold win_data_mutex, while flush holds the surface
- * mutex. Neither path may acquire the other's lock. */
-static pthread_mutex_t input_shape_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-void sync_window_surface_input_shape( struct window_surface *window_surface, Window window, DWORD ex_style )
-{
-#ifdef HAVE_LIBXSHAPE
-    struct x11drv_window_surface *surface = window_surface ? get_x11_surface( window_surface ) : NULL;
-
-    pthread_mutex_lock( &input_shape_mutex );
-    if (ex_style & WS_EX_TRANSPARENT)
-    {
-        XRectangle empty = {0};
-        XShapeCombineRectangles( gdi_display, window, ShapeInput, 0, 0, &empty, 1, ShapeSet, YXBanded );
-    }
-    else
-        XShapeCombineMask( gdi_display, window, ShapeInput, 0, 0,
-                surface && surface->window == window ? surface->input_shape : None, ShapeSet );
-    XFlush( gdi_display );
-    pthread_mutex_unlock( &input_shape_mutex );
-#endif
 }
 
 /***********************************************************************
@@ -1821,15 +1806,8 @@ static BOOL x11drv_surface_flush( struct window_surface *window_surface, const R
     UINT alpha_mask = window_surface->alpha_mask, alpha_bits = window_surface->alpha_bits;
     struct x11drv_window_surface *surface = get_x11_surface( window_surface );
     XImage *ximage = surface->image->ximage;
-    BOOL per_pixel_alpha = ximage->depth == 32 && alpha_mask && !window_surface->shape_region
-            && window_surface->color_key == CLR_INVALID;
     const unsigned char *src = color_bits;
     unsigned char *dst = (unsigned char *)ximage->data;
-
-    /* A color-key/region transition can leave identical mask bits while
-     * changing whether the mask belongs to ShapeBounding or ShapeInput. */
-    if (surface->per_pixel_alpha != per_pixel_alpha) shape_changed = TRUE;
-    surface->per_pixel_alpha = per_pixel_alpha;
 
     if (alpha_bits == -1)
     {
@@ -1841,6 +1819,12 @@ static BOOL x11drv_surface_flush( struct window_surface *window_surface, const R
             alpha_bits = ~(colors[0] | colors[1] | colors[2]);
         }
     }
+
+    /* A DWM-glass window takes its alpha from the pixels.  win32u derives
+     * alpha_bits from the LWA_ALPHA constant opacity, which would force every
+     * pixel opaque here; that constant is already applied by the window
+     * manager through _NET_WM_WINDOW_OPACITY (sync_window_opacity). */
+    if (surface->glass_alpha) alpha_bits = 0;
 
     if (src != dst)
     {
@@ -1862,31 +1846,24 @@ static BOOL x11drv_surface_flush( struct window_surface *window_surface, const R
                 ptr[x] |= alpha_bits;
     }
 
-    if (shape_changed)
+    /* A per-pixel-alpha surface on a 32-bit visual gets its mask as the input
+     * shape only (see below), so whatever the mask cuts away has to be
+     * transparent in the image itself.  For the alpha part it already is; a
+     * colour key is not: UpdateLayeredWindow blends without a source alpha and
+     * leaves the keyed pixels opaque, and they stayed on screen (issue 434 -
+     * Microsoft Agent's characters on a solid box).  Clear them to 0, which on
+     * a premultiplied visual is fully transparent.  Surfaces without a colour
+     * key are left exactly as they were. */
+    if (alpha_mask && ximage->depth == 32 && window_surface->color_key != CLR_INVALID && shape_bits)
     {
-#ifdef HAVE_LIBXSHAPE
-        Pixmap shape = None;
+        int x, y, stride = ximage->bytes_per_line / sizeof(ULONG);
+        UINT shape_stride = shape_info->bmiHeader.biSizeImage / abs( shape_info->bmiHeader.biHeight );
+        const BYTE *shape = (const BYTE *)shape_bits + dirty->top * shape_stride;
+        ULONG *ptr = (ULONG *)ximage->data + dirty->top * stride;
 
-        if (shape_bits)
-        {
-            struct gdi_image_bits bits = {.ptr = (void *)shape_bits};
-            XVisualInfo vis = default_visual;
-
-            vis.depth = 1;
-            shape = create_pixmap_from_image( 0, &vis, shape_info, &bits, DIB_RGB_COLORS );
-        }
-
-        /* ARGB pixels provide visual transparency. Bounding holes leave stale
-         * pixels in redirected Xwayland pixmaps; remove them before uploading.
-         * Keep the existing bounding-shape path for regions and color keys. */
-        XShapeCombineMask( gdi_display, surface->window, ShapeBounding, 0, 0,
-                per_pixel_alpha ? None : shape, ShapeSet );
-        pthread_mutex_lock( &input_shape_mutex );
-        if (surface->input_shape) XFreePixmap( gdi_display, surface->input_shape );
-        surface->input_shape = per_pixel_alpha ? shape : None;
-        pthread_mutex_unlock( &input_shape_mutex );
-        if (!per_pixel_alpha && shape) XFreePixmap( gdi_display, shape );
-#endif
+        for (y = dirty->top; y < dirty->bottom; y++, ptr += stride, shape += shape_stride)
+            for (x = dirty->left; x < dirty->right; x++)
+                if (!(shape[x / 8] & (0x80 >> (x % 8)))) ptr[x] = 0;
     }
 
     if (!put_shm_image( ximage, &surface->image->shminfo, surface->window, surface->gc, rect, dirty ))
@@ -1894,11 +1871,79 @@ static BOOL x11drv_surface_flush( struct window_surface *window_surface, const R
                    dirty->top, rect->left + dirty->left, rect->top + dirty->top,
                    dirty->right - dirty->left, dirty->bottom - dirty->top );
 
-    if (shape_changed)
-        sync_window_surface_input_shape( window_surface, surface->window,
-                NtUserGetWindowLongW( window_surface->hwnd, GWL_EXSTYLE ));
+    /* The surface bitmap lives in the shared memory segment XShmPutImage reads
+     * from, and the server only reads it when it gets to the request.  Anything
+     * painted into the surface before then - typically a background erase that
+     * follows a resize - is what the server puts on screen, not what was there
+     * when the flush was issued.  Wait for the request to complete. */
+    XSync( gdi_display, False );
 
-    XFlush( gdi_display );
+#ifdef HAVE_LIBXSHAPE
+    {
+        int kind = ShapeBounding;
+
+        /* A per-pixel-alpha surface on a 32-bit visual is composited with its
+         * alpha by the window manager, so a bounding shape adds nothing to what
+         * is shown.  Setting one on every change of the contour does harm: an
+         * animated layered popup that resizes every frame (FL Studio's About
+         * fruit) made KWin show a strip of it or nothing for single frames, 16
+         * times in 36 test cycles against 0 without the bounding shape.  Keep
+         * the mask as the input shape only, so that clicks on transparent pixels
+         * still pass through, let it lag a running animation by up to a
+         * second (the first mask and a removal go out at once),
+         * and set it only after the image is in place: a shape change makes the
+         * window manager repaint, and a repaint between the resize and the put
+         * is exactly the frame that shows a strip. */
+        if (alpha_mask && ximage->depth == 32)
+        {
+            DWORD now = NtGetTickCount();
+
+            kind = ShapeInput;
+            if (shape_changed && shape_bits && surface->shape_kind == ShapeInput &&
+                now - surface->input_shape_time < 1000)
+            {
+                surface->input_shape_pending = TRUE;
+                shape_changed = FALSE;
+            }
+            else if (!shape_changed && surface->input_shape_pending && now - surface->input_shape_time >= 1000)
+            {
+                shape_changed = TRUE;
+            }
+            if (shape_changed && (NtUserGetWindowLongW( window_surface->hwnd, GWL_EXSTYLE ) & WS_EX_TRANSPARENT))
+                shape_changed = FALSE;  /* sync_window_input_shape keeps such windows fully click-through */
+        }
+
+        if (shape_changed)
+        {
+            /* the mask moves between the two kinds only with the visual; drop the old one */
+            if (surface->shape_kind && surface->shape_kind != kind)
+                XShapeCombineMask( gdi_display, surface->window, surface->shape_kind, 0, 0, None, ShapeSet );
+
+            if (!shape_bits)
+            {
+                XShapeCombineMask( gdi_display, surface->window, kind, 0, 0, None, ShapeSet );
+                surface->shape_kind = 0;
+            }
+            else
+            {
+                struct gdi_image_bits bits = {.ptr = (void *)shape_bits};
+                XVisualInfo vis = default_visual;
+                Pixmap shape;
+
+                vis.depth = 1;
+                shape = create_pixmap_from_image( 0, &vis, shape_info, &bits, DIB_RGB_COLORS );
+                XShapeCombineMask( gdi_display, surface->window, kind, 0, 0, shape, ShapeSet );
+                XFreePixmap( gdi_display, shape );
+                surface->shape_kind = kind;
+            }
+            if (kind == ShapeInput)
+            {
+                surface->input_shape_time = NtGetTickCount();
+                surface->input_shape_pending = FALSE;
+            }
+        }
+    }
+#endif /* HAVE_LIBXSHAPE */
 
     return TRUE;
 }
@@ -1911,7 +1956,6 @@ static void x11drv_surface_destroy( struct window_surface *window_surface )
     struct x11drv_window_surface *surface = get_x11_surface( window_surface );
 
     TRACE( "freeing %p\n", surface );
-    if (surface->input_shape) XFreePixmap( gdi_display, surface->input_shape );
     if (surface->gc) XFreeGC( gdi_display, surface->gc );
     if (surface->image) x11drv_image_destroy( surface->image );
 }
@@ -1928,7 +1972,7 @@ static const struct window_surface_funcs x11drv_surface_funcs =
  *           create_surface
  */
 static struct window_surface *create_surface( HWND hwnd, Window window, const XVisualInfo *vis, const RECT *rect,
-                                              BOOL use_alpha )
+                                              BOOL use_alpha, BOOL glass_alpha )
 {
     const XPixmapFormatValues *format = pixmap_formats[vis->depth];
     char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
@@ -1987,6 +2031,7 @@ static struct window_surface *create_surface( HWND hwnd, Window window, const XV
     else
     {
         surface = get_x11_surface( window_surface );
+        surface->glass_alpha = glass_alpha;
         surface->image = image;
         surface->byteswap = byteswap;
         surface->window = window;
@@ -2019,18 +2064,6 @@ BOOL X11DRV_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_re
     TRACE( "hwnd %p, layered %u, surface_rect %s, surface %p\n", hwnd, layered, wine_dbgstr_rect( surface_rect ), surface );
 
     if (!(data = get_win_data( hwnd ))) return TRUE; /* use default surface */
-    if (layered)
-    {
-        data->layered = TRUE;
-        if (!data->embedded && argb_visual.visualid) set_window_visual( data, &argb_visual, TRUE );
-    }
-    else if (argb_visual.visualid && !enable_direct_drawing( data, FALSE ) &&
-             (NtUserGetWindowLongW( hwnd, GWL_EXSTYLE ) & (WS_EX_TRANSPARENT | WS_EX_LAYERED)) == WS_EX_TRANSPARENT)
-    {
-        /* Leave an unpainted transparent window clear. GDI flushes still force
-         * opaque alpha, until UpdateLayeredWindow supplies per-pixel alpha. */
-        set_window_visual( data, &argb_visual, FALSE );
-    }
     if ((previous = *surface) && previous->funcs == &x11drv_surface_funcs)
     {
         Window window = get_x11_surface(previous)->window;
@@ -2040,22 +2073,35 @@ BOOL X11DRV_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_re
     }
     if (previous) window_surface_release( previous );
 
-    if (!layered && enable_direct_drawing( data, layered ))
+    if (layered)
     {
-        *surface = NULL;  /* indicate that we want to draw directly to the window */
-        goto done; /* draw directly to the window */
+        data->layered = TRUE;
+        data->wants_argb = 1; /* UpdateLayeredWindow always needs per-pixel alpha */
+        data->ulw_surface = 1; /* consulted by needs_offscreen_rendering() */
+        if (!data->embedded && argb_visual.visualid) set_window_visual( data, &argb_visual, TRUE );
+    }
+    else
+    {
+        data->ulw_surface = 0;
+        /* a DWM-glass window is per-pixel alpha capable even without ULW */
+        update_window_argb_visual( data );
+        /* Keep direct drawing for a glass window and only change the visual.
+         * Forcing the win32u surface instead (as the ULW path does) was measured
+         * and rejected: it produced black frames because the content keeps
+         * arriving through the GL child window while the surface is flushed
+         * empty. */
+        if (enable_direct_drawing( data, layered ))
+        {
+            *surface = NULL;  /* indicate that we want to draw directly to the window */
+            goto done; /* draw directly to the window */
+        }
     }
 
     *surface = create_surface( data->hwnd, data->whole_window, &data->vis, surface_rect,
-                               layered ? data->use_alpha : FALSE );
+                               (layered || data->wants_argb) ? data->use_alpha : FALSE,
+                               !layered && data->wants_argb );
 
 done:
-    if (data->surface != *surface)
-    {
-        if (*surface) window_surface_add_ref( *surface );
-        if (data->surface) window_surface_release( data->surface );
-        data->surface = *surface;
-    }
     release_win_data( data );
     return TRUE;
 }

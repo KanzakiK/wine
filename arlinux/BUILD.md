@@ -4,6 +4,16 @@ This Wine fork owns Bionic Wine integration, the component dependency graph,
 source archives, hosted dispatch and public runtime selection. Rootfs products
 only download the runtime on demand. They neither build nor dispatch Wine.
 
+Our implementation upstream is [giang17/wine](https://github.com/giang17/wine),
+branch `d2d1-dcomp-11.19`, integrated at
+`e5ba49a4892ba58246e226b473f07ad9610501bd` to retain the current Wine 11.19 base.
+Merge that upstream into the ARLinux branch; do not replace individual DComp
+files from another revision or replay our old DComp readback/lifetime patch.
+Direct2D, DirectComposition and related fixes follow the upstream source tree.
+Android/Bionic integration remains in this fork. Wine Staging VKD3D is a separate
+input, not included by selecting giang17 as upstream; its pinned refresh remains.
+The resulting ARLinux commit identifies the complete compiled Wine sources.
+
 The workstation entry is the Android repository's `build.ps1`; follow its
 [canonical entry guide](https://github.com/taowen/arlinux/blob/main/docs/BUILD.md).
 `arlinux/build.sh` and `arlinux/build/` are the implementation used by that entry
@@ -57,8 +67,8 @@ adaptations, ARM64 APC handling and Vulkan/window/memory fixes. Native and PE
 builds archive the same pinned Git tree instead of replaying those patches.
 `@wine` includes these source files in compiler identities, so changing them
 invalidates affected outputs without an additional patch manifest. The former
-standalone patches remain recoverable in Git history. The external, pinned
-DirectComposition and Wine Staging VKD3D preparation is separate and unchanged.
+standalone patches remain recoverable in Git history. DirectComposition comes
+from the integrated upstream; only the pinned Wine Staging VKD3D refresh remains.
 
 FEX is pinned to the taowen/FEX fork commit
 `371b6f6dc4086321ee53ec9cf032615476389f51`, retaining the ARM64EC

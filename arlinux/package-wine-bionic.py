@@ -76,7 +76,6 @@ def main():
         if target.is_symlink():
             target.unlink()
         shutil.copyfile(explorer, target)
-    dcomp_record = original['directComposition']
     configuration = destination / 'etc/dxvk.conf'
     configuration.parent.mkdir(parents=True, exist_ok=True)
     configuration.write_text('[msedgewebview2.exe]\n'
@@ -188,8 +187,6 @@ def main():
                                   tls=bool(list(unix.glob('libgnutls.so*')))),
                     limitations=([] if opengl else ['No OpenGL backend']) + ([] if args.vulkan_driver != 'none' else
                                  ['Vulkan driver not packaged']), files=hashes)
-    if dcomp_record:
-        metadata['directComposition'] = dcomp_record
     if original.get('vkd3d'):
         metadata['vkd3d'] = original['vkd3d']
     (args.output / 'bionic-runtime.json').write_text(json.dumps(metadata, indent=2) + '\n')

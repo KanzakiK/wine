@@ -627,6 +627,7 @@ HRESULT WINAPI RegisterDragDrop(HWND hwnd, LPDROPTARGET pDropTarget)
  */
 HRESULT WINAPI RevokeDragDrop(HWND hwnd)
 {
+  DWORD pid = 0;
   HANDLE map;
   IStream *stream;
   IDropTarget *drop_target;
@@ -641,10 +642,14 @@ HRESULT WINAPI RevokeDragDrop(HWND hwnd)
     return DRAGDROP_E_INVALIDHWND;
   }
 
-  /* Both the interface pointer and mapping handle belong to the owner. */
+  /* block revoke for other processes windows; the stored drop target
+   * pointer is only valid in the registering process */
   GetWindowThreadProcessId(hwnd, &pid);
   if (pid != GetCurrentProcessId())
-    return RPC_E_WRONG_THREAD;
+  {
+    FIXME("revoke for another process windows is disabled\n");
+    return DRAGDROP_E_INVALIDHWND;
+  }
 
   /* no registration data */
   if (!(map = get_droptarget_handle(hwnd)))

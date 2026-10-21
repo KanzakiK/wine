@@ -1,2 +1,4 @@
 /build/
 /arlinux/**/__pycache__/
+build-host/
+build-host-*/

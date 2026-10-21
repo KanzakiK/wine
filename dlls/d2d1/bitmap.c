@@ -91,6 +91,8 @@ static ULONG STDMETHODCALLTYPE d2d_bitmap_Release(ID2D1Bitmap1 *iface)
             ID3D11RenderTargetView_Release(bitmap->rtv);
         if (bitmap->surface)
             IDXGISurface_Release(bitmap->surface);
+        if (bitmap->color_context)
+            ID2D1ColorContext_Release(bitmap->color_context);
         ID3D11Resource_Release(bitmap->resource);
         ID2D1Factory_Release(bitmap->factory);
         free(bitmap);
@@ -249,7 +251,12 @@ static HRESULT STDMETHODCALLTYPE d2d_bitmap_CopyFromMemory(ID2D1Bitmap1 *iface,
 
 static void STDMETHODCALLTYPE d2d_bitmap_GetColorContext(ID2D1Bitmap1 *iface, ID2D1ColorContext **context)
 {
-    FIXME("iface %p, context %p stub!\n", iface, context);
+    struct d2d_bitmap *bitmap = impl_from_ID2D1Bitmap1(iface);
+
+    TRACE("iface %p, context %p.\n", iface, context);
+
+    if ((*context = bitmap->color_context))
+        ID2D1ColorContext_AddRef(*context);
 }
 
 static D2D1_BITMAP_OPTIONS STDMETHODCALLTYPE d2d_bitmap_GetOptions(ID2D1Bitmap1 *iface)
@@ -357,35 +364,68 @@ static const struct ID2D1Bitmap1Vtbl d2d_bitmap_vtbl =
     d2d_bitmap_Unmap,
 };
 
-static BOOL format_supported(const D2D1_PIXEL_FORMAT *format)
+/* The formats bitmaps can be created in, with the alpha modes each takes and
+ * whether it can be a target.  Also the answer
+ * ID2D1DeviceContext::IsDxgiFormatSupported() gives, there for the format
+ * alone.  Measured on Windows 10 for every DXGI format and alpha mode, with
+ * and without D2D1_BITMAP_OPTIONS_TARGET (test_dxgi_format_support). */
+static const struct
+{
+    D2D1_PIXEL_FORMAT format;
+    BOOL target;
+}
+supported_formats[] =
+{
+    {{DXGI_FORMAT_R32G32B32A32_FLOAT,    D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R32G32B32A32_FLOAT,    D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R16G16B16A16_FLOAT,    D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R16G16B16A16_FLOAT,    D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R16G16B16A16_UNORM,    D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R16G16B16A16_UNORM,    D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R10G10B10A2_UNORM,     D2D1_ALPHA_MODE_PREMULTIPLIED}, FALSE},
+    {{DXGI_FORMAT_R10G10B10A2_UNORM,     D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_R8G8B8A8_UNORM,        D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R8G8B8A8_UNORM,        D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_R8G8_UNORM,            D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_R8_UNORM,              D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_A8_UNORM,              D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_A8_UNORM,              D2D1_ALPHA_MODE_STRAIGHT     }, TRUE },
+    {{DXGI_FORMAT_BC1_UNORM,             D2D1_ALPHA_MODE_PREMULTIPLIED}, FALSE},
+    {{DXGI_FORMAT_BC1_UNORM,             D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_BC2_UNORM,             D2D1_ALPHA_MODE_PREMULTIPLIED}, FALSE},
+    {{DXGI_FORMAT_BC2_UNORM,             D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_BC3_UNORM,             D2D1_ALPHA_MODE_PREMULTIPLIED}, FALSE},
+    {{DXGI_FORMAT_BC3_UNORM,             D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_B8G8R8A8_UNORM,        D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_B8G8R8A8_UNORM,        D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+    {{DXGI_FORMAT_B8G8R8X8_UNORM,        D2D1_ALPHA_MODE_IGNORE       }, FALSE},
+    {{DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_PREMULTIPLIED}, TRUE },
+    {{DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_IGNORE       }, TRUE },
+};
+
+static BOOL format_supported(const D2D1_PIXEL_FORMAT *format, D2D1_BITMAP_OPTIONS options)
 {
     unsigned int i;
 
-    static const D2D1_PIXEL_FORMAT supported_formats[] =
+    for (i = 0; i < ARRAY_SIZE(supported_formats); ++i)
     {
-        {DXGI_FORMAT_R32G32B32A32_FLOAT,    D2D1_ALPHA_MODE_PREMULTIPLIED},
-        {DXGI_FORMAT_R32G32B32A32_FLOAT,    D2D1_ALPHA_MODE_IGNORE       },
-        {DXGI_FORMAT_R16G16B16A16_FLOAT,    D2D1_ALPHA_MODE_PREMULTIPLIED},
-        {DXGI_FORMAT_R16G16B16A16_FLOAT,    D2D1_ALPHA_MODE_IGNORE       },
-        {DXGI_FORMAT_R16G16B16A16_UNORM,    D2D1_ALPHA_MODE_PREMULTIPLIED},
-        {DXGI_FORMAT_R16G16B16A16_UNORM,    D2D1_ALPHA_MODE_IGNORE       },
-        {DXGI_FORMAT_R8G8B8A8_UNORM,        D2D1_ALPHA_MODE_PREMULTIPLIED},
-        {DXGI_FORMAT_R8G8B8A8_UNORM,        D2D1_ALPHA_MODE_IGNORE       },
-        {DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_PREMULTIPLIED},
-        {DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_IGNORE       },
-        {DXGI_FORMAT_A8_UNORM,              D2D1_ALPHA_MODE_PREMULTIPLIED},
-        {DXGI_FORMAT_A8_UNORM,              D2D1_ALPHA_MODE_STRAIGHT     },
-        {DXGI_FORMAT_B8G8R8A8_UNORM,        D2D1_ALPHA_MODE_PREMULTIPLIED},
-        {DXGI_FORMAT_B8G8R8A8_UNORM,        D2D1_ALPHA_MODE_IGNORE       },
-        {DXGI_FORMAT_B8G8R8X8_UNORM,        D2D1_ALPHA_MODE_IGNORE       },
-        {DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_PREMULTIPLIED},
-        {DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,   D2D1_ALPHA_MODE_IGNORE       },
-    };
+        if (supported_formats[i].format.format == format->format
+                && supported_formats[i].format.alphaMode == format->alphaMode)
+            return !(options & D2D1_BITMAP_OPTIONS_TARGET) || supported_formats[i].target;
+    }
+
+    return FALSE;
+}
+
+BOOL d2d_dxgi_format_supported(DXGI_FORMAT format)
+{
+    unsigned int i;
 
     for (i = 0; i < ARRAY_SIZE(supported_formats); ++i)
     {
-        if (supported_formats[i].format == format->format
-                && supported_formats[i].alphaMode == format->alphaMode)
+        if (supported_formats[i].format.format == format)
             return TRUE;
     }
 
@@ -407,6 +447,8 @@ static void d2d_bitmap_init(struct d2d_bitmap *bitmap, struct d2d_device_context
     bitmap->dpi_x = desc->dpiX;
     bitmap->dpi_y = desc->dpiY;
     bitmap->options = desc->bitmapOptions;
+    if (desc->colorContext)
+        ID2D1ColorContext_AddRef(bitmap->color_context = desc->colorContext);
 
     if (d2d_device_context_is_dxgi_target(context))
         ID3D11Resource_QueryInterface(resource, &IID_IDXGISurface, (void **)&bitmap->surface);
@@ -458,7 +500,7 @@ HRESULT d2d_bitmap_create(struct d2d_device_context *context, D2D1_SIZE_U size, 
     ID3D11Texture2D *texture;
     HRESULT hr;
 
-    if (!format_supported(&desc->pixelFormat))
+    if (!format_supported(&desc->pixelFormat, desc->bitmapOptions))
     {
         WARN("Tried to create bitmap with unsupported format {%#x / %#x}.\n",
                 desc->pixelFormat.format, desc->pixelFormat.alphaMode);
@@ -591,7 +633,7 @@ HRESULT d2d_bitmap_create_shared(struct d2d_device_context *context, REFIID iid,
         }
         desc = &d;
 
-        if (!format_supported(&desc->pixelFormat))
+        if (!format_supported(&desc->pixelFormat, desc->bitmapOptions))
         {
             WARN("Tried to create bitmap with unsupported format {%#x / %#x}.\n",
                     desc->pixelFormat.format, desc->pixelFormat.alphaMode);
@@ -761,7 +803,9 @@ HRESULT d2d_bitmap_create_from_wic_bitmap(struct d2d_device_context *context, IW
     switch (bitmap_desc.pixelFormat.format)
     {
         case DXGI_FORMAT_B8G8R8A8_UNORM:
+        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
         case DXGI_FORMAT_R8G8B8A8_UNORM:
+        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
             bpp = 4;
             break;
 

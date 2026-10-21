@@ -5,8 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 
-PE = ('arlinux/build/wine-pe.sh', 'arlinux/build/refresh-wine-vkd3d.py',
-      'arlinux/build/prepare-wine-dcomp.sh', 'arlinux/patches',
+PE = ('arlinux/build/wine-pe.sh', 'arlinux/build/refresh-wine-vkd3d.py', 'arlinux/patches',
       'arlinux/components/windows-integration')
 SOURCES = {
     'bionic-deps': ('arlinux/components/bionic-deps', 'tools/build', 'toolchain.json'),
