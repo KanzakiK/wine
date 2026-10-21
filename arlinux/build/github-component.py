@@ -225,7 +225,14 @@ def import_dependency(root, dependency, visited=None, *, recursive=True):
     visited.add(dependency['identity'])
     directory = root / 'incoming' / dependency['identity']
     directory.mkdir(parents=True, exist_ok=True)
-    manifest = download(dependency['manifestUrl'], directory/'component.json', dependency['manifestSha256'])
+    manifest = directory/'component.json'
+    if 'manifestText' in dependency:
+        contents = dependency['manifestText'].encode('utf-8')
+        if hashlib.sha256(contents).hexdigest() != dependency['manifestSha256']:
+            raise ValueError('Pinned dependency manifest SHA-256 mismatch')
+        manifest.write_bytes(contents)
+    else:
+        manifest = download(dependency['manifestUrl'], manifest, dependency['manifestSha256'])
     record = json.loads(manifest.read_text())
     if record['identity'] != dependency['identity']:
         raise ValueError('Dependency identity mismatch')
@@ -376,6 +383,11 @@ def publish(data, framework):
     output = root / 'export'
     output.mkdir(exist_ok=True)
     record = dict(data)
+    if record.get('cacheSeed'):
+        # Cache provenance is useful, but embedding its full prior manifest in
+        # each completion marker would recursively grow dispatch requests.
+        record['cacheSeed'] = {key: value for key, value in record['cacheSeed'].items()
+                               if key != 'manifestText'}
     paths = []
     if stage == 'windows-fonts':
         paths = [root/'vendor/fonts']

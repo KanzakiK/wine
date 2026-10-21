@@ -218,6 +218,10 @@ class Coordinator:
                         if seed['stage']!=stage:
                             raise ValueError('Cache seed belongs to a different component')
                         request['cacheSeed']['identity']=seed['identity']
+                        # The fixed release can be replaced while this job is
+                        # queued. Pin the already verified manifest bytes, not
+                        # a second read of its mutable completion-marker URL.
+                        request['cacheSeed']['manifestText']=file.read_bytes().decode('utf-8')
             payload=json.dumps(request,sort_keys=True)
             gh('workflow','run',self.plan['workflow'],'--repo',repository,'-f','request='+payload)
             print('START '+repository+'/'+stage,flush=True)
