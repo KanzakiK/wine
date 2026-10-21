@@ -579,6 +579,7 @@ void wayland_surface_clear_role(struct wayland_surface *surface)
             zxdg_toplevel_decoration_v1_destroy(surface->decoration);
             surface->decoration = NULL;
         }
+        surface->server_side_decoration = FALSE;
 
         if (surface->xdg_toplevel)
         {
