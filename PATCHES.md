@@ -196,7 +196,11 @@ This is the recommended branch. What it changes, by subsystem:
   leaf was being read from could be released under the walk, the access violation reported
   for Power BI Desktop in giang17/wine pull request 24; `SetRoot()` holds a reference on the
   root visual, which it never did (an application that releases its own reference after
-  `SetRoot()` left the target with a dangling pointer)
+  `SetRoot()` left the target with a dangling pointer); a `Commit()` from another thread than
+  the window's no longer composites the tree in the caller but posts the composite to the
+  window's thread (`WM_WINE_DCOMP_COMMIT_COMPOSITE`), where the tree timer runs it as well —
+  measured with Ableton Live 12, Chromium's compositor thread entered the composite of a target
+  while the timer pass was still inside it, and both wrote the composition buffer and blitted it
 - **DComp on a layered top-level without attributes**: a rootless visual tree whose target
   is a top-level window with `WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP` and no layered
   attributes is presented with `UpdateLayeredWindow()`, composited over a transparent
