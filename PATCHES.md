@@ -358,6 +358,16 @@ This is the recommended branch. What it changes, by subsystem:
   start still fails on `Windows.Storage.Streams.IInputStreamReference`, which is in no `.winmd`
   Wine installs (widl puts only the types of one IDL file into its `.winmd`, and
   `windows.storage.streams.idl` gets none)
+- **msxml3**: the SAX writer (`MXXMLWriter`) accepts `putDocumentLocator()`, and with indentation
+  enabled it no longer writes a newline before the first element or indents the end tag of an
+  element with text, which changed the text content (backport of 7981b37f728 from Wine 11.4 and
+  of 138e23626e3 and 75b3d038b58 from Wine 11.11). The Analysis Services engine of Power BI
+  Desktop (`msmdsrv.exe` 17.0) rewrites its `msmdsrv.ini` through `SAXXMLReader` into an
+  indenting `MXXMLWriter`: the `E_NOTIMPL` from `putDocumentLocator()` aborted the parse and the
+  engine exited before it opened its port, and with the old indentation `<Port>0</Port>` came
+  back as `0` followed by a line break and a tab, so the next start rejected the file
+  (`msmdsrv_Failed_ini.bak`). The engine now starts and listens; it still stops right after
+  `listen()` at `ImpersonateAnonymousToken()`, which is a stub in Wine
 - **winemenubuilder**: a shortcut without arguments no longer produces a desktop entry whose
   `Exec` line ends in an empty `""` argument (backport of 1977760e374 from Wine 11.19). vatSys,
   which registers the `vatsys://` URL protocol, exited silently during its .NET start-up when
