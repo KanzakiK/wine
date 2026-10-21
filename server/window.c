@@ -1460,11 +1460,30 @@ static struct region *clip_pixel_format_children( struct window *parent, struct 
          * so an embedded JUCE editor flickered with the host's background whenever
          * the host repainted its whole window.  The same holds for a child that
          * composes over a layered top-level from another process: Chromium's
-         * "Intermediate D3D Window" carries WS_EX_TRANSPARENT. */
+         * "Intermediate D3D Window" carries WS_EX_TRANSPARENT.
+         *
+         * A transparent child still has to be descended into, though: a foreign
+         * window below it draws into our drawable just the same.  WinForms gives a
+         * control with BackColor=Transparent WS_EX_TRANSPARENT, and Power BI Desktop
+         * hosts each of its WebView2 views in such a control; skipping the whole
+         * subtree left the browser windows in the surface region, so the full-window
+         * erase of the form's Refresh() on every step of its own title-bar drag was
+         * flushed over what the GPU process had drawn there.  The transparent child
+         * itself is neither added nor subtracted, only its subtree is walked. */
         if ((ptr->ex_style & WS_EX_TRANSPARENT) &&
             !(ptr->paint_flags & (PAINT_HAS_PIXEL_FORMAT | PAINT_PIXEL_FORMAT_CHILD)) &&
             !composes_over_layered_ancestor( ptr, top ))
+        {
+            if (foreign_child_clip_disabled()) continue;
+            set_region_rect( clip, &ptr->client_rect );
+            if (ptr->win_region && !intersect_window_region( clip, ptr )) break;
+            offset_region( clip, offset_x, offset_y );
+            if (!intersect_region( clip, clip, parent_clip )) break;
+            if (!clip_pixel_format_children( ptr, clip, region, offset_x + ptr->client_rect.left,
+                                             offset_y + ptr->client_rect.top, owner, top ))
+                break;
             continue;
+        }
 
         /* add the visible rect */
         set_region_rect( clip, &ptr->visible_rect );
