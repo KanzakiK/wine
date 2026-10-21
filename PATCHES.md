@@ -366,8 +366,16 @@ This is the recommended branch. What it changes, by subsystem:
   indenting `MXXMLWriter`: the `E_NOTIMPL` from `putDocumentLocator()` aborted the parse and the
   engine exited before it opened its port, and with the old indentation `<Port>0</Port>` came
   back as `0` followed by a line break and a tab, so the next start rejected the file
-  (`msmdsrv_Failed_ini.bak`). The engine now starts and listens; it still stops right after
-  `listen()` at `ImpersonateAnonymousToken()`, which is a stub in Wine
+  (`msmdsrv_Failed_ini.bak`). The engine now starts and listens; the next stop was
+  `ImpersonateAnonymousToken()` (ntdll, below)
+- **ntdll**: `NtImpersonateAnonymousToken()` lets the thread impersonate a new token for the
+  anonymous logon SID (S-1-5-7) at `SecurityImpersonation` level, without privileges, as
+  measured on Windows 10 19045; the stub returned `STATUS_NOT_IMPLEMENTED`, also upstream as of
+  Wine 11.20. Windows lists only the untrusted mandatory label as group and uses logon session
+  `0x3e6`; here the anonymous logon SID is the only group, because the server takes the primary
+  group from the group list. The Analysis Services engine of Power BI Desktop calls
+  `ImpersonateAnonymousToken()` right after `listen()` and stopped with "Invalid function"; it
+  now keeps listening and writes its port file
 - **winemenubuilder**: a shortcut without arguments no longer produces a desktop entry whose
   `Exec` line ends in an empty `""` argument (backport of 1977760e374 from Wine 11.19). vatSys,
   which registers the `vatsys://` URL protocol, exited silently during its .NET start-up when
