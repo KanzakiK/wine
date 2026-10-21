@@ -211,7 +211,17 @@ This is the recommended branch. What it changes, by subsystem:
   200–330 ms each, five brightness levels in an 8 s capture; now one, and the four covered
   targets paint nothing. Nested targets are not ordered here, they are blended into one
   frame as before; targets of other processes are not seen (`WINE_DCOMP_STACK_CLIP=0`
-  turns it off)
+  turns it off); a composite that finds a swapchain leaf with nothing published is held
+  back for up to 250 ms and the window keeps the frame it shows, as the DWM keeps the last
+  composed frame until the next `Commit()` — Chromium replaces its swapchain on every resize
+  step, and the old one takes the properties wined3d published on its window with it before
+  the new one has presented (5–81 ms per step, median 40), so the composite timer delivered
+  the tree without that leaf: the backdrop alone. Power BI Desktop 2.158 went black over the
+  whole window for one to four frames on resize steps and on every switch between maximized
+  and normal; in colour-marked captures 13 of 15 and 22 of 25 such events covered more than
+  half the window before, 0 of 12 and 0 of 25 after. The strip a growing window gains before
+  Chromium follows still shows the backdrop (`WINE_DCOMP_HOLD_ABSENT_LEAF=0` turns the hold
+  off)
 - **DComp on a layered top-level without attributes**: a rootless visual tree whose target
   is a top-level window with `WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP` and no layered
   attributes is presented with `UpdateLayeredWindow()`, composited over a transparent
