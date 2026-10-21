@@ -89,7 +89,7 @@ struct VkDevice_T
 #include "wine/list.h"
 
 /* Wine internal vulkan driver version, needs to be bumped upon vulkan_funcs changes. */
-#define WINE_VULKAN_DRIVER_VERSION 48
+#define WINE_VULKAN_DRIVER_VERSION 50
 
 struct vulkan_object
 {
@@ -181,6 +181,7 @@ struct vulkan_physical_device
     VkPhysicalDeviceMemoryProperties memory_properties;
     uint32_t external_memory_align;
     uint32_t map_placed_align;
+    BOOL android_ahb;
 };
 
 static inline struct vulkan_physical_device *vulkan_physical_device_from_handle( VkPhysicalDevice handle )
@@ -301,8 +302,20 @@ struct vulkan_funcs
     PFN_vkAllocateMemory p_vkAllocateMemory;
     PFN_vkCreateBuffer p_vkCreateBuffer;
     PFN_vkCreateDevice p_vkCreateDevice;
+    PFN_vkDeviceWaitIdle p_vkDeviceWaitIdle;
+    PFN_vkQueueWaitIdle p_vkQueueWaitIdle;
+    PFN_vkWaitForFences p_vkWaitForFences;
+    PFN_vkGetFenceStatus p_vkGetFenceStatus;
+    PFN_vkWaitSemaphores p_vkWaitSemaphores;
+    PFN_vkWaitSemaphoresKHR p_vkWaitSemaphoresKHR;
+    PFN_vkGetSemaphoreCounterValue p_vkGetSemaphoreCounterValue;
+    PFN_vkGetSemaphoreCounterValueKHR p_vkGetSemaphoreCounterValueKHR;
     PFN_vkCreateFence p_vkCreateFence;
     PFN_vkCreateImage p_vkCreateImage;
+    PFN_vkDestroyImage p_vkDestroyImage;
+    PFN_vkGetImageMemoryRequirements p_vkGetImageMemoryRequirements;
+    PFN_vkGetImageMemoryRequirements2 p_vkGetImageMemoryRequirements2;
+    PFN_vkGetImageMemoryRequirements2KHR p_vkGetImageMemoryRequirements2KHR;
     PFN_vkCreateInstance p_vkCreateInstance;
     PFN_vkCreateSemaphore p_vkCreateSemaphore;
     PFN_vkCreateSwapchainKHR p_vkCreateSwapchainKHR;

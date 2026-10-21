@@ -34,25 +34,7 @@ source_dir="$stage/source"
 python3 "$repo/arlinux/build/refresh-wine-vkd3d.py" "$source_dir"
 bash "$repo/arlinux/build/prepare-wine-dcomp.sh" "$source_dir"
 (cd "$source_dir" && perl tools/make_requests)
-if ! grep -q '/apex/com.android.conscrypt/cacerts' "$source_dir/dlls/crypt32/unixlib.c"; then
-    patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-certificates.patch"
-fi
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-dwrite-bitmap-cache.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-keyboard-layout.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-dwrite-transformed-hinting.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-pulse.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-utf8-locale.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-shared-storage-security.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-arm64-apc-context.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-local-focus.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-dragdrop-owner.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-wow64-images.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-ahb-mapping.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-opengl-unavailable.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-layered-alpha.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-transparent-initial.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-layered-minimize.patch"
-patch -d "$source_dir" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-bionic-mmap-probe.patch"
+# Maintained Wine fixes are part of the archived fork, shared with PE builds.
 (cd "$source_dir/dlls/winevulkan" && python3 make_vulkan)
 cp "$fex_source/Source/Windows/UnixLib/"{FEXUnixLib.cpp,FEXUnixLib.h} "$stage/fex/"
 patch -d "$stage/fex" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/fex-bionic-unixlib.patch"

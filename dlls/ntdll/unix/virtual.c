@@ -2417,15 +2417,22 @@ static void *get_host_addr_space_limit(void)
     /* See MACH_VM_MAX_ADDRESS_RAW in xnu osfmk/mach/arm/vm_param.h */
     return (void *)0x7ffffe000000;
 #elif defined _WIN64
+    unsigned int flags = MAP_PRIVATE | MAP_ANON;
     UINT_PTR addr = (UINT_PTR)1 << 63;
+
+#ifdef MAP_FIXED_NOREPLACE
+    flags |= MAP_FIXED_NOREPLACE;
+#endif
 
     while (addr >> 32)
     {
-        void *ret = anon_mmap_tryfixed( (void *)addr, host_page_size, PROT_NONE, 0 );
+        /* Unlike allocation callers, this probe must distinguish a real
+         * EEXIST from old kernels relocating an unsupported fixed hint. */
+        void *ret = mmap( (void *)addr, host_page_size, PROT_NONE, flags, -1, 0 );
         if (ret != MAP_FAILED)
         {
             munmap( ret, host_page_size );
-            break;
+            if (ret >= (void *)addr) break;
         }
         else if (errno == EEXIST) break;
         addr >>= 1;

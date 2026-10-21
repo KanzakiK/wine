@@ -951,6 +951,7 @@ static const char * const CRYPT_knownLocations[] = {
  "/usr/share/ca-certificates/ca-bundle.crt",
  "/usr/local/share/certs/",
  "/etc/sfw/openssl/certs",
+ "/apex/com.android.conscrypt/cacerts",
  "/etc/security/cacerts",  /* Android */
 };
 

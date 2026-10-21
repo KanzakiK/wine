@@ -163,9 +163,10 @@ struct apc_stack_layout
     ULONG64              align;          /* 028 */
     CONTEXT              context;        /* 030 */
     ULONG64              redzone[2];     /* 3c0 */
+    APC_CALLBACK_DATA    callback_data;  /* 3d0 */
 };
 C_ASSERT( offsetof(struct apc_stack_layout, context) == 0x30 );
-C_ASSERT( sizeof(struct apc_stack_layout) == 0x3d0 );
+C_ASSERT( sizeof(struct apc_stack_layout) == 0x3f0 );
 
 /* stack layout when calling KiUserCallbackDispatcher */
 struct callback_stack_layout
@@ -816,7 +817,8 @@ NTSTATUS call_user_apc_dispatcher( CONTEXT *context, unsigned int flags, ULONG_P
     ULONG64 sp = context ? context->Sp : frame->sp;
     struct apc_stack_layout *stack;
 
-    if (flags) FIXME( "flags %#x are not supported.\n", flags );
+    if (flags & ~(SERVER_USER_APC_CALLBACK_DATA_CONTEXT | SERVER_USER_APC_SPECIAL))
+        FIXME( "flags %#x are not supported.\n", flags );
 
     sp &= ~15;
     stack = (struct apc_stack_layout *)sp - 1;
@@ -833,9 +835,17 @@ NTSTATUS call_user_apc_dispatcher( CONTEXT *context, unsigned int flags, ULONG_P
     }
     stack->func      = func;
     stack->args[0]   = arg1;
-    stack->args[1]   = arg2;
+    if (flags & SERVER_USER_APC_CALLBACK_DATA_CONTEXT)
+    {
+        stack->callback_data.Parameter = arg2;
+        stack->callback_data.ContextRecord = &stack->context;
+        stack->callback_data.Reserved0 = 0;
+        stack->callback_data.Reserved1 = 0;
+        stack->args[1] = (ULONG_PTR)&stack->callback_data;
+    }
+    else stack->args[1] = arg2;
     stack->args[2]   = arg3;
-    stack->alertable = TRUE;
+    stack->alertable = !(flags & SERVER_USER_APC_SPECIAL);
 
     frame->sp = (ULONG64)stack;
     frame->pc = (ULONG64)pKiUserApcDispatcher;

@@ -2300,7 +2300,16 @@ HWND WINAPI NtUserSetFocus( HWND hwnd )
         if (call_hooks( WH_CBT, HCBT_SETFOCUS, (WPARAM)hwnd, (LPARAM)previous, 0 )) return 0;
 
         /* activate hwndTop if needed. */
-        if (!(active = get_active_window()) && !set_foreground_window( hwndTop, FALSE, FALSE )) return 0;
+        if (!(active = get_active_window()))
+        {
+            DWORD error = RtlGetLastWin32Error();
+            if (!set_foreground_window( hwndTop, FALSE, FALSE ))
+            {
+                /* Local activation does not require taking the foreground. */
+                if (get_window_thread( hwndTop, NULL ) != GetCurrentThreadId()) return 0;
+                RtlSetLastWin32Error( error );
+            }
+        }
         if (hwndTop != active)
         {
             if (!set_active_window( hwndTop, NULL, FALSE, FALSE, 0 )) return 0;

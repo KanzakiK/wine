@@ -51,6 +51,15 @@ single Wine prefix. Conflicting file ownership and unsafe archives still fail.
 
 ## Cache and provenance
 
+Maintained Wine fixes live directly in this fork's source tree, including the
+US keyboard layout, DirectWrite rendering fixes, Android audio/locale/storage
+adaptations, ARM64 APC handling and Vulkan/window/memory fixes. Native and PE
+builds archive the same pinned Git tree instead of replaying those patches.
+`@wine` includes these source files in compiler identities, so changing them
+invalidates affected outputs without an additional patch manifest. The former
+standalone patches remain recoverable in Git history. The external, pinned
+DirectComposition and Wine Staging VKD3D preparation is separate and unchanged.
+
 FEX is pinned to the taowen/FEX fork commit
 `371b6f6dc4086321ee53ec9cf032615476389f51`, retaining the ARM64EC
 process-termination fix `b63017afe` removed by Wine integration commit

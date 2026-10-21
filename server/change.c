@@ -329,13 +329,14 @@ static struct security_descriptor *dir_get_sd( struct object *obj )
 
     /* mode and uid the same? if so, no need to re-generate security descriptor */
     if (obj->sd &&
+#ifdef __ANDROID__
+        st.st_uid == getuid() &&
+#endif
         (st.st_mode & (S_IRWXU|S_IRWXO)) == (dir->mode & (S_IRWXU|S_IRWXO)) &&
         (st.st_uid == dir->uid))
         return obj->sd;
 
-    sd = mode_to_sd( st.st_mode,
-                     security_unix_uid_to_sid( st.st_uid ),
-                     token_get_primary_group( current->process->token ));
+    sd = default_fd_sd( unix_fd, st.st_mode, st.st_uid );
     if (!sd) return obj->sd;
 
     dir->mode = st.st_mode;

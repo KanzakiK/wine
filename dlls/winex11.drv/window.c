@@ -545,28 +545,9 @@ static int get_window_attributes( struct x11drv_win_data *data, XSetWindowAttrib
  */
 static void sync_window_input_shape( struct x11drv_win_data *data )
 {
-#ifdef HAVE_LIBXSHAPE
-    DWORD ex_style = NtUserGetWindowLongW( data->hwnd, GWL_EXSTYLE );
-
-    if (!data->whole_window) return;
-
-    if (ex_style & WS_EX_TRANSPARENT)
-    {
-        /* For transparent windows, set an empty input shape to allow mouse pass-through */
-        static XRectangle empty_rect;
-        XShapeCombineRectangles( data->display, data->whole_window, ShapeInput, 0, 0,
-                                 &empty_rect, 1, ShapeSet, YXBanded );
-        TRACE( "window %p/%lx set empty input shape for WS_EX_TRANSPARENT\n",
-               data->hwnd, data->whole_window );
-    }
-    else
-    {
-        /* For normal windows, reset input shape to default (full window) */
-        XShapeCombineMask( data->display, data->whole_window, ShapeInput, 0, 0, None, ShapeSet );
-        TRACE( "window %p/%lx reset input shape to default\n",
-               data->hwnd, data->whole_window );
-    }
-#endif
+    if (data->whole_window)
+        sync_window_surface_input_shape( data->surface, data->whole_window,
+                NtUserGetWindowLongW( data->hwnd, GWL_EXSTYLE ));
 }
 
 /***********************************************************************
@@ -2556,6 +2537,7 @@ void set_window_visual( struct x11drv_win_data *data, const XVisualInfo *vis, BO
 {
     BOOL same_visual = (data->vis.visualid == vis->visualid);
     Window client_window = data->client_window;
+    UINT wm_state = data->desired_state.wm_state;
 
     if (!data->use_alpha == !use_alpha && same_visual) return;
     data->use_alpha = use_alpha;
@@ -2569,6 +2551,7 @@ void set_window_visual( struct x11drv_win_data *data, const XVisualInfo *vis, BO
     create_whole_window( data );
     /* attach the client back to the re-created whole_window */
     attach_client_window( data, client_window );
+    window_set_wm_state( data, wm_state, FALSE );
 }
 
 
@@ -2643,6 +2626,7 @@ void X11DRV_DestroyWindow( HWND hwnd )
     if (data->icon_pixmap) XFreePixmap( gdi_display, data->icon_pixmap );
     if (data->icon_mask) XFreePixmap( gdi_display, data->icon_mask );
     if (data->parent) host_window_release( data->parent );
+    if (data->surface) window_surface_release( data->surface );
     free( data->icon_bits );
     XDeleteContext( gdi_display, (XID)hwnd, win_data_context );
     release_win_data( data );

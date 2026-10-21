@@ -2249,6 +2249,27 @@ static struct window_surface *get_window_surface( HWND hwnd, UINT swp_flags, BOO
     else needs_surface = !!(style & WS_VISIBLE);
 
     if (!is_child) rects->visible = get_visible_rect( hwnd, shaped, style, ex_style, rects );
+    /* The iconic rectangle is not the layered bitmap's size. Keep the last
+     * UpdateLayeredWindow surface while minimizing, unless the application
+     * explicitly submits another layered update. It must survive restoration
+     * without requiring the application to repaint. */
+    if (!create_layered && (ex_style & WS_EX_LAYERED) && (style & WS_MINIMIZE))
+    {
+        WND *win = get_win_ptr( hwnd );
+        if (win && win != WND_DESKTOP && win != WND_OTHER_PROCESS)
+        {
+            new_surface = win->surface;
+            if (new_surface && new_surface->alpha_mask) window_surface_add_ref( new_surface );
+            else new_surface = NULL;
+            release_win_ptr( win );
+            if (new_surface)
+            {
+                *surface_rect = new_surface->rect;
+                return new_surface;
+            }
+        }
+    }
+
     if (!get_surface_rect( &rects->visible, surface_rect )) needs_surface = FALSE;
     if (!get_default_window_surface( hwnd, surface_rect, &new_surface )) return NULL;
 

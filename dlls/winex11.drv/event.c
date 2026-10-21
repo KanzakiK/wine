@@ -839,6 +839,7 @@ static BOOL X11DRV_Expose( HWND hwnd, XEvent *xev )
     POINT pos;
     struct x11drv_win_data *data;
     UINT flags = RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN;
+    BOOL transparent;
 
     TRACE( "win %p (%lx) %d,%d %dx%d\n",
            hwnd, event->window, event->x, event->y, event->width, event->height );
@@ -876,9 +877,15 @@ static BOOL X11DRV_Expose( HWND hwnd, XEvent *xev )
     }
     else flags &= ~RDW_ALLCHILDREN;
 
+    transparent = event->window != root_window && data->surface &&
+                  data->vis.visualid == argb_visual.visualid && !data->use_alpha &&
+                  (NtUserGetWindowLongW( hwnd, GWL_EXSTYLE ) & (WS_EX_TRANSPARENT | WS_EX_LAYERED)) == WS_EX_TRANSPARENT;
     release_win_data( data );
 
-    NtUserExposeWindowSurface( hwnd, flags, &rect );
+    /* A transparent GDI window must paint after the windows below it. Blitting
+     * an exposed but unpainted surface publishes its initial white pixels. */
+    if (transparent) NtUserRedrawWindow( hwnd, &rect, NULL, flags );
+    else NtUserExposeWindowSurface( hwnd, flags, &rect );
     return TRUE;
 }
 

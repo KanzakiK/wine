@@ -36,9 +36,7 @@ h.update(json.dumps({n:v for n,v in tree_entries(source,'HEAD').items() if core_
 inputs=[repo/'arlinux/build/wine-pe.sh',repo/'arlinux/build/refresh-wine-vkd3d.py',
         repo/'arlinux/build/prepare-wine-dcomp.sh',source/'dlls/combase/parameterized.c']
 inputs+=sorted((repo/'arlinux/patches/wine-staging-vkd3d').glob('*'))
-inputs+=[repo/'arlinux/patches/wine-dcomp-content-lifetime.patch',
-         repo/'arlinux/patches/wine-dwrite-bitmap-cache.patch',
-         repo/'arlinux/patches/wine-keyboard-layout.patch']
+inputs+=[repo/'arlinux/patches/wine-dcomp-content-lifetime.patch']
 for path in inputs:
     h.update(path.name.encode());h.update(path.read_bytes())
 for name in ('clang','ld.lld'):
@@ -71,8 +69,6 @@ if [[ ! -f "$stage/source-ready" ]]; then
     }
     python3 "$repo/arlinux/build/refresh-wine-vkd3d.py" "$prepare/source"
     bash "$repo/arlinux/build/prepare-wine-dcomp.sh" "$prepare/source"
-    patch -d "$prepare/source" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-dwrite-bitmap-cache.patch"
-    patch -d "$prepare/source" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/wine-keyboard-layout.patch"
     (cd "$prepare/source" && perl tools/make_requests)
     if [[ -d "$stage/source" ]]; then
         # A compiler capsule can restore individual source files referenced by

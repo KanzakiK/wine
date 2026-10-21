@@ -22237,6 +22237,7 @@ wine_fn_config_makefile dlls/jscript/tests enable_tests
 wine_fn_config_makefile dlls/jsproxy enable_jsproxy
 wine_fn_config_makefile dlls/jsproxy/tests enable_tests
 wine_fn_config_makefile dlls/kerberos enable_kerberos
+wine_fn_config_makefile dlls/kbdus enable_kbdus
 wine_fn_config_makefile dlls/kernel32 enable_kernel32
 wine_fn_config_makefile dlls/kernel32/tests enable_tests
 wine_fn_config_makefile dlls/kernelbase enable_kernelbase

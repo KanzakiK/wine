@@ -1589,6 +1589,8 @@ struct x11drv_window_surface
     GC                    gc;
     struct x11drv_image  *image;
     BOOL                  byteswap;
+    Pixmap                input_shape; /* cached alpha mask, independent of WS_EX_TRANSPARENT */
+    BOOL                  per_pixel_alpha; /* which X shape owns the current mask */
 };
 
 static struct x11drv_window_surface *get_x11_surface( struct window_surface *surface )
@@ -1785,6 +1787,30 @@ static void x11drv_surface_set_clip( struct window_surface *window_surface, cons
     }
 }
 
+/* Keep input-mask synchronization separate from the surface mutex: window
+ * style callbacks already hold win_data_mutex, while flush holds the surface
+ * mutex. Neither path may acquire the other's lock. */
+static pthread_mutex_t input_shape_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void sync_window_surface_input_shape( struct window_surface *window_surface, Window window, DWORD ex_style )
+{
+#ifdef HAVE_LIBXSHAPE
+    struct x11drv_window_surface *surface = window_surface ? get_x11_surface( window_surface ) : NULL;
+
+    pthread_mutex_lock( &input_shape_mutex );
+    if (ex_style & WS_EX_TRANSPARENT)
+    {
+        XRectangle empty = {0};
+        XShapeCombineRectangles( gdi_display, window, ShapeInput, 0, 0, &empty, 1, ShapeSet, YXBanded );
+    }
+    else
+        XShapeCombineMask( gdi_display, window, ShapeInput, 0, 0,
+                surface && surface->window == window ? surface->input_shape : None, ShapeSet );
+    XFlush( gdi_display );
+    pthread_mutex_unlock( &input_shape_mutex );
+#endif
+}
+
 /***********************************************************************
  *           x11drv_surface_flush
  */
@@ -1795,8 +1821,15 @@ static BOOL x11drv_surface_flush( struct window_surface *window_surface, const R
     UINT alpha_mask = window_surface->alpha_mask, alpha_bits = window_surface->alpha_bits;
     struct x11drv_window_surface *surface = get_x11_surface( window_surface );
     XImage *ximage = surface->image->ximage;
+    BOOL per_pixel_alpha = ximage->depth == 32 && alpha_mask && !window_surface->shape_region
+            && window_surface->color_key == CLR_INVALID;
     const unsigned char *src = color_bits;
     unsigned char *dst = (unsigned char *)ximage->data;
+
+    /* A color-key/region transition can leave identical mask bits while
+     * changing whether the mask belongs to ShapeBounding or ShapeInput. */
+    if (surface->per_pixel_alpha != per_pixel_alpha) shape_changed = TRUE;
+    surface->per_pixel_alpha = per_pixel_alpha;
 
     if (alpha_bits == -1)
     {
@@ -1832,26 +1865,38 @@ static BOOL x11drv_surface_flush( struct window_surface *window_surface, const R
     if (shape_changed)
     {
 #ifdef HAVE_LIBXSHAPE
-        if (!shape_bits)
-            XShapeCombineMask( gdi_display, surface->window, ShapeBounding, 0, 0, None, ShapeSet );
-        else
+        Pixmap shape = None;
+
+        if (shape_bits)
         {
             struct gdi_image_bits bits = {.ptr = (void *)shape_bits};
             XVisualInfo vis = default_visual;
-            Pixmap shape;
 
             vis.depth = 1;
             shape = create_pixmap_from_image( 0, &vis, shape_info, &bits, DIB_RGB_COLORS );
-            XShapeCombineMask( gdi_display, surface->window, ShapeBounding, 0, 0, shape, ShapeSet );
-            XFreePixmap( gdi_display, shape );
         }
-#endif /* HAVE_LIBXSHAPE */
+
+        /* ARGB pixels provide visual transparency. Bounding holes leave stale
+         * pixels in redirected Xwayland pixmaps; remove them before uploading.
+         * Keep the existing bounding-shape path for regions and color keys. */
+        XShapeCombineMask( gdi_display, surface->window, ShapeBounding, 0, 0,
+                per_pixel_alpha ? None : shape, ShapeSet );
+        pthread_mutex_lock( &input_shape_mutex );
+        if (surface->input_shape) XFreePixmap( gdi_display, surface->input_shape );
+        surface->input_shape = per_pixel_alpha ? shape : None;
+        pthread_mutex_unlock( &input_shape_mutex );
+        if (!per_pixel_alpha && shape) XFreePixmap( gdi_display, shape );
+#endif
     }
 
     if (!put_shm_image( ximage, &surface->image->shminfo, surface->window, surface->gc, rect, dirty ))
         XPutImage( gdi_display, surface->window, surface->gc, ximage, dirty->left,
                    dirty->top, rect->left + dirty->left, rect->top + dirty->top,
                    dirty->right - dirty->left, dirty->bottom - dirty->top );
+
+    if (shape_changed)
+        sync_window_surface_input_shape( window_surface, surface->window,
+                NtUserGetWindowLongW( window_surface->hwnd, GWL_EXSTYLE ));
 
     XFlush( gdi_display );
 
@@ -1866,6 +1911,7 @@ static void x11drv_surface_destroy( struct window_surface *window_surface )
     struct x11drv_window_surface *surface = get_x11_surface( window_surface );
 
     TRACE( "freeing %p\n", surface );
+    if (surface->input_shape) XFreePixmap( gdi_display, surface->input_shape );
     if (surface->gc) XFreeGC( gdi_display, surface->gc );
     if (surface->image) x11drv_image_destroy( surface->image );
 }
@@ -1973,6 +2019,18 @@ BOOL X11DRV_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_re
     TRACE( "hwnd %p, layered %u, surface_rect %s, surface %p\n", hwnd, layered, wine_dbgstr_rect( surface_rect ), surface );
 
     if (!(data = get_win_data( hwnd ))) return TRUE; /* use default surface */
+    if (layered)
+    {
+        data->layered = TRUE;
+        if (!data->embedded && argb_visual.visualid) set_window_visual( data, &argb_visual, TRUE );
+    }
+    else if (argb_visual.visualid && !enable_direct_drawing( data, FALSE ) &&
+             (NtUserGetWindowLongW( hwnd, GWL_EXSTYLE ) & (WS_EX_TRANSPARENT | WS_EX_LAYERED)) == WS_EX_TRANSPARENT)
+    {
+        /* Leave an unpainted transparent window clear. GDI flushes still force
+         * opaque alpha, until UpdateLayeredWindow supplies per-pixel alpha. */
+        set_window_visual( data, &argb_visual, FALSE );
+    }
     if ((previous = *surface) && previous->funcs == &x11drv_surface_funcs)
     {
         Window window = get_x11_surface(previous)->window;
@@ -1982,12 +2040,7 @@ BOOL X11DRV_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_re
     }
     if (previous) window_surface_release( previous );
 
-    if (layered)
-    {
-        data->layered = TRUE;
-        if (!data->embedded && argb_visual.visualid) set_window_visual( data, &argb_visual, TRUE );
-    }
-    else if (enable_direct_drawing( data, layered ))
+    if (!layered && enable_direct_drawing( data, layered ))
     {
         *surface = NULL;  /* indicate that we want to draw directly to the window */
         goto done; /* draw directly to the window */
@@ -1997,6 +2050,12 @@ BOOL X11DRV_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_re
                                layered ? data->use_alpha : FALSE );
 
 done:
+    if (data->surface != *surface)
+    {
+        if (*surface) window_surface_add_ref( *surface );
+        if (data->surface) window_surface_release( data->surface );
+        data->surface = *surface;
+    }
     release_win_data( data );
     return TRUE;
 }

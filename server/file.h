@@ -162,6 +162,7 @@ extern struct file *create_file_for_fd( int fd, unsigned int access, unsigned in
 extern struct file *create_file_for_fd_obj( struct fd *fd, unsigned int access, unsigned int sharing );
 extern void file_set_error(void);
 extern struct security_descriptor *mode_to_sd( mode_t mode, const struct sid *user, const struct sid *group );
+extern struct security_descriptor *default_fd_sd( int fd, mode_t mode, uid_t uid );
 extern mode_t sd_to_mode( const struct security_descriptor *sd, const struct sid *owner );
 extern int is_file_executable( const char *name );
 
