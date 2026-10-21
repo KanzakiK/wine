@@ -108,6 +108,11 @@ static inline void dcomp_private_free(void *ptr)
  * the subclassed wndproc can put the delivered leaves back over the presented
  * frame without waiting for the next tree timer tick (issue 206). */
 #define WM_WINE_DCOMP_PRESENT_FLUSH (WM_USER + 0x102)
+/* dcomp_commit_visual_tree() posts this to an in-process target window when
+ * Commit() runs in another thread than the window's: the composite walks and
+ * blits the target's buffers, which the tree timer does in that thread too
+ * (issue 248). */
+#define WM_WINE_DCOMP_COMMIT_COMPOSITE (WM_USER + 0x103)
 
 /* Forward declarations for target back-pointer and list management */
 struct dcomp_device;
@@ -4403,7 +4408,17 @@ static void dcomp_commit_visual_tree(HWND target_hwnd, struct dcomp_visual *root
         if (target && now - target->last_tree_composite_tick >= DCOMP_TREE_FRAME_MS)
         {
             target->last_tree_composite_tick = now;
-            dcomp_target_composite_tree(target, FALSE);
+            /* The composite belongs to the window's thread, where the tree
+             * timer runs it as well.  Chromium commits the tree it has just
+             * built from its compositor thread; measured with Ableton Live 12,
+             * that pass entered the composite while the timer pass of the same
+             * target was still inside it, and both wrote the composition
+             * buffer and blitted it (issue 248).  A foreign target has no
+             * subclass to post to and keeps compositing in the caller. */
+            if (!target->foreign && GetWindowThreadProcessId(target_hwnd, NULL) != GetCurrentThreadId())
+                PostMessageW(target_hwnd, WM_WINE_DCOMP_COMMIT_COMPOSITE, 0, 0);
+            else
+                dcomp_target_composite_tree(target, FALSE);
         }
     }
     else
@@ -7425,6 +7440,11 @@ static LRESULT CALLBACK dcomp_target_wndproc(HWND hwnd, UINT msg, WPARAM wparam,
             return 0;
         }
         break;
+
+    case WM_WINE_DCOMP_COMMIT_COMPOSITE:
+        /* A Commit() from another thread handed its composite over (issue 248). */
+        dcomp_target_composite_tree(target, FALSE);
+        return 0;
 
     case WM_PAINT:
         /* Rootless tree (issue 88): repaint from the composed tree instead of
