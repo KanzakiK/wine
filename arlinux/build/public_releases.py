@@ -121,6 +121,13 @@ def prepare(manifest):
     if item['name'] != stage or item['sha256'] != sha(manifest):
         raise ValueError('Producer manifest differs from its verified receipt')
     importlib.import_module('install-github-workflows').ensure_workflows({owner(stage)})
+    # The fixed debug manifest can be replaced while a release job is queued.
+    # Pin the already verified metadata without rebuilding its runtime payloads.
+    repository, tag = owner(stage), PLAN['stages'][stage]['release']
+    name = 'manifest-'+item['sha256']+'.json'
+    upload(manifest, repository, tag, name, immutable=True)
+    item = dict(item, file=name,
+                url=f'https://github.com/{repository}/releases/download/{tag}/{name}')
     repository, request = dispatch(stage, 'candidate', manifest=item)
     published = candidate_asset(stage, request)
     data = descriptor(published or {})
