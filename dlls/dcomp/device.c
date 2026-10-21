@@ -95,6 +95,20 @@ static inline void dcomp_private_free(void *ptr)
 /* Forward declarations for target back-pointer and list management */
 struct dcomp_device;
 struct dcomp_target;
+struct dcomp_device
+{
+    IDCompositionDevice IDCompositionDevice_iface;
+    IDCompositionDesktopDevice IDCompositionDesktopDevice_iface;
+    IDCompositionDevice5 IDCompositionDevice5_iface;  /* also serves Device3/Device4 QIs */
+    LONG refcount;
+    IUnknown *rendering_device;   /* IDXGIDevice from DCompositionCreateDevice */
+    ID3D11Device *d3d11_device;   /* QI from rendering_device, lazy-init */
+    ID2D1Device *d2d1_device;     /* QI from rendering_device if it is ID2D1Device */
+    struct dcomp_target *targets; /* singly-linked list of targets for Commit */
+    CRITICAL_SECTION cs;          /* protects targets and their root references */
+    LONG in_auto_commit;          /* per-device EndDraw auto-commit reentrancy guard */
+    LONG commit_pending;          /* re-commit requested while in_auto_commit */
+};
 static void dcomp_device_remove_target(struct dcomp_device *device, struct dcomp_target *target);
 
 /* Send child mode message to a swapchain's comp window */
@@ -3792,6 +3806,9 @@ static ULONG STDMETHODCALLTYPE dcomp_target_Release(IDCompositionTarget *iface)
         free(target->layer_buf[0]);
         free(target->layer_buf[1]);
 
+        if (target->root_visual)
+            IDCompositionVisual_Release(&target->root_visual->IDCompositionVisual_iface);
+
         free(target);
     }
     return refcount;
@@ -3847,16 +3864,27 @@ static HRESULT STDMETHODCALLTYPE dcomp_target_SetRoot(IDCompositionTarget *iface
         IDCompositionVisual *visual)
 {
     struct dcomp_target *target = impl_from_IDCompositionTarget(iface);
-    struct dcomp_visual *visual_impl;
+    struct dcomp_visual *visual_impl = visual ? impl_from_IDCompositionVisual(visual) : NULL;
+    struct dcomp_visual *old;
 
     FIXME("iface %p, visual %p, target hwnd %p.\n", iface, visual, target->hwnd);
 
-    if (!visual)
-        return S_OK;
-
-    visual_impl = impl_from_IDCompositionVisual(visual);
-    visual_impl->target_hwnd = target->hwnd;
+    /* The target owns its root: an application may release its own reference
+     * right after SetRoot().  The previous root is retired outside the device
+     * lock, as its destruction can enter DXGI. */
+    if (visual)
+        IDCompositionVisual_AddRef(visual);
+    EnterCriticalSection(&target->device->cs);
+    old = target->root_visual;
+    if (visual_impl)
+        visual_impl->target_hwnd = target->hwnd;
     target->root_visual = visual_impl;
+    LeaveCriticalSection(&target->device->cs);
+    if (old)
+        IDCompositionVisual_Release(&old->IDCompositionVisual_iface);
+
+    if (!visual_impl)
+        return S_OK;
 
     dcomp_window_request_alpha_visual(target->hwnd, visual_impl->surface_content);
 
@@ -3875,21 +3903,6 @@ static const IDCompositionTargetVtbl dcomp_target_vtbl =
 /* =====================================================================
  * IDCompositionDevice
  * ===================================================================== */
-
-struct dcomp_device
-{
-    IDCompositionDevice IDCompositionDevice_iface;
-    IDCompositionDesktopDevice IDCompositionDesktopDevice_iface;
-    IDCompositionDevice5 IDCompositionDevice5_iface;  /* also serves Device3/Device4 QIs */
-    LONG refcount;
-    IUnknown *rendering_device;   /* IDXGIDevice from DCompositionCreateDevice */
-    ID3D11Device *d3d11_device;   /* QI from rendering_device, lazy-init */
-    ID2D1Device *d2d1_device;     /* QI from rendering_device if it is ID2D1Device */
-    struct dcomp_target *targets; /* singly-linked list of targets for Commit */
-    CRITICAL_SECTION cs;          /* protects the targets list (insert/remove/iterate) */
-    LONG in_auto_commit;          /* per-device EndDraw auto-commit reentrancy guard */
-    LONG commit_pending;          /* re-commit requested while in_auto_commit */
-};
 
 static inline struct dcomp_device *impl_from_IDCompositionDevice(IDCompositionDevice *iface)
 {
