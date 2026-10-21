@@ -349,6 +349,15 @@ This is the recommended branch. What it changes, by subsystem:
   `RtlWaitOnAddress()` entry is unlinked with release semantics and re-checked with acquire
   semantics, so a waiter cannot see its address cleared before the unlink is visible
   (ntdll, the queue the loader-lock wake above runs through)
+- **wintypes**: `RoResolveNamespace()` looks up the `.winmd` files in `system32\WinMetadata`
+  (backport of 5542cd8541f and 03d18c456aa from Wine 11.19, with their tests). The stub
+  returned `RO_E_METADATA_NAME_NOT_FOUND` for every namespace, and the .NET Framework resolves
+  a Windows Runtime type through this call: Power BI Desktop 2.158 stopped at start-up with
+  `Could not find Windows Runtime type 'Windows.Storage.StorageFile'` (WineHQ bug 57410, an
+  empty main window and a 2x2 "Something went wrong" dialog). `StorageFile` now resolves; the
+  start still fails on `Windows.Storage.Streams.IInputStreamReference`, which is in no `.winmd`
+  Wine installs (widl puts only the types of one IDL file into its `.winmd`, and
+  `windows.storage.streams.idl` gets none)
 - **winemenubuilder**: a shortcut without arguments no longer produces a desktop entry whose
   `Exec` line ends in an empty `""` argument (backport of 1977760e374 from Wine 11.19). vatSys,
   which registers the `vatsys://` URL protocol, exited silently during its .NET start-up when
