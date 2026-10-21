@@ -10,6 +10,15 @@ branch `d2d1-dcomp-11.19`, integrated at
 Merge that upstream into the ARLinux branch; do not replace individual DComp
 files from another revision or replay our old DComp readback/lifetime patch.
 Direct2D, DirectComposition and related fixes follow the upstream source tree.
+The DComp ownership fixes from upstream's stable `d2d1-dcomp-11.0` branch
+(`08ca407e3cf2c1f02db79f23b264478239ed8fc6` and
+`997b39d64104315d3a8abdaf6ffcb0f4ecae9182`) are backported as separate Git
+commits, preserving authorship and upstream provenance. They supersede our
+experimental PR #24 readback implementation: keep upstream's readback throttle,
+Map behavior and output-lock boundaries, without the process-wide readback
+try-lock or extra staging Flush. The Wine 11.19 integration base is unchanged;
+the current upstream rolling branch is `d2d1-dcomp-11.20`. This backport is not
+a claim that all surface-root paths or application compatibility are verified.
 Android/Bionic integration remains in this fork. The Wine Staging VKD3D update is
 committed directly under `libs/vkd3d`, not applied during source preparation.
 The resulting ARLinux commit identifies the complete compiled Wine sources.
