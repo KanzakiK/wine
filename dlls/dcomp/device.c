@@ -2848,7 +2848,7 @@ static ULONG STDMETHODCALLTYPE dcomp_visual_AddRef(IDCompositionVisual *iface)
 static ULONG STDMETHODCALLTYPE dcomp_visual_Release(IDCompositionVisual *iface)
 {
     struct dcomp_visual *visual = impl_from_IDCompositionVisual(iface);
-    struct dcomp_visual *children, *child, *next;
+    struct dcomp_visual *child;
     IUnknown *content;
     ULONG refcount;
     unsigned int p;
@@ -2862,22 +2862,16 @@ static ULONG STDMETHODCALLTYPE dcomp_visual_Release(IDCompositionVisual *iface)
     }
     if (visual->parent)
         dcomp_visual_unlink(visual);
-    children = visual->children;
-    visual->children = NULL;
-    for (child = children; child; child = child->next_sibling)
+    while ((child = visual->children))
     {
-        child->parent = NULL;
-        child->prev_sibling = NULL;
+        dcomp_visual_unlink(child);
+        LeaveCriticalSection(&dcomp_content_cs);
+        IDCompositionVisual_Release(&child->IDCompositionVisual_iface);
+        EnterCriticalSection(&dcomp_content_cs);
     }
     content = visual->content;
     visual->content = NULL;
     LeaveCriticalSection(&dcomp_content_cs);
-    for (child = children; child; child = next)
-    {
-        next = child->next_sibling;
-        child->next_sibling = NULL;
-        IDCompositionVisual_Release(&child->IDCompositionVisual_iface);
-    }
     if (content)
         IUnknown_Release(content);
     for (p = 0; p < DCOMP_ANIMATED_COUNT; ++p)
@@ -3291,29 +3285,35 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_RemoveVisual(IDCompositionVisual *
 static HRESULT STDMETHODCALLTYPE dcomp_visual_RemoveAllVisuals(IDCompositionVisual *iface)
 {
     struct dcomp_visual *parent = impl_from_IDCompositionVisual(iface);
-    struct dcomp_visual *child, *children, *next;
+    struct dcomp_visual *child, **children;
+    SIZE_T count = 0, i = 0;
 
     EnterCriticalSection(&dcomp_content_cs);
+    for (child = parent->children; child; child = child->next_sibling)
+        if (child != parent->foreign_proxy) ++count;
+    if (count && !(children = calloc(count, sizeof(*children))))
+    {
+        LeaveCriticalSection(&dcomp_content_cs);
+        return E_OUTOFMEMORY;
+    }
+    if (!count) children = NULL;
     dcomp_visual_tree_changed();
-    /* The private proxy remains the parent's content, not an application child. */
-    if (parent->foreign_proxy)
-        dcomp_visual_unlink(parent->foreign_proxy);
-    children = parent->children;
-    parent->children = NULL;
-    for (child = children; child; child = child->next_sibling)
+    /* A detached child may immediately be reparented on another thread. Keep
+     * owned references in a private array, never in its mutable sibling links. */
+    for (child = parent->children; child; )
     {
-        child->parent = NULL;
-        child->prev_sibling = NULL;
+        struct dcomp_visual *next = child->next_sibling;
+        if (child != parent->foreign_proxy)
+        {
+            children[i++] = child;
+            dcomp_visual_unlink(child);
+        }
+        child = next;
     }
-    if (parent->foreign_proxy)
-        dcomp_visual_prepend(parent, parent->foreign_proxy);
     LeaveCriticalSection(&dcomp_content_cs);
-    for (child = children; child; child = next)
-    {
-        next = child->next_sibling;
-        child->next_sibling = NULL;
-        IDCompositionVisual_Release(&child->IDCompositionVisual_iface);
-    }
+    for (i = 0; i < count; ++i)
+        IDCompositionVisual_Release(&children[i]->IDCompositionVisual_iface);
+    free(children);
     return S_OK;
 }
 
