@@ -60,6 +60,7 @@ static const struct user_driver_funcs waylanddrv_funcs =
     .pWindowMessage = WAYLAND_WindowMessage,
     .pWindowPosChanged = WAYLAND_WindowPosChanged,
     .pWindowPosChanging = WAYLAND_WindowPosChanging,
+    .pGetWindowStyleMasks = WAYLAND_GetWindowStyleMasks,
     .pCreateClientSurface = WAYLAND_CreateClientSurface,
     .pCreateWindowSurface = WAYLAND_CreateWindowSurface,
     .pUseForeignGdiBridge = WAYLAND_UseForeignGdiBridge,

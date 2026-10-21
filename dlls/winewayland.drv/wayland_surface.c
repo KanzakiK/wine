@@ -420,11 +420,24 @@ static void decoration_handle_configure(void *data,
                                         struct zxdg_toplevel_decoration_v1 *decoration,
                                         uint32_t mode)
 {
-    /* Win32 non-client painting and application-drawn frames are already part
-     * of our buffer. Do not request another configure here (which can loop on
-     * compositors enforcing their own decoration policy). */
-    if (mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE)
-        WARN("Compositor enforces server-side decorations for hwnd=%p\n", data);
+    struct wayland_win_data *win_data;
+    struct wayland_surface *surface;
+    BOOL changed = FALSE;
+    BOOL server_side = mode == ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+    HWND hwnd = data;
+
+    if (!(win_data = wayland_win_data_get(hwnd))) return;
+    if ((surface = win_data->wayland_surface) && wayland_surface_is_toplevel(surface) &&
+        surface->decoration == decoration && surface->server_side_decoration != server_side)
+    {
+        surface->server_side_decoration = server_side;
+        changed = TRUE;
+    }
+    wayland_win_data_release(win_data);
+
+    /* Recompute the visible non-client frame on the owning thread. Do not
+     * renegotiate decoration mode or change the application's Win32 styles. */
+    if (changed) NtUserPostMessage(hwnd, WM_WAYLAND_DECORATION_CHANGED, 0, 0);
 }
 
 static const struct zxdg_toplevel_decoration_v1_listener decoration_listener =

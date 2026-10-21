@@ -772,6 +772,27 @@ static void wayland_configure_window(HWND hwnd)
 /**********************************************************************
  *           WAYLAND_WindowMessage
  */
+BOOL WAYLAND_GetWindowStyleMasks(HWND hwnd, UINT style, UINT ex_style,
+                                  UINT *style_mask, UINT *ex_style_mask)
+{
+    struct wayland_win_data *data;
+    BOOL server_side = FALSE;
+
+    if ((data = wayland_win_data_get(hwnd)))
+    {
+        if (data->wayland_surface && wayland_surface_is_toplevel(data->wayland_surface))
+            server_side = data->wayland_surface->server_side_decoration;
+        wayland_win_data_release(data);
+    }
+    if (!server_side) return FALSE;
+
+    /* Use win32u's native visible-frame calculation, as the X11 driver does.
+     * It preserves application-drawn frames and menus extending into this area. */
+    *style_mask = WS_CAPTION | WS_THICKFRAME;
+    *ex_style_mask = WS_EX_TOOLWINDOW | WS_EX_DLGMODALFRAME;
+    return TRUE;
+}
+
 LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg)
@@ -784,6 +805,11 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_WAYLAND_SET_FOREGROUND:
         NtUserSetForegroundWindowInternal(hwnd);
+        return 0;
+    case WM_WAYLAND_DECORATION_CHANGED:
+        NtUserSetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                           SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE |
+                           SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         return 0;
     case WM_WINE_HWND_GDI_FRAME:
     {

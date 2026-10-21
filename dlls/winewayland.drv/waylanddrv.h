@@ -73,6 +73,7 @@ enum wayland_window_message
     WM_WAYLAND_INIT_DISPLAY_DEVICES = WM_WINE_FIRST_DRIVER_MSG,
     WM_WAYLAND_CONFIGURE,
     WM_WAYLAND_SET_FOREGROUND,
+    WM_WAYLAND_DECORATION_CHANGED,
 };
 
 enum wayland_surface_config_state
@@ -300,6 +301,7 @@ struct wayland_surface
             struct xdg_surface *xdg_surface;
             struct xdg_toplevel *xdg_toplevel;
             struct zxdg_toplevel_decoration_v1 *decoration;
+            BOOL server_side_decoration;
             struct xdg_toplevel_icon_v1 *xdg_toplevel_icon;
         };
         struct
@@ -323,6 +325,8 @@ struct wayland_surface
  */
 
 BOOL wayland_process_init(void);
+BOOL WAYLAND_GetWindowStyleMasks(HWND hwnd, UINT style, UINT ex_style,
+                                  UINT *style_mask, UINT *ex_style_mask);
 
 /**********************************************************************
  *          Wayland output
