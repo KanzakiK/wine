@@ -33,9 +33,7 @@ sys.path.insert(0,str(repo/'arlinux/build'))
 from component_inputs import core_path,tree_entries
 import json
 h.update(json.dumps({n:v for n,v in tree_entries(source,'HEAD').items() if core_path(n)},sort_keys=True).encode())
-inputs=[repo/'arlinux/build/wine-pe.sh',repo/'arlinux/build/refresh-wine-vkd3d.py',
-        source/'dlls/combase/parameterized.c']
-inputs+=sorted((repo/'arlinux/patches/wine-staging-vkd3d').glob('*'))
+inputs=[repo/'arlinux/build/wine-pe.sh',source/'dlls/combase/parameterized.c']
 for path in inputs:
     h.update(path.name.encode());h.update(path.read_bytes())
 for name in ('clang','ld.lld'):
@@ -66,7 +64,6 @@ if [[ ! -f "$stage/source-ready" ]]; then
     [[ -f "$prepare/source/dlls/combase/parameterized.c" ]] || {
         echo 'Pinned Wine commit is incomplete: missing combase/parameterized.c.' >&2; exit 2;
     }
-    python3 "$repo/arlinux/build/refresh-wine-vkd3d.py" "$prepare/source"
     (cd "$prepare/source" && perl tools/make_requests)
     if [[ -d "$stage/source" ]]; then
         # A compiler capsule can restore individual source files referenced by
@@ -118,9 +115,6 @@ if [[ "$architecture" == all || "$architecture" == aarch64 ]]; then
 cp -a "$stage/install/usr/local/." "$stage/output/files/"
 git -C "$source_dir" rev-parse HEAD > "$stage/output/wine-commit"
 cp "$stage/source/VERSION" "$stage/output/wine-version"
-if [[ -f "$stage/source/arlinux-vkd3d.json" ]]; then
-    cp "$stage/source/arlinux-vkd3d.json" "$stage/output/arlinux-vkd3d.json"
-fi
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu \
     -czf "$stage/output/wine-source.tar.gz" -C "$stage" source
 python3 - "$stage" <<'BUILD_STATE'

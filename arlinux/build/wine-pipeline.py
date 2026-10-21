@@ -18,15 +18,13 @@ def build_wine(cache, framework, android, paths, common, invoke, env):
     """Build the complete standalone Wine chain, including the Steamworks ABI inputs."""
     recipes = {
         'wine-pulse': (),
-        'wine-pe': ('arlinux/build/wine-pe.sh', 'arlinux/build/refresh-wine-vkd3d.py', 'arlinux/patches'),
+        'wine-pe': ('arlinux/build/wine-pe.sh',),
         'fex': ('arlinux/build/fex-windows.sh', 'arlinux/components/FEX'),
-        'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/patches/dxvk-optional-pipeline-library.patch'),
+        'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/components/dxvk'),
         'wine-tls': ('arlinux/components/bionic-deps/build-tls.sh',),
         'wine-graphics': ('arlinux/build/wine-bionic-graphics.sh', 'arlinux/components/mesa', 'arlinux/components/libxshmfence', 'arlinux/components/libhybris/arlinux/graphics-protocols'),
-        'wine-vulkan': ('arlinux/components/libhybris/arlinux/build-bionic-vulkan.py', 'arlinux/components/libhybris', 'arlinux/components/android-headers', 'arlinux/patches'),
-        'wine-bionic-compile': ('arlinux/build/wine-bionic.sh', 'arlinux/build/refresh-wine-vkd3d.py',
-                        'arlinux/components/FEX',
-                        'arlinux/patches'),
+        'wine-vulkan': ('arlinux/components/libhybris/arlinux/build-bionic-vulkan.py', 'arlinux/components/libhybris', 'arlinux/components/android-headers'),
+        'wine-bionic-compile': ('arlinux/build/wine-bionic.sh', 'arlinux/components/FEX'),
         'wine-bionic': ('arlinux/package-wine-bionic.py', 'arlinux/wine_pe_debug.py',
                         'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB'),
     }

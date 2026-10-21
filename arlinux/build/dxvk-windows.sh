@@ -10,24 +10,23 @@ compiler="$(realpath "$1")"
 output="$(realpath -m "$2")"
 "$compiler/aarch64-w64-mingw32-clang" -marm64x -shared -x c /dev/null -o /dev/null -### 2>/dev/null \
     || { echo 'LLVM-MinGW with ARM64X support (LLVM 23+) is required.' >&2; exit 2; }
-revision=c36a33125fdd4e891b44cfd6ad83a6ae3fed5759
-patch_file="$repo/arlinux/patches/dxvk-optional-pipeline-library.patch"
+source="$repo/arlinux/components/dxvk"
+revision="$(git -C "$source" rev-parse HEAD)"
 link_extra="['-Wl,--no-insert-timestamp']"
-key="$(printf '%s\n' "$revision" "$compiler" "$link_extra" "$(sha256sum "$patch_file")" \
+key="$(printf '%s\n' "$revision" "$compiler" "$link_extra" \
     "$("$compiler/aarch64-w64-mingw32-clang" --version)" | sha256sum | cut -c1-24)"
 cache="$repo/build/dxvk-windows/$key"
 mkdir -p "$cache" "$output"
-if [[ ! -f "$cache/source/src/util/util_singleton.h" ]]; then
-    git clone --branch arlinux https://github.com/taowen/dxvk.git "$cache/source"
-    git -C "$cache/source" checkout --detach "$revision"
-    git -C "$cache/source" submodule update --init --depth 1 \
-        include/vulkan include/spirv subprojects/libdisplay-info
-fi
-if patch -d "$cache/source" -p1 --batch --fuzz=0 --dry-run < "$patch_file" >/dev/null 2>&1; then
-    patch -d "$cache/source" -p1 --batch --fuzz=0 < "$patch_file"
-else
-    patch -d "$cache/source" -p1 --batch --fuzz=0 --reverse --dry-run < "$patch_file" >/dev/null
-fi
+# Export the pinned component and its declared header dependencies, never a
+# second clone or a patched working tree. Git archives retain stable mtimes.
+git -C "$source" submodule update --init --depth 1 \
+    include/vulkan include/spirv subprojects/libdisplay-info
+mkdir -p "$cache/source"
+git -C "$source" archive HEAD | tar -xf - -C "$cache/source"
+for dependency in include/vulkan include/spirv subprojects/libdisplay-info; do
+    mkdir -p "$cache/source/$dependency"
+    git -C "$source/$dependency" archive HEAD | tar -xf - -C "$cache/source/$dependency"
+done
 for arch in aarch64 x86_64 i386; do
     target="$arch"
     family="$arch"

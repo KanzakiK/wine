@@ -31,12 +31,10 @@ mkdir "$stage/source"
 # walking the checkout would recursively copy build/ into its own destination.
 git -C "$source_dir" archive HEAD | tar -xf - -C "$stage/source"
 source_dir="$stage/source"
-python3 "$repo/arlinux/build/refresh-wine-vkd3d.py" "$source_dir"
 (cd "$source_dir" && perl tools/make_requests)
 # Maintained Wine fixes are part of the archived fork, shared with PE builds.
 (cd "$source_dir/dlls/winevulkan" && python3 make_vulkan)
 cp "$fex_source/Source/Windows/UnixLib/"{FEXUnixLib.cpp,FEXUnixLib.h} "$stage/fex/"
-patch -d "$stage/fex" -p1 --batch --fuzz=0 < "$repo/arlinux/patches/fex-bionic-unixlib.patch"
 export PATH="$mingw:$PATH"
 export CC="ccache $ndk/bin/aarch64-linux-android29-clang" CXX="ccache $ndk/bin/aarch64-linux-android29-clang++"
 export AR="$ndk/bin/llvm-ar" RANLIB="$ndk/bin/llvm-ranlib"
@@ -110,8 +108,6 @@ shutil.copytree(stage/'fex', output/'fex', ignore=shutil.ignore_patterns('*.cpp'
 metadata = dict(wine_commit=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip(),
                 wine_version=(stage/'source/VERSION').read_text().strip(),
                 fex_commit=subprocess.check_output(['git','-C',str(fex),'rev-parse','HEAD'],text=True).strip())
-vkd3d = stage/'source/arlinux-vkd3d.json'
-if vkd3d.is_file(): metadata['vkd3d'] = json.loads(vkd3d.read_text())
 (output/'wine-build.json').write_text(json.dumps(metadata,sort_keys=True)+'\n')
 COMPILE_OUTPUT
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu \

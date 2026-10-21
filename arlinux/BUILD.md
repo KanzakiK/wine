@@ -10,8 +10,8 @@ branch `d2d1-dcomp-11.19`, integrated at
 Merge that upstream into the ARLinux branch; do not replace individual DComp
 files from another revision or replay our old DComp readback/lifetime patch.
 Direct2D, DirectComposition and related fixes follow the upstream source tree.
-Android/Bionic integration remains in this fork. Wine Staging VKD3D is a separate
-input, not included by selecting giang17 as upstream; its pinned refresh remains.
+Android/Bionic integration remains in this fork. The Wine Staging VKD3D update is
+committed directly under `libs/vkd3d`, not applied during source preparation.
 The resulting ARLinux commit identifies the complete compiled Wine sources.
 
 The workstation entry is the Android repository's `build.ps1`; follow its
@@ -68,10 +68,16 @@ builds archive the same pinned Git tree instead of replaying those patches.
 `@wine` includes these source files in compiler identities, so changing them
 invalidates affected outputs without an additional patch manifest. The former
 standalone patches remain recoverable in Git history. DirectComposition comes
-from the integrated upstream; only the pinned Wine Staging VKD3D refresh remains.
+from the integrated upstream. VKD3D is integrated through revision
+`fed0c3418f815b0bc07533f6fc6f4aa06e8712c3`, from Wine Staging
+`11dd86bdfada3c85877b90c765ff9e3af200ddd1`'s eight-update series. The Wine Git
+tree identifies the actual compiled sources; there is no patch replay or stamp.
+DXVK is pinned by `arlinux/components/dxvk`, including its optional pipeline-library
+support. The FEX UnixLib keeps its Android stats-file adaptation under
+`__ANDROID__` in the pinned FEX source, preserving POSIX shared memory elsewhere.
 
 FEX is pinned to the taowen/FEX fork commit
-`371b6f6dc4086321ee53ec9cf032615476389f51`, retaining the ARM64EC
+`1ea0b0efdbf4c01981175cdd60515fa24cb507b1`, retaining the ARM64EC
 process-termination fix `b63017afe` removed by Wine integration commit
 `318936f` and applying the same lock lifetime to WoW64 termination.
 Before terminating peer threads, it drains code invalidation and retains the

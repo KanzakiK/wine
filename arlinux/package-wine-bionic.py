@@ -187,8 +187,6 @@ def main():
                                   tls=bool(list(unix.glob('libgnutls.so*')))),
                     limitations=([] if opengl else ['No OpenGL backend']) + ([] if args.vulkan_driver != 'none' else
                                  ['Vulkan driver not packaged']), files=hashes)
-    if original.get('vkd3d'):
-        metadata['vkd3d'] = original['vkd3d']
     (args.output / 'bionic-runtime.json').write_text(json.dumps(metadata, indent=2) + '\n')
     print('Packaged Bionic Wine:', len(hashes), 'files')
 

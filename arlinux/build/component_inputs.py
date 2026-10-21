@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 
-PE = ('arlinux/build/wine-pe.sh', 'arlinux/build/refresh-wine-vkd3d.py', 'arlinux/patches',
+PE = ('arlinux/build/wine-pe.sh',
       'arlinux/components/windows-integration')
 SOURCES = {
     'bionic-deps': ('arlinux/components/bionic-deps', 'tools/build', 'toolchain.json'),
@@ -14,12 +14,12 @@ SOURCES = {
     **{'wine-pe-'+arch: ('@wine', *PE, 'arlinux/build/runtime_distribution.py', 'arlinux/wine_pe_debug.py') for arch in ('aarch64', 'x86_64', 'i386')},
     'wine-pe': (),
     'fex': ('arlinux/build/fex-windows.sh', 'arlinux/components/FEX', 'arlinux/build/runtime_distribution.py', 'arlinux/wine_pe_debug.py'),
-    'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/patches/dxvk-optional-pipeline-library.patch', 'arlinux/build/runtime_distribution.py', 'arlinux/wine_pe_debug.py'),
+    'dxvk': ('arlinux/build/dxvk-windows.sh', 'arlinux/components/dxvk', 'arlinux/build/runtime_distribution.py', 'arlinux/wine_pe_debug.py'),
     'wine-addons': ('arlinux/build/local_addons.py', 'arlinux/build/runtime_distribution.py'),
     'wine-tls': ('arlinux/components/bionic-deps',),
     'wine-graphics': ('arlinux/build/wine-bionic-graphics.sh', 'arlinux/components/mesa',
                       'arlinux/components/libxshmfence', 'arlinux/components/libhybris'),
-    'wine-vulkan': ('arlinux/components/libhybris', 'arlinux/components/android-headers', 'arlinux/patches'),
+    'wine-vulkan': ('arlinux/components/libhybris', 'arlinux/components/android-headers'),
     'wine-bionic-compile': ('@wine', *PE, 'arlinux/build/wine-bionic.sh', 'arlinux/components/FEX'),
     'wine-bionic': ('arlinux/package-wine-bionic.py', 'arlinux/wine_pe_debug.py',
                     'dlls/winebus.sys/bus_arlinux.h', 'arlinux/winebus', 'COPYING.LIB',
