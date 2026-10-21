@@ -195,6 +195,29 @@ static BOOL dcomp_present_driven(void)
  * and above 790 ms, and this sits in that gap. */
 #define DCOMP_TARGET_REPAIR_MS 700
 
+/* How long a composite may be held back while a swapchain leaf has nothing
+ * published (issue 497).  Chromium replaces its swapchain on every resize step
+ * of Power BI Desktop: the old one is released -- and with it the comp props
+ * wined3d had set on its window -- before the new one has presented, measured
+ * 5-81 ms per step (median 40).  DWM composes a tree on Commit and shows the
+ * last composed frame until then; our timer composites whatever is published
+ * at the tick, and a tick inside that gap delivered the backdrop alone, a whole
+ * window of black.  Longer than any measured gap, short enough that content
+ * that really went away is not held noticeably. */
+#define DCOMP_LEAF_ABSENT_HOLD_MS 250
+
+/* WINE_DCOMP_HOLD_ABSENT_LEAF=0 delivers such frames again, for A/B measurements. */
+static int dcomp_hold_absent_leaf_enabled = -1;
+static BOOL dcomp_hold_absent_leaf(void)
+{
+    if (dcomp_hold_absent_leaf_enabled < 0)
+    {
+        const char *e = getenv("WINE_DCOMP_HOLD_ABSENT_LEAF");
+        dcomp_hold_absent_leaf_enabled = (!e || atoi(e)) ? 1 : 0;
+    }
+    return dcomp_hold_absent_leaf_enabled > 0;
+}
+
 static void dcomp_send_child_mode(IUnknown *content)
 {
     WCHAR prop_name[64];
@@ -3711,6 +3734,8 @@ struct dcomp_target
      * leaves (surface/texture content) are never skipped. */
     DWORD walk_leaf_hash;
     BOOL walk_leaf_hash_valid;
+    BOOL walk_leaf_absent;                /* the walk met a swapchain leaf that publishes nothing (issue 497) */
+    DWORD leaf_absent_tick;               /* GetTickCount | 1 when the current run of such walks began, 0 = none */
     DWORD last_blit_leaf_hash;
     BOOL last_blit_leaf_valid;
     RECT last_blit_clip_rc;               /* clip box of the last blit that really painted */
@@ -5077,11 +5102,16 @@ static void dcomp_composite_leaf(struct dcomp_target *target, struct dcomp_compo
         swprintf(prop_name, ARRAY_SIZE(prop_name),
                 WINE_DCOMP_WND_PROP_FMT, GetCurrentProcessId(), (UINT_PTR)leaf->content);
         comp_wnd = (HWND)GetPropW(GetDesktopWindow(), prop_name);
-        if (comp_wnd)
+        if (!comp_wnd)
+            target->walk_leaf_absent = TRUE;
+        else
         {
             bits = (DWORD *)GetPropW(comp_wnd, L"__wine_dcomp_comp_bits");
             dims = (ULONG_PTR)GetPropW(comp_wnd, L"__wine_dcomp_comp_size");
-            if (bits && dims)
+            /* Between two swapchains of one visual (see DCOMP_LEAF_ABSENT_HOLD_MS). */
+            if (!bits || !dims)
+                target->walk_leaf_absent = TRUE;
+            else
             {
                 /* Unchanged-content gate: fold this leaf's source pixels and
                  * placement into the walk hash.  Every pixel -- see
@@ -6605,6 +6635,7 @@ static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_t
      * of every present after this one, one frame of a tree that has moved on. */
     dcomp_target_retract_layer(target);
 
+    target->walk_leaf_absent = FALSE;
     EnterCriticalSection(&target->device->cs);
     dcomp_target_ensure_comp_dc(target, rc.right, rc.bottom);
     if (target->comp_bits)
@@ -6703,6 +6734,35 @@ static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_t
 
     if (!composed)
         return;
+
+    /* A swapchain leaf has nothing published (issue 497, see
+     * DCOMP_LEAF_ABSENT_HOLD_MS): leave the window on the frame it shows
+     * instead of delivering the tree without that leaf.  The delivery record
+     * goes void, so the first composite with the leaf back blits even if its
+     * content matches the last one -- a WM_PAINT answered by a held frame has
+     * validated the window without our pixels. */
+    if (target->walk_leaf_absent && dcomp_hold_absent_leaf() && target->last_delivered_valid)
+    {
+        DWORD now = GetTickCount();
+
+        /* | 1 keeps 0 free for "no run"; it can put the start one tick ahead
+         * of now, hence the signed difference. */
+        if (!target->leaf_absent_tick)
+            target->leaf_absent_tick = now | 1;
+        if ((LONG)(now - target->leaf_absent_tick) < DCOMP_LEAF_ABSENT_HOLD_MS)
+        {
+            TRACE("issue-497 hold: target %p hwnd %p, a swapchain leaf has published nothing for %ld ms.\n",
+                    target, target->hwnd, (LONG)(now - target->leaf_absent_tick));
+            target->last_blit_leaf_valid = FALSE;
+            return;
+        }
+    }
+    else if (!target->walk_leaf_absent && target->leaf_absent_tick)
+    {
+        TRACE("issue-497 hold over: target %p hwnd %p, the leaf is back after %lu ms.\n",
+                target, target->hwnd, GetTickCount() - target->leaf_absent_tick);
+        target->leaf_absent_tick = 0;
+    }
 
     if (target->comp_dc)
     {
