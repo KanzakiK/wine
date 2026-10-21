@@ -719,7 +719,17 @@ static void wayland_configure_window(HWND hwnd)
 
     SetRect(&rect, 0, 0, width, height);
     rect = map_rect_from_surface(surface, rect);
-    OffsetRect(&rect, data->rects.window.left, data->rects.window.top);
+    /* XDG configures the visible surface, not the Win32 outer frame. Restore
+     * the hidden frame extents before resizing the HWND. Otherwise every
+     * configure subtracts the caption/borders again and shrinks the client. */
+    if (width && height)
+    {
+        rect.left += data->rects.window.left - data->rects.visible.left;
+        rect.top += data->rects.window.top - data->rects.visible.top;
+        rect.right += data->rects.window.right - data->rects.visible.right;
+        rect.bottom += data->rects.window.bottom - data->rects.visible.bottom;
+    }
+    OffsetRect(&rect, data->rects.visible.left, data->rects.visible.top);
 
     wayland_win_data_release(data);
 
