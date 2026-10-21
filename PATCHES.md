@@ -200,7 +200,18 @@ This is the recommended branch. What it changes, by subsystem:
   the window's no longer composites the tree in the caller but posts the composite to the
   window's thread (`WM_WINE_DCOMP_COMMIT_COMPOSITE`), where the tree timer runs it as well —
   measured with Ableton Live 12, Chromium's compositor thread entered the composite of a target
-  while the timer pass was still inside it, and both wrote the composition buffer and blitted it
+  while the timer pass was still inside it, and both wrote the composition buffer and blitted it;
+  a target's delivery is clipped to what the targets of its process that lie above it in the
+  window tree have on the screen, the order the DWM composes them in — the GDI visible region
+  of the target's DC does not clip a `WS_EX_TRANSPARENT` sibling of an ancestor (for GDI
+  painting that sibling is painted afterwards and covers the lower window again), so the
+  covered targets kept delivering and the last one to deliver won. Power BI Desktop 2.158
+  keeps its five views in five WinForms hosts over each other, all visible and all
+  `WS_EX_TRANSPARENT`, each with a WebView2 inside: the main window showed the views in turns,
+  200–330 ms each, five brightness levels in an 8 s capture; now one, and the four covered
+  targets paint nothing. Nested targets are not ordered here, they are blended into one
+  frame as before; targets of other processes are not seen (`WINE_DCOMP_STACK_CLIP=0`
+  turns it off)
 - **DComp on a layered top-level without attributes**: a rootless visual tree whose target
   is a top-level window with `WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP` and no layered
   attributes is presented with `UpdateLayeredWindow()`, composited over a transparent
@@ -715,6 +726,14 @@ This is the recommended branch. What it changes, by subsystem:
   under the foreign parent blocks and attaches on both. The editor at 0,0 that
   giang17/wine issue 23 reports is the parent-relative origin of a window that was
   un-parented again, the position Windows gives it too
+- **wineserver**: the list of the siblings from a given window (`NtUserBuildHwndList()`,
+  behind `EnumChildWindows()`) and `FindWindowEx()` from a given child stop at a window that
+  is not linked into its parent's z-order. Destroying a window from another thread first
+  unlinks it (`set_parent` with no parent); the walk from such a window to the end of the
+  children list never got there — it went round the parent's unlinked list, and the server
+  with it, at 100 % of a core with every client waiting. Closing Power BI Desktop 2.158 hung
+  this way in two of four tries: its WebView2 host thread unlinks a `Chrome_WidgetWin_0`
+  while the main thread enumerates that window's siblings
 - **wined3d**: a GDI present of a window below a top level of another process blits
   through a fresh cache DC instead of the one held since the swap chain was created.
   That DC keeps the device origin and visible region of the window's position at that
