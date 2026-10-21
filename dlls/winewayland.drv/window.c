@@ -500,7 +500,7 @@ static void activation_token_done(void *context, struct xdg_activation_token_v1 
         {
             data->activation_token = NULL;
             if (data->wayland_surface && wayland_surface_is_toplevel(data->wayland_surface) &&
-                (style & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE)
+                (style & (WS_VISIBLE | WS_MINIMIZE | WS_DISABLED)) == WS_VISIBLE)
                 xdg_activation_v1_activate(process_wayland.xdg_activation_v1, value,
                                             data->wayland_surface->wl_surface);
         }
@@ -528,7 +528,7 @@ void WAYLAND_ActivateWindow(HWND hwnd, HWND previous)
     if (!(data = wayland_win_data_get(hwnd))) return;
     if (!data->activation_token && data->wayland_surface &&
         wayland_surface_is_toplevel(data->wayland_surface) &&
-        (style & (WS_VISIBLE | WS_MINIMIZE)) == WS_VISIBLE)
+        (style & (WS_VISIBLE | WS_MINIMIZE | WS_DISABLED)) == WS_VISIBLE)
     {
         data->activation_token = xdg_activation_v1_get_activation_token(process_wayland.xdg_activation_v1);
         if (data->activation_token)
@@ -814,7 +814,12 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         wayland_configure_window(hwnd);
         return 0;
     case WM_WAYLAND_SET_FOREGROUND:
-        NtUserSetForegroundWindowInternal(hwnd);
+        /* An enter event may have been superseded while its window thread was
+         * busy. Do not let a queued notification reactivate an old or disabled
+         * owner after the compositor has focused its modal dialog. */
+        if (wayland_keyboard_get_focused_hwnd() == hwnd &&
+            !(NtUserGetWindowLongW(hwnd, GWL_STYLE) & WS_DISABLED))
+            NtUserSetForegroundWindowInternal(hwnd);
         return 0;
     case WM_WAYLAND_DECORATION_CHANGED:
         NtUserSetWindowPos(hwnd, 0, 0, 0, 0, 0,
