@@ -139,6 +139,19 @@ struct wayland_win_data *wayland_win_data_get(HWND hwnd)
     return NULL;
 }
 
+/* Surface flush can run while win32u holds USER (e.g. painting a caption
+ * icon). Window creation takes win_data_mutex and queries USER, so a flush
+ * must defer rather than wait for this lock in the opposite order. */
+static struct wayland_win_data *wayland_win_data_try_get(HWND hwnd)
+{
+    struct wayland_win_data *data;
+
+    if (pthread_mutex_trylock(&win_data_mutex)) return NULL;
+    if ((data = wayland_win_data_get_nolock(hwnd))) return data;
+    pthread_mutex_unlock(&win_data_mutex);
+    return NULL;
+}
+
 /***********************************************************************
  *           wayland_win_data_release
  *
@@ -1065,7 +1078,7 @@ BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffe
     struct wayland_win_data *data;
     BOOL committed = FALSE;
 
-    if (!(data = wayland_win_data_get(hwnd))) return FALSE;
+    if (!(data = wayland_win_data_try_get(hwnd))) return FALSE;
 
     if (input_changed)
     {
@@ -1117,16 +1130,16 @@ BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffe
     return committed;
 }
 
-struct wayland_shm_buffer *get_window_surface_contents(HWND hwnd)
+BOOL get_window_surface_contents(HWND hwnd, struct wayland_shm_buffer **shm_buffer)
 {
-    struct wayland_shm_buffer *shm_buffer;
     struct wayland_win_data *data;
 
-    if (!(data = wayland_win_data_get(hwnd))) return NULL;
-    if ((shm_buffer = data->window_contents)) wayland_shm_buffer_ref(shm_buffer);
+    *shm_buffer = NULL;
+    if (!(data = wayland_win_data_try_get(hwnd))) return FALSE;
+    if ((*shm_buffer = data->window_contents)) wayland_shm_buffer_ref(*shm_buffer);
     wayland_win_data_release(data);
 
-    return shm_buffer;
+    return TRUE;
 }
 
 void wayland_window_init(void)

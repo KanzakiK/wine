@@ -46,6 +46,7 @@ struct wayland_window_surface
     struct window_surface header;
     struct wayland_buffer_queue *wayland_buffer_queue;
     LONG layered;
+    BOOL input_dirty; /* retain shape publication across a deferred flush */
 };
 
 static struct wayland_window_surface *wayland_window_surface_cast(
@@ -416,6 +417,7 @@ static BOOL wayland_window_surface_flush(struct window_surface *window_surface, 
     HRGN copy_from_window_region;
     uint32_t buffer_format;
 
+    wws->input_dirty |= shape_changed;
     surface_damage_region = NtGdiCreateRectRgn(rect->left + dirty->left, rect->top + dirty->top,
                                                rect->left + dirty->right, rect->top + dirty->bottom);
     if (!surface_damage_region)
@@ -443,7 +445,10 @@ static BOOL wayland_window_surface_flush(struct window_surface *window_surface, 
         goto done;
     }
 
-    if ((latest_buffer = get_window_surface_contents(window_surface->hwnd)))
+    /* FALSE leaves window_surface bounds dirty for the normal later flush.
+     * Contention is not the same as a window with no previous buffer. */
+    if (!get_window_surface_contents(window_surface->hwnd, &latest_buffer)) goto done;
+    if (latest_buffer)
     {
         TRACE("latest_window_buffer=%p\n", latest_buffer);
         /* If we have a latest buffer, use it as the source of all pixel
@@ -481,10 +486,11 @@ static BOOL wayland_window_surface_flush(struct window_surface *window_surface, 
 
     NtGdiSetRectRgn(shm_buffer->damage_region, 0, 0, 0, 0);
 
-    if (shape_changed && shape_bits &&
+    if (wws->input_dirty && shape_bits &&
         !(input_region = input_region_from_shape(rect, shape_info, shape_bits))) goto done;
     flushed = set_window_surface_contents(window_surface->hwnd, shm_buffer, surface_damage_region,
-                                          shape_changed, input_region);
+                                          wws->input_dirty, input_region);
+    if (flushed) wws->input_dirty = FALSE;
     wl_display_flush(process_wayland.wl_display);
 
 done:

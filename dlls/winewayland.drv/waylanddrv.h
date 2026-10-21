@@ -423,7 +423,7 @@ struct wayland_client_surface *get_client_surface(HWND hwnd);
 void set_client_surface(HWND hwnd, struct wayland_client_surface *client);
 BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffer, HRGN damage_region,
                                  BOOL input_changed, HRGN input_region);
-struct wayland_shm_buffer *get_window_surface_contents(HWND hwnd);
+BOOL get_window_surface_contents(HWND hwnd, struct wayland_shm_buffer **shm_buffer);
 void wayland_window_init(void);
 
 /**********************************************************************
