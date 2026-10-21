@@ -707,7 +707,14 @@ This is the recommended branch. What it changes, by subsystem:
   `update_window_state` that window creation already uses) — FL Studio's Browser window,
   open at start with the Sounds tab, went black for ~0.5 s after every activation change
   until it was hidden and shown once, because Chromium's child grew into it after FL had
-  taken the region
+  taken the region. A foreign window below a `WS_EX_TRANSPARENT` window of the owner is
+  subtracted as well: the transparent window itself does not obscure anything for GDI, but
+  the region walk used to skip its whole subtree. WinForms gives a control with
+  `BackColor=Transparent` that style, and Power BI Desktop 2.158 hosts each of its WebView2
+  views in one; dragging its window by the title bar erases the whole form on every step
+  (`RedrawWindow(RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN)` plus `UpdateWindow()`), and
+  the flush put that `COLOR_BTNFACE` over the views — 32 grey frames in 195 drag steps of a
+  15 fps capture, now none
 - **wineserver**: a window that is given a parent of another thread through `SetParent()`
   shares that thread's input only when it is a `WS_CHILD` window, as on Windows. A
   `WS_POPUP` window reparented this way keeps its own thread input: its activation
