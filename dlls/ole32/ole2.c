@@ -632,7 +632,6 @@ HRESULT WINAPI RevokeDragDrop(HWND hwnd)
   IStream *stream;
   IDropTarget *drop_target;
   HRESULT hr;
-  DWORD pid = 0;
 
   TRACE("(%p)\n", hwnd);
 
