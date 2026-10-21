@@ -989,7 +989,10 @@ static void get_window_list( struct desktop *desktop, struct window *win, struct
     }
     else if (!is_desktop_window( win ))  /* siblings starting from specified window */
     {
-        for (child = win; child; child = get_next_window( child ))
+        /* A window being destroyed can still have a handle after it has moved
+         * to parent->unlinked. That list has a different sentinel from the
+         * Z-order list used by get_next_window(). */
+        for (child = win; child; child = child->is_linked ? get_next_window( child ) : NULL)
             append_window_to_list( child, thread, 0, handles, count, max_count );
     }
     else  /* desktop window siblings */
@@ -2820,6 +2823,7 @@ DECL_HANDLER(get_class_windows)
         if (!parent) parent = get_desktop_window( current );
         if (!(win = get_window( req->child ))) return;
         if (win->parent != parent) return;
+        if (!win->is_linked) return;
         if (!(win = get_next_window( win ))) return;
     }
     else if (parent && !(win = get_first_child( parent ))) return;
