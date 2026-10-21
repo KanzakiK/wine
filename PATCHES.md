@@ -376,6 +376,12 @@ This is the recommended branch. What it changes, by subsystem:
   group from the group list. The Analysis Services engine of Power BI Desktop calls
   `ImpersonateAnonymousToken()` right after `listen()` and stopped with "Invalid function"; it
   now keeps listening and writes its port file
+- **mshtml**: `IHTMLTextAreaElement::disabled` is implemented (backport of f4880b7ee65 from
+  Wine 11.12, with its test); the stub returned `E_NOTIMPL`. Power BI Desktop shows its error
+  dialog as an HTML page in the WinForms web browser control, which stays 2x2 pixels until the
+  page script reports its size; the jQuery UI focus search read `textarea.disabled`, the
+  exception aborted the script, and the invisible modal dialog locked the main window. The
+  dialog now opens at its size and can be closed
 - **winemenubuilder**: a shortcut without arguments no longer produces a desktop entry whose
   `Exec` line ends in an empty `""` argument (backport of 1977760e374 from Wine 11.19). vatSys,
   which registers the `vatsys://` URL protocol, exited silently during its .NET start-up when
