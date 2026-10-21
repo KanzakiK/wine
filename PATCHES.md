@@ -187,7 +187,16 @@ This is the recommended branch. What it changes, by subsystem:
   card after a tab switch); when a hosted target moves, the area it leaves is handed back to the host only after a
   round trip on our X connection, so the host's repaint cannot overtake the blit that is
   still on its way (a docked WebView2 pane dragged in FL Studio left 3 px strips of the
-  plugin image behind, 30-70 px on a fast drag)
+  plugin image behind, 30-70 px on a fast drag); the visual tree is serialized against the
+  composite walk: `SetContent()`, `AddVisual()`, `RemoveVisual()`, `RemoveAllVisuals()`, the
+  dynamic texture's `SetTexture()` and the last `Release()` of a visual take a tree lock under
+  which the walk snapshots the leaves with a reference each, and the readback runs outside
+  it — Chromium's compositor thread sets content and commits while the tree timer composites
+  the same target in the window's thread (measured with Ableton Live 12), so the texture a
+  leaf was being read from could be released under the walk, the access violation reported
+  for Power BI Desktop in giang17/wine pull request 24; `SetRoot()` holds a reference on the
+  root visual, which it never did (an application that releases its own reference after
+  `SetRoot()` left the target with a dangling pointer)
 - **DComp on a layered top-level without attributes**: a rootless visual tree whose target
   is a top-level window with `WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP` and no layered
   attributes is presented with `UpdateLayeredWindow()`, composited over a transparent
