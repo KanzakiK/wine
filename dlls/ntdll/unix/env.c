@@ -733,8 +733,21 @@ static void init_locale(void)
     char *p;
 
     setlocale( LC_ALL, "" );
+#ifdef __ANDROID__
+    /* Bionic implements only C locales. Keep its UTF-8 character conversion,
+     * but resolve the requested Windows language with Wine's own NLS tables.
+     * LC_CTYPE can intentionally remain C.UTF-8 for Unix filenames and input. */
+    {
+        const char *all = getenv( "LC_ALL" );
+        const char *lang = getenv( "LANG" );
+        const char *messages = getenv( "LC_MESSAGES" );
+        if (!unix_to_win_locale( all && *all ? all : lang, system_locale )) system_locale[0] = 0;
+        if (!unix_to_win_locale( all && *all ? all : messages && *messages ? messages : lang, user_locale )) user_locale[0] = 0;
+    }
+#else
     if (!unix_to_win_locale( setlocale( LC_CTYPE, NULL ), system_locale )) system_locale[0] = 0;
     if (!unix_to_win_locale( setlocale( LC_MESSAGES, NULL ), user_locale )) user_locale[0] = 0;
+#endif
 
 #ifdef __APPLE__
     if (!system_locale[0])
