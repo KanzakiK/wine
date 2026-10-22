@@ -6311,6 +6311,16 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     }
     else goto failed;
 
+    /* Composition-enabled Windows versions queue the initial non-client rendering
+     * notification before WM_CREATE, including for initially hidden windows.
+     * Applications can run message waits inside their WM_CREATE callback. */
+    style = get_window_long( hwnd, GWL_STYLE );
+    if (parent == get_desktop_window() && !(style & WS_CHILD) &&
+        (style & WS_CAPTION) == WS_CAPTION &&
+        (NtCurrentTeb()->Peb->OSMajorVersion > 6 ||
+         (NtCurrentTeb()->Peb->OSMajorVersion == 6 && NtCurrentTeb()->Peb->OSMinorVersion >= 3)))
+        NtUserPostMessage( hwnd, WM_DWMNCRENDERINGCHANGED, TRUE, 0 );
+
     /* send WM_CREATE */
     if (send_message_timeout( hwnd, WM_CREATE, 0, (LPARAM)&cs, SMTO_NORMAL, 0, ansi ) == -1)
         goto failed;
@@ -6385,15 +6395,6 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
 
     toplevel = NtUserGetAncestor( hwnd, GA_ROOT );
     if (toplevel && toplevel != hwnd) update_window_state( toplevel );
-
-    /* Composition-enabled Windows versions post the initial non-client rendering
-     * notification for framed top-level windows, including initially hidden ones.
-     * Keep it queued for the application rather than tying it to surface mapping. */
-    if (parent == get_desktop_window() && !(style & WS_CHILD) &&
-        (style & WS_CAPTION) == WS_CAPTION &&
-        (NtCurrentTeb()->Peb->OSMajorVersion > 6 ||
-         (NtCurrentTeb()->Peb->OSMajorVersion == 6 && NtCurrentTeb()->Peb->OSMinorVersion >= 3)))
-        NtUserPostMessage( hwnd, WM_DWMNCRENDERINGCHANGED, TRUE, 0 );
 
     return hwnd;
 

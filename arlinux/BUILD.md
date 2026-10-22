@@ -62,6 +62,14 @@ retains `LC_CTYPE=C.UTF-8` for Unix filenames and text input. Bionic implements
 only C locales, so native ntdll resolves the requested language with Wine's own
 NLS tables rather than treating Bionic's C locale as the Windows system language.
 
+Window creation posts the initial `WM_DWMNCRENDERINGCHANGED` notification for
+captioned top-level windows in composition-enabled Windows versions, including
+windows created hidden. It queues the notification before entering `WM_CREATE`,
+so initialization waits inside that callback can observe it;
+`MsgWaitForMultipleObjects` retains its ordinary WaitAll contract. The optional
+Windows integration `message-wait` diagnostic compares the same executable on
+native Windows and Wine without modifying or injecting into the application.
+
 The producers are `wine-bionic`, `wine-pe-aarch64`, `wine-pe-x86_64`,
 `wine-pe-i386`, `fex`, `dxvk`, `windows-fonts`, `wine-addons`, `steamworks`,
 `windows-accessibility` and `windows-tray`. Their independently hashed compiler
