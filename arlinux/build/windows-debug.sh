@@ -15,4 +15,9 @@ mkdir -p "$output"
 "$compiler" -Wall -Wextra -Werror \
     "$repo/arlinux/components/windows-integration/diagnostics/exception-observer-probe.c" -Wl,--no-insert-timestamp \
     -o "$output/exception-observer-probe.exe"
+for arch in i686 x86_64 aarch64; do
+    "$(realpath "$1")/$arch-w64-mingw32-clang" -Wall -Wextra -Werror \
+        "$repo/arlinux/components/windows-integration/diagnostics/message-wait.c" \
+        -ldsound -luser32 -Wl,--no-insert-timestamp -o "$output/message-wait-$arch.exe"
+done
 sha256sum "$output/"*.exe
