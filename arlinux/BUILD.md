@@ -51,12 +51,6 @@ buffers, so Wine's DirectComposition readback receives a complete presented
 frame. The shader integration uses the existing Vulkan 1.3-compatible API;
 this does not require a newer Vulkan baseline or application-specific flags.
 
-`IDCompositionDevice5::CreateDynamicTexture` returns `E_NOTIMPL` until its
-incremental damage and producer-buffer reuse synchronization are implemented.
-Do not advertise that incomplete presentation path merely to satisfy capability
-probing. Callers can retain ordinary composition textures and GPU acceleration;
-no application-specific browser flag or software-rendering policy is required.
-
 On Android, the host passes its actual language in `LANG` / `LC_MESSAGES` and
 retains `LC_CTYPE=C.UTF-8` for Unix filenames and text input. Bionic implements
 only C locales, so native ntdll resolves the requested language with Wine's own
