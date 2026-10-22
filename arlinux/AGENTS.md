@@ -1,5 +1,6 @@
 # Bionic Wine integration
 
+- Develop, commit and push directly on the primary `arlinux` branch. Do not create or switch to a development branch unless the user explicitly requests it.
 - Read BUILD.md for the sole component build and latest release flow.
 - Follow giang17/wine as the implementation upstream; integrate its matching Wine release branch in Git instead of replacing DComp files or replaying a private DComp patch series during builds. Keep Android/Bionic adaptations in this fork.
 - Keep Wine scheduling, assembly and publishing here; rootfs only downloads the runtime on demand.
