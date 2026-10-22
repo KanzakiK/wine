@@ -599,6 +599,18 @@ This is the recommended branch. What it changes, by subsystem:
   falls on a different part of the window after each step of a window manager drag; in
   SynthEdit 1.5 the menu bar items lit up one after another while the window was dragged
   by its title bar.
+- **winex11**: while the window manager moves a window on `_NET_WM_MOVERESIZE` (a title bar
+  the application reports as `HTCAPTION`), the driver holds the capture on that window and
+  the loop waiting for the end of the move no longer passes it mouse messages — what the move
+  loop of win32u does, and Windows. The window manager has the pointer grabbed for the whole
+  drag, so the position the server holds stays where the drag started, and the
+  `WM_MOUSEMOVE` the server synthesizes after every step of the move went to whatever window
+  the moved window had under that point; the `LeaveNotify` report above never comes when the
+  drag starts inside our own window. Power BI Desktop 2.158 draws its title bar in WebView2:
+  its six title bar buttons lit up one after another while the window was dragged, the
+  frozen point wandering across 331–1493 px of the window's width in one capture; with the
+  capture on the moved window in 405 of 412 samples of a drag, none lit up. A plain capture:
+  with `GUI_INMOVESIZE` the driver would grab the pointer the window manager holds
 - **winex11**: the window manager is offered no close function (`MWM_FUNC_CLOSE`) while the
   window's `SC_CLOSE` is grayed, disabled or missing in its system menu or the class carries
   `CS_NOCLOSE`. That is the test `WM_DELETE_WINDOW` is already discarded under, and the
