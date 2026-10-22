@@ -930,25 +930,6 @@ LPARAM WINAPI GetMessageExtraInfo(void)
 DWORD WINAPI MsgWaitForMultipleObjects( DWORD count, const HANDLE *handles,
                                         BOOL wait_all, DWORD timeout, DWORD mask )
 {
-#ifdef __i386__
-    if (wait_all && count == 1 && timeout == 1 && mask == QS_ALLINPUT)
-    {
-        HMODULE caller;
-
-        /* PAL's audio startup loop waits for its ready event and new input,
-         * but never pumps messages or shows its main window until it returns.
-         * With no incidental input this loops forever even after audio is ready.
-         * Scope the workaround to that engine/call pattern, not Win32 WaitAll. */
-        if (GetModuleHandleExW( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               (LPCWSTR)__builtin_return_address(0), &caller ) &&
-            GetProcAddress( caller, "PalRenderInit" ) && GetProcAddress( caller, "PalSoundLoadEx" ) &&
-            GetProcAddress( caller, "PalSoundGetStatus" ))
-        {
-            TRACE( "Using event-or-input wait for PAL audio initialization.\n" );
-            wait_all = FALSE;
-        }
-    }
-#endif
     return NtUserMsgWaitForMultipleObjectsEx( count, handles, timeout, mask,
                                               wait_all ? MWMO_WAITALL : 0 );
 }
