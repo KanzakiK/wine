@@ -9388,6 +9388,20 @@ HRESULT WINAPI DCompositionCreateDevice3(IUnknown *rendering_device, REFIID iid,
     return dcomp_device_create(rendering_device, iid, device);
 }
 
+HRESULT WINAPI DCompositionBoostCompositorClock(BOOL enable)
+{
+    FIXME("%d: stub.\n", enable);
+    return S_OK;
+}
+
+HRESULT WINAPI CreatePresentationFactory(IUnknown *device, REFIID iid, void **factory)
+{
+    FIXME("%p, %s, %p: stub.\n", device, debugstr_guid(iid), factory);
+    if (!factory) return E_POINTER;
+    *factory = NULL;
+    return E_NOTIMPL;
+}
+
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
 {
     switch (reason)
