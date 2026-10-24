@@ -3550,6 +3550,55 @@ static void dump_impersonate_anonymous_token_request( const struct impersonate_a
     fprintf( stderr, ", include_everyone=%08x", req->include_everyone );
 }
 
+static void dump_hwnd_list_dmabuf_frames_request( const struct hwnd_list_dmabuf_frames_request *req )
+{
+    fprintf( stderr, " host_hwnd=%08x", req->host_hwnd );
+}
+
+static void dump_hwnd_list_dmabuf_frames_reply( const struct hwnd_list_dmabuf_frames_reply *req )
+{
+    fprintf( stderr, " status=%08x", req->status );
+    fprintf( stderr, ", count=%08x", req->count );
+    dump_varargs_bytes( ", frames=", cur_size );
+}
+
+static void dump_hwnd_dmabuf_get_channel_request( const struct hwnd_dmabuf_get_channel_request *req )
+{
+    fprintf( stderr, " hwnd=%08x", req->hwnd );
+}
+
+static void dump_hwnd_dmabuf_get_channel_reply( const struct hwnd_dmabuf_get_channel_reply *req )
+{
+    fprintf( stderr, " status=%08x", req->status );
+    fprintf( stderr, ", channel_handle=%04x", req->channel_handle );
+}
+
+static void dump_hwnd_dmabuf_claim_channel_request( const struct hwnd_dmabuf_claim_channel_request *req )
+{
+    fprintf( stderr, " hwnd=%08x", req->hwnd );
+}
+
+static void dump_hwnd_dmabuf_claim_channel_reply( const struct hwnd_dmabuf_claim_channel_reply *req )
+{
+    fprintf( stderr, " status=%08x", req->status );
+    fprintf( stderr, ", channel_handle=%04x", req->channel_handle );
+}
+
+static void dump_hwnd_dmabuf_release_channel_request( const struct hwnd_dmabuf_release_channel_request *req )
+{
+    fprintf( stderr, " hwnd=%08x", req->hwnd );
+}
+
+static void dump_hwnd_dmabuf_release_channel_reply( const struct hwnd_dmabuf_release_channel_reply *req )
+{
+    fprintf( stderr, " status=%08x", req->status );
+}
+
+static void dump_set_process_dpi_awareness_request( const struct set_process_dpi_awareness_request *req )
+{
+    fprintf( stderr, " dpi_context=%08x", req->dpi_context );
+}
+
 typedef void (*dump_func)( const void *req );
 
 static const dump_func req_dumpers[REQ_NB_REQUESTS] =
@@ -3864,6 +3913,11 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] =
     (dump_func)dump_d3dkmt_mutex_release_request,
     (dump_func)dump_alpc_create_port_request,
     (dump_func)dump_impersonate_anonymous_token_request,
+    (dump_func)dump_hwnd_list_dmabuf_frames_request,
+    (dump_func)dump_hwnd_dmabuf_get_channel_request,
+    (dump_func)dump_hwnd_dmabuf_claim_channel_request,
+    (dump_func)dump_hwnd_dmabuf_release_channel_request,
+    (dump_func)dump_set_process_dpi_awareness_request,
 };
 
 static const dump_func reply_dumpers[REQ_NB_REQUESTS] =
@@ -4177,6 +4231,11 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] =
     (dump_func)dump_d3dkmt_mutex_acquire_reply,
     NULL,
     (dump_func)dump_alpc_create_port_reply,
+    NULL,
+    (dump_func)dump_hwnd_list_dmabuf_frames_reply,
+    (dump_func)dump_hwnd_dmabuf_get_channel_reply,
+    (dump_func)dump_hwnd_dmabuf_claim_channel_reply,
+    (dump_func)dump_hwnd_dmabuf_release_channel_reply,
     NULL,
 };
 
@@ -4492,6 +4551,11 @@ static const char * const req_names[REQ_NB_REQUESTS] =
     "d3dkmt_mutex_release",
     "alpc_create_port",
     "impersonate_anonymous_token",
+    "hwnd_list_dmabuf_frames",
+    "hwnd_dmabuf_get_channel",
+    "hwnd_dmabuf_claim_channel",
+    "hwnd_dmabuf_release_channel",
+    "set_process_dpi_awareness",
 };
 
 static const struct
@@ -4575,6 +4639,7 @@ static const struct
     { "INVALID_USER_BUFFER",         STATUS_INVALID_USER_BUFFER },
     { "IO_REPARSE_DATA_INVALID",     STATUS_IO_REPARSE_DATA_INVALID },
     { "IO_REPARSE_TAG_INVALID",      STATUS_IO_REPARSE_TAG_INVALID },
+    { "IO_REPARSE_TAG_NOT_HANDLED",  STATUS_IO_REPARSE_TAG_NOT_HANDLED },
     { "IO_TIMEOUT",                  STATUS_IO_TIMEOUT },
     { "KERNEL_APC",                  STATUS_KERNEL_APC },
     { "KEY_DELETED",                 STATUS_KEY_DELETED },

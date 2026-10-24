@@ -4333,6 +4333,20 @@ static BOOL d2d_geometry_check_bezier_overlap(struct d2d_geometry *geometry,
     b[1] = &figure->bezier_controls[idx_q->control_idx];
     b[2] = &figure->vertices[idx_q->vertex_idx + 1];
 
+    /* Two control triangles whose bounding boxes lie strictly apart share no
+     * point, so neither the edge crossings nor the containment tests below
+     * can find one. The caller tries every pair of Bézier segments in the
+     * geometry against each other; for the glyph outlines a JUCE application
+     * draws as paths that is up to several thousand pairs per path, nearly
+     * all of them far apart, and the full test below took half of Close().
+     * Boxes that touch keep the full test, as does a non-finite coordinate,
+     * for which no comparison here holds. */
+    if (max(a[0]->x, max(a[1]->x, a[2]->x)) < min(b[0]->x, min(b[1]->x, b[2]->x))
+            || max(b[0]->x, max(b[1]->x, b[2]->x)) < min(a[0]->x, min(a[1]->x, a[2]->x))
+            || max(a[0]->y, max(a[1]->y, a[2]->y)) < min(b[0]->y, min(b[1]->y, b[2]->y))
+            || max(b[0]->y, max(b[1]->y, b[2]->y)) < min(a[0]->y, min(a[1]->y, a[2]->y)))
+        return FALSE;
+
     /* Degenerate control triangles can't overlap in a way that splitting them
      * would resolve.  Note that a non-finite area needs to be rejected here as
      * well: every comparison against a NaN is false, so none of the tests below
@@ -4581,6 +4595,16 @@ static BOOL d2d_geometry_shared_bezier_caps(struct d2d_geometry *geometry, BOOL 
     return TRUE;
 }
 
+/* Whether the control point of a quadratic piece lies on its chord to within 1e-4
+ * of the chord's length. */
+static BOOL d2d_quadratic_is_degenerate(const D2D1_POINT_2F *p0, const D2D1_POINT_2F *c, const D2D1_POINT_2F *p2)
+{
+    float ex = p2->x - p0->x, ey = p2->y - p0->y, l2 = ex * ex + ey * ey;
+    float cross = (c->x - p0->x) * ey - (c->y - p0->y) * ex;
+
+    return cross * cross <= 1e-8f * l2 * l2;
+}
+
 static HRESULT d2d_geometry_resolve_beziers(struct d2d_geometry *geometry)
 {
     struct d2d_segment_idx idx_p, idx_q;
@@ -4647,7 +4671,16 @@ static HRESULT d2d_geometry_resolve_beziers(struct d2d_geometry *geometry)
         p[0] = &figure->vertices[idx_p.vertex_idx];
         p[1] = &figure->bezier_controls[idx_p.control_idx];
 
+        /* A piece whose control point lies on its chord, as on a straight edge
+         * that was added as a Bézier, encloses nothing worth a curve triangle:
+         * at the threshold a chord of 1000 px is 0.05 px off the curve. Fill
+         * along the chord instead. Inserting the control point into the outline,
+         * as for one inside the filled area, would put three collinear points on
+         * it, and the triangulation makes a triangle of no area there that leaves
+         * the outline beside it without antialiasing. */
         i = idx_p.vertex_idx + 1;
+        if (d2d_quadratic_is_degenerate(p[0], p[1], &figure->vertices[i == figure->vertex_count ? 0 : i]))
+            continue;
         if (d2d_path_geometry_point_inside(geometry, p[1], FALSE))
         {
             sign = 1.0f;
@@ -4667,14 +4700,327 @@ static HRESULT d2d_geometry_resolve_beziers(struct d2d_geometry *geometry)
         d2d_curve_vertex_set(&b[2], p[2], 1.0f, 1.0f, sign);
     } while (d2d_geometry_get_next_bezier_segment_idx(geometry, &idx_p));
 
+    geometry->fill.bezier_vertex_count = bezier_idx * 3;
     free(emit);
     return S_OK;
+}
+
+
+/* Cache of closed path tessellations, keyed by the figure data.
+ *
+ * Native Direct2D keeps the glyph tessellation per font and size; JUCE 8
+ * applications that draw their text as path outlines (Cymatics Hotline, and
+ * every JUCE 8 renderer that does not take the glyph run route) rebuild the
+ * same geometries every frame: Hotline's editor closes 27 paths per frame
+ * with about 1000 quadratic Béziers between them, and only 37 distinct paths
+ * recur over hundreds of frames. Closing a path means resolving self
+ * intersections and overlapping control triangles and a constrained Delaunay
+ * triangulation, about 0.2 ms per glyph path; that was 40 % of the main
+ * thread. Identical input produces identical output, so the result of
+ * Close() is kept by its input and copied back on the next identical path.
+ * The key is the fill mode and every figure's flags, vertices, vertex types
+ * and control points, compared bit for bit; the value is the figure state
+ * after Close() (intersections and split pieces are inserted into the
+ * figures) and the fill arrays. Entries are evicted least recently used
+ * when the cache exceeds its size; WINE_D2D_FILL_CACHE=0 disables it. */
+
+#define D2D_FILL_CACHE_BUCKETS 256
+#define D2D_FILL_CACHE_MAX_ENTRY_SIZE (256 * 1024)
+#define D2D_FILL_CACHE_MAX_SIZE (8 * 1024 * 1024)
+
+struct d2d_fill_cache_entry
+{
+    struct list lru_entry;
+    struct list bucket_entry;
+    uint32_t hash;
+    size_t key_size;
+    size_t value_size;
+    uint8_t *data;
+};
+
+struct d2d_blob
+{
+    uint8_t *data;
+    size_t size;
+    size_t capacity;
+    BOOL failed;
+};
+
+static CRITICAL_SECTION d2d_fill_cache_cs;
+static CRITICAL_SECTION_DEBUG d2d_fill_cache_cs_debug =
+{
+    0, 0, &d2d_fill_cache_cs,
+    { &d2d_fill_cache_cs_debug.ProcessLocksList, &d2d_fill_cache_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": d2d_fill_cache_cs") }
+};
+static CRITICAL_SECTION d2d_fill_cache_cs = { &d2d_fill_cache_cs_debug, -1, 0, 0, 0, 0 };
+
+static struct
+{
+    struct list lru;
+    struct list buckets[D2D_FILL_CACHE_BUCKETS];
+    size_t size;
+    BOOL initialised;
+} d2d_fill_cache;
+
+static BOOL d2d_fill_cache_enabled(void)
+{
+    static int enabled = -1;
+    char buf[8];
+
+    if (enabled < 0)
+        enabled = !(GetEnvironmentVariableA("WINE_D2D_FILL_CACHE", buf, sizeof(buf)) && !strcmp(buf, "0"));
+    return enabled;
+}
+
+static void d2d_blob_write(struct d2d_blob *blob, const void *data, size_t size)
+{
+    if (blob->failed || !size)
+        return;
+    if (!d2d_array_reserve((void **)&blob->data, &blob->capacity, blob->size + size, 1))
+    {
+        blob->failed = TRUE;
+        return;
+    }
+    memcpy(blob->data + blob->size, data, size);
+    blob->size += size;
+}
+
+#define d2d_blob_write_value(blob, v) d2d_blob_write(blob, &(v), sizeof(v))
+
+static void d2d_blob_read(const uint8_t **p, void *dst, size_t size)
+{
+    memcpy(dst, *p, size);
+    *p += size;
+}
+
+#define d2d_blob_read_value(p, v) d2d_blob_read(p, &(v), sizeof(v))
+
+/* Replaces *array with a copy of count elements from the blob; count 0 leaves
+ * NULL. Returns FALSE on allocation failure. */
+static BOOL d2d_blob_read_array(const uint8_t **p, void **array, size_t *capacity, size_t count, size_t size)
+{
+    void *copy = NULL;
+
+    if (count && !(copy = malloc(count * size)))
+        return FALSE;
+    if (count)
+        memcpy(copy, *p, count * size);
+    *p += count * size;
+    free(*array);
+    *array = copy;
+    *capacity = count;
+    return TRUE;
+}
+
+static uint32_t d2d_fill_cache_hash(const uint8_t *data, size_t size)
+{
+    uint32_t h = 2166136261u, w;
+    size_t i;
+
+    for (i = 0; i + sizeof(w) <= size; i += sizeof(w))
+    {
+        memcpy(&w, data + i, sizeof(w));
+        h ^= w;
+        h *= 0x9e3779b1u;
+        h ^= h >> 15;
+    }
+    for (; i < size; ++i)
+        h = (h ^ data[i]) * 16777619u;
+    return h;
+}
+
+static void d2d_path_geometry_fill_cache_key(const struct d2d_geometry *geometry, struct d2d_blob *key)
+{
+    uint32_t fill_mode = geometry->u.path.fill_mode;
+    size_t i;
+
+    d2d_blob_write_value(key, fill_mode);
+    d2d_blob_write_value(key, geometry->u.path.figure_count);
+    for (i = 0; i < geometry->u.path.figure_count; ++i)
+    {
+        const struct d2d_figure *figure = &geometry->u.path.figures[i];
+
+        d2d_blob_write_value(key, figure->flags);
+        d2d_blob_write_value(key, figure->vertex_count);
+        d2d_blob_write_value(key, figure->bezier_control_count);
+        d2d_blob_write(key, figure->vertices, figure->vertex_count * sizeof(*figure->vertices));
+        d2d_blob_write(key, figure->vertex_types, figure->vertex_count * sizeof(*figure->vertex_types));
+        d2d_blob_write(key, figure->bezier_controls, figure->bezier_control_count * sizeof(*figure->bezier_controls));
+    }
+}
+
+static void d2d_path_geometry_fill_cache_value(const struct d2d_geometry *geometry, struct d2d_blob *value)
+{
+    size_t i;
+
+    for (i = 0; i < geometry->u.path.figure_count; ++i)
+    {
+        const struct d2d_figure *figure = &geometry->u.path.figures[i];
+
+        d2d_blob_write_value(value, figure->flags);
+        d2d_blob_write_value(value, figure->bounds);
+        d2d_blob_write_value(value, figure->vertex_count);
+        d2d_blob_write_value(value, figure->bezier_control_count);
+        d2d_blob_write(value, figure->vertices, figure->vertex_count * sizeof(*figure->vertices));
+        d2d_blob_write(value, figure->vertex_types, figure->vertex_count * sizeof(*figure->vertex_types));
+        d2d_blob_write(value, figure->bezier_controls, figure->bezier_control_count * sizeof(*figure->bezier_controls));
+    }
+    d2d_blob_write_value(value, geometry->fill.vertex_count);
+    d2d_blob_write(value, geometry->fill.vertices, geometry->fill.vertex_count * sizeof(*geometry->fill.vertices));
+    d2d_blob_write_value(value, geometry->fill.face_count);
+    d2d_blob_write(value, geometry->fill.faces, geometry->fill.face_count * sizeof(*geometry->fill.faces));
+    d2d_blob_write_value(value, geometry->fill.bezier_vertex_count);
+    d2d_blob_write(value, geometry->fill.bezier_vertices,
+            geometry->fill.bezier_vertex_count * sizeof(*geometry->fill.bezier_vertices));
+    d2d_blob_write_value(value, geometry->fill.arc_vertex_count);
+    d2d_blob_write(value, geometry->fill.arc_vertices,
+            geometry->fill.arc_vertex_count * sizeof(*geometry->fill.arc_vertices));
+}
+
+static BOOL d2d_path_geometry_fill_cache_restore(struct d2d_geometry *geometry, const uint8_t *p)
+{
+    size_t i, count;
+
+    for (i = 0; i < geometry->u.path.figure_count; ++i)
+    {
+        struct d2d_figure *figure = &geometry->u.path.figures[i];
+        size_t vertex_count, control_count;
+
+        d2d_blob_read_value(&p, figure->flags);
+        d2d_blob_read_value(&p, figure->bounds);
+        d2d_blob_read_value(&p, vertex_count);
+        d2d_blob_read_value(&p, control_count);
+        if (!d2d_blob_read_array(&p, (void **)&figure->vertices, &figure->vertices_size,
+                vertex_count, sizeof(*figure->vertices)))
+            return FALSE;
+        if (!d2d_blob_read_array(&p, (void **)&figure->vertex_types, &figure->vertex_types_size,
+                vertex_count, sizeof(*figure->vertex_types)))
+            return FALSE;
+        figure->vertex_count = vertex_count;
+        if (!d2d_blob_read_array(&p, (void **)&figure->bezier_controls, &figure->bezier_controls_size,
+                control_count, sizeof(*figure->bezier_controls)))
+            return FALSE;
+        figure->bezier_control_count = control_count;
+    }
+
+    d2d_blob_read_value(&p, count);
+    if (!d2d_blob_read_array(&p, (void **)&geometry->fill.vertices, &count, count, sizeof(*geometry->fill.vertices)))
+        return FALSE;
+    geometry->fill.vertex_count = count;
+    d2d_blob_read_value(&p, count);
+    if (!d2d_blob_read_array(&p, (void **)&geometry->fill.faces, &geometry->fill.faces_size,
+            count, sizeof(*geometry->fill.faces)))
+        return FALSE;
+    geometry->fill.face_count = count;
+    d2d_blob_read_value(&p, count);
+    if (!d2d_blob_read_array(&p, (void **)&geometry->fill.bezier_vertices, &geometry->fill.bezier_vertices_size,
+            count, sizeof(*geometry->fill.bezier_vertices)))
+        return FALSE;
+    geometry->fill.bezier_vertex_count = count;
+    d2d_blob_read_value(&p, count);
+    if (!d2d_blob_read_array(&p, (void **)&geometry->fill.arc_vertices, &geometry->fill.arc_vertices_size,
+            count, sizeof(*geometry->fill.arc_vertices)))
+        return FALSE;
+    geometry->fill.arc_vertex_count = count;
+    return TRUE;
+}
+
+static void d2d_fill_cache_init(void)
+{
+    size_t i;
+
+    if (d2d_fill_cache.initialised)
+        return;
+    list_init(&d2d_fill_cache.lru);
+    for (i = 0; i < D2D_FILL_CACHE_BUCKETS; ++i)
+        list_init(&d2d_fill_cache.buckets[i]);
+    d2d_fill_cache.initialised = TRUE;
+}
+
+static struct d2d_fill_cache_entry *d2d_fill_cache_find(const struct d2d_blob *key, uint32_t hash)
+{
+    struct d2d_fill_cache_entry *entry;
+
+    LIST_FOR_EACH_ENTRY(entry, &d2d_fill_cache.buckets[hash % D2D_FILL_CACHE_BUCKETS],
+            struct d2d_fill_cache_entry, bucket_entry)
+    {
+        if (entry->hash == hash && entry->key_size == key->size && !memcmp(entry->data, key->data, key->size))
+            return entry;
+    }
+    return NULL;
+}
+
+/* Returns TRUE if the geometry was filled from the cache; *hr then says whether
+ * copying the entry succeeded. */
+static BOOL d2d_fill_cache_lookup(struct d2d_geometry *geometry, const struct d2d_blob *key,
+        uint32_t hash, HRESULT *hr)
+{
+    struct d2d_fill_cache_entry *entry;
+    BOOL found = FALSE;
+
+    EnterCriticalSection(&d2d_fill_cache_cs);
+    d2d_fill_cache_init();
+    if ((entry = d2d_fill_cache_find(key, hash)))
+    {
+        list_remove(&entry->lru_entry);
+        list_add_head(&d2d_fill_cache.lru, &entry->lru_entry);
+        *hr = d2d_path_geometry_fill_cache_restore(geometry, entry->data + entry->key_size) ? S_OK : E_OUTOFMEMORY;
+        found = TRUE;
+    }
+    LeaveCriticalSection(&d2d_fill_cache_cs);
+    return found;
+}
+
+static void d2d_fill_cache_insert(const struct d2d_blob *key, uint32_t hash, const struct d2d_blob *value)
+{
+    struct d2d_fill_cache_entry *entry;
+    size_t size = key->size + value->size;
+
+    if (size > D2D_FILL_CACHE_MAX_ENTRY_SIZE)
+        return;
+    if (!(entry = malloc(sizeof(*entry))) || !(entry->data = malloc(size)))
+    {
+        free(entry);
+        return;
+    }
+    memcpy(entry->data, key->data, key->size);
+    memcpy(entry->data + key->size, value->data, value->size);
+    entry->hash = hash;
+    entry->key_size = key->size;
+    entry->value_size = value->size;
+
+    EnterCriticalSection(&d2d_fill_cache_cs);
+    d2d_fill_cache_init();
+    if (d2d_fill_cache_find(key, hash))
+    {
+        /* Another thread closed the same path meanwhile. */
+        LeaveCriticalSection(&d2d_fill_cache_cs);
+        free(entry->data);
+        free(entry);
+        return;
+    }
+    list_add_head(&d2d_fill_cache.buckets[hash % D2D_FILL_CACHE_BUCKETS], &entry->bucket_entry);
+    list_add_head(&d2d_fill_cache.lru, &entry->lru_entry);
+    d2d_fill_cache.size += size;
+    while (d2d_fill_cache.size > D2D_FILL_CACHE_MAX_SIZE)
+    {
+        entry = LIST_ENTRY(list_tail(&d2d_fill_cache.lru), struct d2d_fill_cache_entry, lru_entry);
+        list_remove(&entry->lru_entry);
+        list_remove(&entry->bucket_entry);
+        d2d_fill_cache.size -= entry->key_size + entry->value_size;
+        free(entry->data);
+        free(entry);
+    }
+    LeaveCriticalSection(&d2d_fill_cache_cs);
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_geometry_sink_Close(ID2D1GeometrySink *iface)
 {
     struct d2d_geometry *geometry = impl_from_ID2D1GeometrySink(iface);
+    struct d2d_blob key = {0}, value = {0};
     HRESULT hr = E_FAIL;
+    uint32_t hash = 0;
     size_t i;
 
     TRACE("iface %p.\n", iface);
@@ -4732,6 +5078,17 @@ static HRESULT STDMETHODCALLTYPE d2d_geometry_sink_Close(ID2D1GeometrySink *ifac
         }
     }
 
+    if (d2d_fill_cache_enabled())
+    {
+        d2d_path_geometry_fill_cache_key(geometry, &key);
+        if (!key.failed)
+        {
+            hash = d2d_fill_cache_hash(key.data, key.size);
+            if (d2d_fill_cache_lookup(geometry, &key, hash, &hr))
+                goto done;
+        }
+    }
+
     if (!d2d_geometry_intersect_self(geometry))
         goto done;
     if (FAILED(hr = d2d_geometry_resolve_beziers(geometry)))
@@ -4739,7 +5096,16 @@ static HRESULT STDMETHODCALLTYPE d2d_geometry_sink_Close(ID2D1GeometrySink *ifac
     if (FAILED(hr = d2d_path_geometry_triangulate(geometry)))
         goto done;
 
+    if (SUCCEEDED(hr) && key.data && !key.failed)
+    {
+        d2d_path_geometry_fill_cache_value(geometry, &value);
+        if (!value.failed)
+            d2d_fill_cache_insert(&key, hash, &value);
+    }
+
 done:
+    free(key.data);
+    free(value.data);
     if (FAILED(hr))
     {
         free(geometry->fill.bezier_vertices);
@@ -8537,23 +8903,23 @@ static const struct d2d_geometry_ops d2d_rounded_rectangle_geometry_ops =
     .stream = d2d_rounded_rectangle_geometry_stream,
 };
 
-HRESULT d2d_rounded_rectangle_geometry_init(struct d2d_geometry *geometry,
-        ID2D1Factory *factory, const D2D1_ROUNDED_RECT *rounded_rect)
+/* The fill of a rounded rectangle: eight vertices on the straight edges, six
+ * faces between them and an arc triangle per corner. The fill arrays are
+ * reused when they are already there, which is what the reinit below relies
+ * on. v1..v4 receive the corners, the outline tessellation needs them too. */
+static BOOL d2d_rounded_rectangle_geometry_fill(struct d2d_geometry *geometry,
+        const D2D1_ROUNDED_RECT *rounded_rect, D2D1_POINT_2F *corners)
 {
-    D2D1_POINT_2F *v, v1, v2, v3, v4;
+    D2D1_POINT_2F *v, *v1 = &corners[0], *v2 = &corners[1], *v3 = &corners[2], *v4 = &corners[3];
     struct d2d_face *f;
     float l, r, t, b;
     float rx, ry;
 
-    d2d_geometry_init(geometry, factory, &identity, (ID2D1GeometryVtbl *)&d2d_rounded_rectangle_geometry_vtbl,
-            &d2d_rounded_rectangle_geometry_ops);
-    geometry->u.rounded_rectangle.rounded_rect = *rounded_rect;
-
-    if (!(geometry->fill.vertices = malloc(8 * sizeof(*geometry->fill.vertices))))
-        goto fail;
+    if (!geometry->fill.vertices && !(geometry->fill.vertices = malloc(8 * sizeof(*geometry->fill.vertices))))
+        return FALSE;
     if (!d2d_array_reserve((void **)&geometry->fill.faces,
             &geometry->fill.faces_size, 6, sizeof(*geometry->fill.faces)))
-        goto fail;
+        return FALSE;
 
     l = min(rounded_rect->rect.left, rounded_rect->rect.right);
     r = max(rounded_rect->rect.left, rounded_rect->rect.right);
@@ -8563,10 +8929,10 @@ HRESULT d2d_rounded_rectangle_geometry_init(struct d2d_geometry *geometry,
     rx = min(rounded_rect->radiusX, 0.5f * (r - l));
     ry = min(rounded_rect->radiusY, 0.5f * (b - t));
 
-    d2d_point_set(&v1, r, t);
-    d2d_point_set(&v2, r, b);
-    d2d_point_set(&v3, l, b);
-    d2d_point_set(&v4, l, t);
+    d2d_point_set(v1, r, t);
+    d2d_point_set(v2, r, b);
+    d2d_point_set(v3, l, b);
+    d2d_point_set(v4, l, t);
 
     v = geometry->fill.vertices;
     d2d_point_set(&v[0], l + rx, t);
@@ -8588,30 +8954,73 @@ HRESULT d2d_rounded_rectangle_geometry_init(struct d2d_geometry *geometry,
     d2d_face_set(&f[5], 1, 3, 2);
     geometry->fill.face_count = 6;
 
-    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[1], &v1, &v[2]))
+    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[1], v1, &v[2]))
+        return FALSE;
+    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[3], v2, &v[4]))
+        return FALSE;
+    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[5], v3, &v[6]))
+        return FALSE;
+    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[7], v4, &v[0]))
+        return FALSE;
+
+    return TRUE;
+}
+
+/* Re-initialises a rounded rectangle geometry for another rounded rectangle,
+ * fill only: the outline is left empty, so the geometry can only be filled.
+ * FillRoundedRectangle() keeps one such geometry per device context instead
+ * of building a factory object, with its outline tessellation, for every call
+ * (Cymatics Hotline draws its LCD dot matrix as 1931 rounded rectangles per
+ * frame). The geometry has to have been initialised as a rounded rectangle. */
+void d2d_rounded_rectangle_geometry_reinit_fill(struct d2d_geometry *geometry,
+        const D2D1_ROUNDED_RECT *rounded_rect)
+{
+    D2D1_POINT_2F corners[4];
+
+    geometry->fill.vertex_count = 0;
+    geometry->fill.face_count = 0;
+    geometry->fill.bezier_vertex_count = 0;
+    geometry->fill.arc_vertex_count = 0;
+    geometry->outline.vertex_count = 0;
+    geometry->outline.face_count = 0;
+    geometry->outline.bezier_count = 0;
+    geometry->outline.bezier_face_count = 0;
+    geometry->outline.arc_count = 0;
+    geometry->outline.arc_face_count = 0;
+
+    geometry->u.rounded_rectangle.rounded_rect = *rounded_rect;
+    /* The arrays are sized from the first initialisation, so this cannot fail. */
+    d2d_rounded_rectangle_geometry_fill(geometry, rounded_rect, corners);
+}
+
+HRESULT d2d_rounded_rectangle_geometry_init(struct d2d_geometry *geometry,
+        ID2D1Factory *factory, const D2D1_ROUNDED_RECT *rounded_rect)
+{
+    D2D1_POINT_2F *v, corners[4], *v1 = &corners[0], *v2 = &corners[1], *v3 = &corners[2], *v4 = &corners[3];
+
+    d2d_geometry_init(geometry, factory, &identity, (ID2D1GeometryVtbl *)&d2d_rounded_rectangle_geometry_vtbl,
+            &d2d_rounded_rectangle_geometry_ops);
+    geometry->u.rounded_rectangle.rounded_rect = *rounded_rect;
+
+    if (!d2d_rounded_rectangle_geometry_fill(geometry, rounded_rect, corners))
         goto fail;
-    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[3], &v2, &v[4]))
-        goto fail;
-    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[5], &v3, &v[6]))
-        goto fail;
-    if (!d2d_geometry_fill_add_arc_triangle(geometry, &v[7], &v4, &v[0]))
-        goto fail;
+    v = geometry->fill.vertices;
 
     if (!d2d_geometry_outline_add_line_segment(geometry, &v[0], &v[1]))
         goto fail;
-    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[1], &v1, &v[2]))
+    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[1], v1, &v[2]))
         goto fail;
     if (!d2d_geometry_outline_add_line_segment(geometry, &v[2], &v[3]))
         goto fail;
-    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[3], &v2, &v[4]))
+    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[3], v2, &v[4]))
         goto fail;
     if (!d2d_geometry_outline_add_line_segment(geometry, &v[4], &v[5]))
         goto fail;
-    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[5], &v3, &v[6]))
+    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[5], v3, &v[6]))
         goto fail;
     if (!d2d_geometry_outline_add_line_segment(geometry, &v[6], &v[7]))
         goto fail;
-    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[7], &v4, &v[0]))
+    if (!d2d_geometry_outline_add_arc_quadrant(geometry, &v[7], v4, &v[0]))
         goto fail;
 
     return S_OK;

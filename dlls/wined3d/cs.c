@@ -3814,7 +3814,7 @@ static inline bool wined3d_cs_execute_next(struct wined3d_cs *cs, struct wined3d
         TRACE("%s executed.\n", debug_cs_packet(packet));
     }
 
-    InterlockedExchange((LONG *)&queue->tail, tail);
+    WriteRelease((LONG *)&queue->tail, tail);
     /* A client thread may be blocked in wined3d_cs_wait_for_progress() until
      * this queue moves; it sets the flag before it blocks. */
     if (InterlockedCompareExchange(&cs->waiting_for_progress, FALSE, TRUE))

@@ -11,7 +11,7 @@ in the upstream README retained below.
 </p>
 
 <p align="center">
-  <img alt="Base" src="https://img.shields.io/badge/base-Wine%2011.19%20devel-blue">
+  <img alt="Base" src="https://img.shields.io/badge/base-Wine%2011.20%20devel-blue">
   <img alt="Rolling devel" src="https://img.shields.io/badge/rolling%20devel-newest%2011.x%20tag-blue">
   <img alt="Subsystems" src="https://img.shields.io/badge/modified%20subsystems-40%2B-informational">
   <img alt="License" src="https://img.shields.io/badge/license-LGPL--2.1-green">
@@ -136,7 +136,7 @@ pwrshsip (new) · powershell.exe · winemenubuilder.exe · and more than twenty 
 ```bash
 git clone https://github.com/giang17/wine.git
 cd wine
-git checkout d2d1-dcomp-11.19    # this branch; d2d1-dcomp-11.0 is the stable one
+git checkout d2d1-dcomp-11.20    # this branch; d2d1-dcomp-11.0 is the stable one
 ./configure --prefix=/opt/wine-d2d1 --enable-archs=i386,x86_64
 make -j$(nproc)
 sudo make install
@@ -147,7 +147,7 @@ architectures: 32-bit hosts and plugins load `d2d1`, `dcomp` and `dxgi` directly
 stale 32-bit half keeps running old code without anything visibly failing. This needs the
 `i686-w64-mingw32` cross compiler next to the x86_64 one.
 
-Two things are worth knowing before the first run, both explained in
+Three things are worth knowing before the first run, the first two explained in
 [PATCHES.md](PATCHES.md):
 
 - **`wine.inf` is part of the install.** It carries this fork's registry defaults,
@@ -160,6 +160,15 @@ Two things are worth knowing before the first run, both explained in
   no speed-up in the setup this fork is developed on. If DXVK is needed for something else
   on the same machine, PATCHES.md has the per-application switch; the whole trio
   `d3d11,dxgi,d3d10core` has to move together.
+- **On a Wayland desktop, keep Wine on Xwayland.** That is Wine's default as long as
+  `DISPLAY` is set (driver order `mac,x11,wayland`). Together with the previous point this
+  is the configuration the fork is developed and tested in: winex11 with Wine's own
+  Direct3D. Every display-driver change of the fork is in `winex11.drv`, while
+  `winewayland.drv` is unmodified. Starting with `DISPLAY` unset selects Wine's own Wayland
+  driver, on Plasma recognisable by Wine-drawn blue title bars, and the fork's driver-level
+  fixes do not apply there. In a short test on Plasma 6, Serum 2's drag image came out
+  black, WebView2 content embedded from another process (FL Cloud) stayed black, and
+  rendering was noticeably slower.
 
 Details, tuning and font setup: **[PATCHES.md](PATCHES.md)**. Steinberg Cubase 15,
 Nuendo 15 and Dorico 6, from the Download Assistant to a running project:
@@ -362,5 +371,3 @@ fallback is what a "the GUI is black" report usually turns out to be.
 ## License
 
 Same as Wine — GNU LGPL. See [LICENSE](LICENSE).
-
-ARLinux Bionic Wine integration and release procedures: [arlinux/BUILD.md](arlinux/BUILD.md).

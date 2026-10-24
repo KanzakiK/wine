@@ -108,6 +108,11 @@ static inline void dcomp_private_free(void *ptr)
  * the subclassed wndproc can put the delivered leaves back over the presented
  * frame without waiting for the next tree timer tick (issue 206). */
 #define WM_WINE_DCOMP_PRESENT_FLUSH (WM_USER + 0x102)
+/* dcomp_commit_visual_tree() posts this to an in-process target window when
+ * Commit() runs in another thread than the window's: the composite walks and
+ * blits the target's buffers, which the tree timer does in that thread too
+ * (issue 248). */
+#define WM_WINE_DCOMP_COMMIT_COMPOSITE (WM_USER + 0x103)
 
 /* Forward declarations for target back-pointer and list management */
 struct dcomp_device;
@@ -189,6 +194,29 @@ static BOOL dcomp_present_driven(void)
  * duration is what separates them; measured phase lengths cluster below 620 ms
  * and above 790 ms, and this sits in that gap. */
 #define DCOMP_TARGET_REPAIR_MS 700
+
+/* How long a composite may be held back while a swapchain leaf has nothing
+ * published (issue 497).  Chromium replaces its swapchain on every resize step
+ * of Power BI Desktop: the old one is released -- and with it the comp props
+ * wined3d had set on its window -- before the new one has presented, measured
+ * 5-81 ms per step (median 40).  DWM composes a tree on Commit and shows the
+ * last composed frame until then; our timer composites whatever is published
+ * at the tick, and a tick inside that gap delivered the backdrop alone, a whole
+ * window of black.  Longer than any measured gap, short enough that content
+ * that really went away is not held noticeably. */
+#define DCOMP_LEAF_ABSENT_HOLD_MS 250
+
+/* WINE_DCOMP_HOLD_ABSENT_LEAF=0 delivers such frames again, for A/B measurements. */
+static int dcomp_hold_absent_leaf_enabled = -1;
+static BOOL dcomp_hold_absent_leaf(void)
+{
+    if (dcomp_hold_absent_leaf_enabled < 0)
+    {
+        const char *e = getenv("WINE_DCOMP_HOLD_ABSENT_LEAF");
+        dcomp_hold_absent_leaf_enabled = (!e || atoi(e)) ? 1 : 0;
+    }
+    return dcomp_hold_absent_leaf_enabled > 0;
+}
 
 static void dcomp_send_child_mode(IUnknown *content)
 {
@@ -3706,6 +3734,8 @@ struct dcomp_target
      * leaves (surface/texture content) are never skipped. */
     DWORD walk_leaf_hash;
     BOOL walk_leaf_hash_valid;
+    BOOL walk_leaf_absent;                /* the walk met a swapchain leaf that publishes nothing (issue 497) */
+    DWORD leaf_absent_tick;               /* GetTickCount | 1 when the current run of such walks began, 0 = none */
     DWORD last_blit_leaf_hash;
     BOOL last_blit_leaf_valid;
     RECT last_blit_clip_rc;               /* clip box of the last blit that really painted */
@@ -3722,6 +3752,16 @@ struct dcomp_target
     RECT last_blit_win_rect;              /* screen rect at the last delivered blit */
     BOOL last_blit_win_valid;
     RECT last_blit_top_rect;              /* toplevel screen rect at that moment */
+    /* Painter's order among the targets of this process (issue 494): see
+     * dcomp_stack_refresh().  on_screen says a blit of ours reached the window
+     * since it was last hidden or clipped away; the rest is the cache the
+     * refresh fills, under dcomp_all_targets_cs. */
+    BOOL on_screen;
+    HWND stack_path[32];                  /* root first, this window last (DCOMP_STACK_DEPTH) */
+    unsigned int stack_depth;             /* 0 = unknown or gone */
+    RECT stack_rect;                      /* client rect in screen coordinates */
+    BOOL stack_visible;
+    HRGN stack_clip;                      /* client-space area the targets above have on screen */
     /* WndProc subclass for WM_ERASEBKGND / WM_PAINT protection (Phase 5) */
     WNDPROC orig_wndproc;
 };
@@ -3831,6 +3871,8 @@ static ULONG STDMETHODCALLTYPE dcomp_target_Release(IDCompositionTarget *iface)
         EnterCriticalSection(&dcomp_all_targets_cs);
         if (target->all_entry.next)
             list_remove(&target->all_entry);
+        if (target->stack_clip)
+            DeleteObject(target->stack_clip);
         if (target->comp_bitmap)
         {
             SelectObject(target->comp_dc, NULL);
@@ -4403,7 +4445,17 @@ static void dcomp_commit_visual_tree(HWND target_hwnd, struct dcomp_visual *root
         if (target && now - target->last_tree_composite_tick >= DCOMP_TREE_FRAME_MS)
         {
             target->last_tree_composite_tick = now;
-            dcomp_target_composite_tree(target, FALSE);
+            /* The composite belongs to the window's thread, where the tree
+             * timer runs it as well.  Chromium commits the tree it has just
+             * built from its compositor thread; measured with Ableton Live 12,
+             * that pass entered the composite while the timer pass of the same
+             * target was still inside it, and both wrote the composition
+             * buffer and blitted it (issue 248).  A foreign target has no
+             * subclass to post to and keeps compositing in the caller. */
+            if (!target->foreign && GetWindowThreadProcessId(target_hwnd, NULL) != GetCurrentThreadId())
+                PostMessageW(target_hwnd, WM_WINE_DCOMP_COMMIT_COMPOSITE, 0, 0);
+            else
+                dcomp_target_composite_tree(target, FALSE);
         }
     }
     else
@@ -5050,11 +5102,16 @@ static void dcomp_composite_leaf(struct dcomp_target *target, struct dcomp_compo
         swprintf(prop_name, ARRAY_SIZE(prop_name),
                 WINE_DCOMP_WND_PROP_FMT, GetCurrentProcessId(), (UINT_PTR)leaf->content);
         comp_wnd = (HWND)GetPropW(GetDesktopWindow(), prop_name);
-        if (comp_wnd)
+        if (!comp_wnd)
+            target->walk_leaf_absent = TRUE;
+        else
         {
             bits = (DWORD *)GetPropW(comp_wnd, L"__wine_dcomp_comp_bits");
             dims = (ULONG_PTR)GetPropW(comp_wnd, L"__wine_dcomp_comp_size");
-            if (bits && dims)
+            /* Between two swapchains of one visual (see DCOMP_LEAF_ABSENT_HOLD_MS). */
+            if (!bits || !dims)
+                target->walk_leaf_absent = TRUE;
+            else
             {
                 /* Unchanged-content gate: fold this leaf's source pixels and
                  * placement into the walk hash.  Every pixel -- see
@@ -5630,6 +5687,182 @@ static BOOL dcomp_save_under(void)
     return dcomp_save_under_enabled > 0;
 }
 
+/* --- Painter's order among the targets of this process (issue 494) ---------
+ *
+ * The DWM composes every target of a top-level in z-order, once per frame: a
+ * target lower in the tree is drawn first, the one above it last, and what the
+ * upper tree covers of the lower one is simply never seen.  Here every target
+ * blits its own frame into its window on its own schedule, and the only thing
+ * that keeps a covered target off the screen is the GDI visible region of its
+ * DC -- which is right as long as the window above it is one GDI would clip.
+ * A WS_EX_TRANSPARENT sibling is not: the server leaves the area under it in
+ * the region of the window below (clip_children()), because for GDI painting
+ * the transparent window is painted afterwards and so covers it again.  Our
+ * blits do not paint afterwards, they paint whenever their tree changed, and
+ * then the last one to deliver wins.
+ *
+ * Power BI Desktop keeps its five views (model, TMDL, table, report, home) in
+ * five WinForms hosts over each other, all WS_VISIBLE, all WS_EX_TRANSPARENT,
+ * each with a WebView2 inside.  Measured 21.10.2026: a fresh cache DC from a
+ * third process answers SIMPLEREGION (0,0)-(1912,1071) for every one of the
+ * five GPU-process targets regardless of its host's z-rank, and the four
+ * covered ones composited at 15-25 Hz with that clip -- the main window showed
+ * the views in turns, 200-330 ms each.  Power BI itself switched nothing: one
+ * ActivateView in its trace, at start-up.
+ *
+ * So take the DWM's order into our own hands for what we can know: before a
+ * target writes into its window, exclude from its DC the area that targets of
+ * this process which are ABOVE it in the window tree have on the screen.  The
+ * order comes from the paths of both windows to their common root -- the two
+ * branches are siblings, and GW_HWNDNEXT from the upper one reaches the lower.
+ * Nested targets (one window a descendant of the other's) are left alone:
+ * they are composed into one frame by dcomp_target_blend_over_ancestor().
+ * Targets of other processes are not seen; a WebView2 shares one GPU process
+ * for all of its views, which is the case this is about.
+ *
+ * The paths and rectangles are refreshed at most every DCOMP_STACK_REFRESH_MS,
+ * because each foreign ancestor on a path is a server call; a view switch
+ * reaches the clip within that time.  WINE_DCOMP_STACK_CLIP=0 turns it off. */
+#define DCOMP_STACK_DEPTH 32
+#define DCOMP_STACK_REFRESH_MS 50
+
+static int dcomp_stack_clip_enabled = -1;
+static DWORD dcomp_stack_tick;
+
+static BOOL dcomp_stack_clip(void)
+{
+    if (dcomp_stack_clip_enabled < 0)
+    {
+        const char *e = getenv("WINE_DCOMP_STACK_CLIP");
+        dcomp_stack_clip_enabled = (!e || atoi(e)) ? 1 : 0;
+    }
+    return dcomp_stack_clip_enabled > 0;
+}
+
+/* Is the window of path a painted after the window of path b?  Both paths run
+ * from the root down.  Different roots and nested windows are not ordered. */
+static BOOL dcomp_stack_above(const HWND *pa, unsigned int na, const HWND *pb, unsigned int nb)
+{
+    unsigned int i = 0;
+    HWND h;
+
+    while (i < na && i < nb && pa[i] == pb[i])
+        i++;
+    if (!i || i == na || i == nb)
+        return FALSE;
+    /* pa[i] and pb[i] are siblings; GW_HWNDNEXT walks down the z-order. */
+    for (h = GetWindow(pa[i], GW_HWNDNEXT); h; h = GetWindow(h, GW_HWNDNEXT))
+        if (h == pb[i])
+            return TRUE;
+    return FALSE;
+}
+
+/* Recompute the paths, screen rectangles and the stack clip of every target.
+ * Caller holds dcomp_all_targets_cs. */
+static void dcomp_stack_refresh(void)
+{
+    HWND desktop = GetDesktopWindow();
+    DWORD now = GetTickCount();
+    struct dcomp_target *t, *u;
+    unsigned int count = 0;
+
+    if (dcomp_stack_tick && now - dcomp_stack_tick < DCOMP_STACK_REFRESH_MS)
+        return;
+    dcomp_stack_tick = now | 1;
+
+    LIST_FOR_EACH_ENTRY(t, &dcomp_all_targets, struct dcomp_target, all_entry)
+    {
+        HWND chain[DCOMP_STACK_DEPTH], h = t->hwnd;
+        unsigned int depth = 0, i;
+
+        if (t->stack_clip)
+            SetRectRgn(t->stack_clip, 0, 0, 0, 0);
+        t->stack_depth = 0;
+        t->stack_visible = FALSE;
+        count++;
+
+        if (!h || !IsWindow(h))
+            continue;
+        for (; h && h != desktop && depth < DCOMP_STACK_DEPTH; h = GetAncestor(h, GA_PARENT))
+            chain[depth++] = h;
+        if (h != desktop)
+            continue;
+        for (i = 0; i < depth; i++)
+            t->stack_path[i] = chain[depth - 1 - i];
+        t->stack_depth = depth;
+        GetClientRect(t->hwnd, &t->stack_rect);
+        MapWindowPoints(t->hwnd, NULL, (POINT *)&t->stack_rect, 2);
+        t->stack_visible = IsWindowVisible(t->hwnd);
+    }
+    if (count < 2)
+        return;
+
+    LIST_FOR_EACH_ENTRY(t, &dcomp_all_targets, struct dcomp_target, all_entry)
+    {
+        if (!t->stack_depth)
+            continue;
+        LIST_FOR_EACH_ENTRY(u, &dcomp_all_targets, struct dcomp_target, all_entry)
+        {
+            HRGN tmp;
+            RECT r;
+
+            if (u == t || u->hwnd == t->hwnd || !u->stack_depth
+                    || !u->on_screen || !u->stack_visible)
+                continue;
+            if (!IntersectRect(&r, &u->stack_rect, &t->stack_rect))
+                continue;
+            if (!dcomp_stack_above(u->stack_path, u->stack_depth, t->stack_path, t->stack_depth))
+                continue;
+            OffsetRect(&r, -t->stack_rect.left, -t->stack_rect.top);
+            if (!t->stack_clip)
+                t->stack_clip = CreateRectRgnIndirect(&r);
+            else if ((tmp = CreateRectRgnIndirect(&r)))
+            {
+                CombineRgn(t->stack_clip, t->stack_clip, tmp, RGN_OR);
+                DeleteObject(tmp);
+            }
+            TRACE("issue-494 stack: target %p hwnd %p lies under target %p hwnd %p at %s.\n",
+                    t, t->hwnd, u, u->hwnd, wine_dbgstr_rect(&r));
+        }
+    }
+}
+
+/* The DC a delivery writes through: GetDC() of the target window, less the
+ * area the targets above it have on the screen.  *saved says whether
+ * dcomp_target_release_dc() has DC state to put back -- the clip must not
+ * survive on an owned (CS_OWNDC) DC. */
+static HDC dcomp_target_get_dc(struct dcomp_target *target, BOOL *saved)
+{
+    HDC hdc = GetDC(target->hwnd);
+    RECT box, clip;
+
+    *saved = FALSE;
+    if (!hdc || !dcomp_stack_clip())
+        return hdc;
+
+    EnterCriticalSection(&dcomp_all_targets_cs);
+    dcomp_stack_refresh();
+    if (target->stack_clip && GetRgnBox(target->stack_clip, &box) > NULLREGION && SaveDC(hdc))
+    {
+        int verdict;
+
+        *saved = TRUE;
+        ExtSelectClipRgn(hdc, target->stack_clip, RGN_DIFF);
+        verdict = GetClipBox(hdc, &clip);
+        TRACE("issue-494 stack-clip: target %p hwnd %p minus %s, clip now %d %s.\n",
+                target, target->hwnd, wine_dbgstr_rect(&box), verdict, wine_dbgstr_rect(&clip));
+    }
+    LeaveCriticalSection(&dcomp_all_targets_cs);
+    return hdc;
+}
+
+static void dcomp_target_release_dc(struct dcomp_target *target, HDC hdc, BOOL saved)
+{
+    if (saved)
+        RestoreDC(hdc, -1);
+    ReleaseDC(target->hwnd, hdc);
+}
+
 /* --- The leaves in the frame instead of on the window (issue 206) ----------
  *
  * There are two delivery routes for DirectComposition content, and only one of
@@ -5963,7 +6196,8 @@ static void dcomp_target_deliver_region(struct dcomp_target *target, const RECT 
     RECT box, clip_rc;
     HRGN vacated;
     HDC hdc;
-    BOOL composed = TRUE;
+    BOOL composed = TRUE, dc_saved = FALSE;
+    int clip;
 
     if (!dcomp_region_delivery() || !rgn)
         return;
@@ -5986,7 +6220,8 @@ static void dcomp_target_deliver_region(struct dcomp_target *target, const RECT 
         if (CombineRgn(vacated, target->delivered_rgn, rgn, RGN_DIFF) > NULLREGION)
         {
             if (dcomp_save_under() && target->saved_rgn && target->save_dc
-                    && IsWindowVisible(target->hwnd) && (hdc = GetDC(target->hwnd)))
+                    && IsWindowVisible(target->hwnd)
+                    && (hdc = dcomp_target_get_dc(target, &dc_saved)))
             {
                 HRGN restore = CreateRectRgn(0, 0, 0, 0);
 
@@ -5995,7 +6230,7 @@ static void dcomp_target_deliver_region(struct dcomp_target *target, const RECT 
                     dcomp_blt_region(hdc, target->save_dc, restore);
                 if (restore)
                     DeleteObject(restore);
-                ReleaseDC(target->hwnd, hdc);
+                dcomp_target_release_dc(target, hdc, dc_saved);
             }
             InvalidateRgn(target->hwnd, vacated, FALSE);
         }
@@ -6086,15 +6321,16 @@ static void dcomp_target_deliver_region(struct dcomp_target *target, const RECT 
     }
     LeaveCriticalSection(&target->device->cs);
 
-    if (!composed || !target->comp_dc || !(hdc = GetDC(target->hwnd)))
+    if (!composed || !target->comp_dc || !(hdc = dcomp_target_get_dc(target, &dc_saved)))
         return;
 
     /* An empty clip means the blit cannot reach the window -- BitBlt returns
      * TRUE all the same, so recording a delivery here would invent a hand-back
      * for the next frame. */
-    if (GetClipBox(hdc, &clip_rc) > NULLREGION
-            && dcomp_blt_region(hdc, target->comp_dc, rgn))
+    clip = GetClipBox(hdc, &clip_rc);
+    if (clip > NULLREGION && dcomp_blt_region(hdc, target->comp_dc, rgn))
     {
+        target->on_screen = TRUE;
         /* Push the blit out to the display server now, do not leave it queued
          * (issue 206).
          *
@@ -6168,7 +6404,9 @@ static void dcomp_target_deliver_region(struct dcomp_target *target, const RECT 
                 (long)box.left, (long)box.top, (long)box.right, (long)box.bottom,
                 (long)rc->right, (long)rc->bottom, target->hwnd);
     }
-    ReleaseDC(target->hwnd, hdc);
+    else if (clip == NULLREGION)
+        target->on_screen = FALSE;
+    dcomp_target_release_dc(target, hdc, dc_saved);
 }
 
 /* -------------------------------------------------------------------------
@@ -6397,6 +6635,7 @@ static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_t
      * of every present after this one, one frame of a tree that has moved on. */
     dcomp_target_retract_layer(target);
 
+    target->walk_leaf_absent = FALSE;
     EnterCriticalSection(&target->device->cs);
     dcomp_target_ensure_comp_dc(target, rc.right, rc.bottom);
     if (target->comp_bits)
@@ -6496,13 +6735,42 @@ static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_t
     if (!composed)
         return;
 
+    /* A swapchain leaf has nothing published (issue 497, see
+     * DCOMP_LEAF_ABSENT_HOLD_MS): leave the window on the frame it shows
+     * instead of delivering the tree without that leaf.  The delivery record
+     * goes void, so the first composite with the leaf back blits even if its
+     * content matches the last one -- a WM_PAINT answered by a held frame has
+     * validated the window without our pixels. */
+    if (target->walk_leaf_absent && dcomp_hold_absent_leaf() && target->last_delivered_valid)
+    {
+        DWORD now = GetTickCount();
+
+        /* | 1 keeps 0 free for "no run"; it can put the start one tick ahead
+         * of now, hence the signed difference. */
+        if (!target->leaf_absent_tick)
+            target->leaf_absent_tick = now | 1;
+        if ((LONG)(now - target->leaf_absent_tick) < DCOMP_LEAF_ABSENT_HOLD_MS)
+        {
+            TRACE("issue-497 hold: target %p hwnd %p, a swapchain leaf has published nothing for %ld ms.\n",
+                    target, target->hwnd, (LONG)(now - target->leaf_absent_tick));
+            target->last_blit_leaf_valid = FALSE;
+            return;
+        }
+    }
+    else if (!target->walk_leaf_absent && target->leaf_absent_tick)
+    {
+        TRACE("issue-497 hold over: target %p hwnd %p, the leaf is back after %lu ms.\n",
+                target, target->hwnd, GetTickCount() - target->leaf_absent_tick);
+        target->leaf_absent_tick = 0;
+    }
+
     if (target->comp_dc)
     {
-        BOOL skip_same = FALSE, blt_out = FALSE;
+        BOOL skip_same = FALSE, blt_out = FALSE, dc_saved = FALSE;
         int clip_out = -1;
         RECT clip_out_rc = {0};
 
-        hdc = target->present_layered ? NULL : GetDC(target->hwnd);
+        hdc = target->present_layered ? NULL : dcomp_target_get_dc(target, &dc_saved);
         if (hdc)
         {
             /* Paint only as far as the tree reaches (issue 187).  Everything
@@ -6526,6 +6794,7 @@ static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_t
             {
                 skip_same = TRUE;
                 target->last_blit_leaf_valid = FALSE;
+                target->on_screen = FALSE;
             }
 
             /* Switching to another application can cost us the pixels we
@@ -6573,7 +6842,7 @@ static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_t
             else
                 TRACE("issue-99 skip-unchanged: target %p hwnd %p %ux%u clip %d.\n",
                         target, target->hwnd, target->comp_width, target->comp_height, clip_out);
-            ReleaseDC(target->hwnd, hdc);
+            dcomp_target_release_dc(target, hdc, dc_saved);
         }
         else if (target->present_layered)
         {
@@ -6614,6 +6883,7 @@ static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_t
             target->last_blit_leaf_hash = target->walk_leaf_hash;
             target->last_blit_leaf_valid = target->walk_leaf_hash_valid;
             target->last_blit_clip_rc = clip_out_rc;
+            target->on_screen = TRUE;
             /* Remember what the window should show from now on, so the next
              * backdrop readback can tell whether it still does. */
             if (target->comp_bits)
@@ -6634,6 +6904,7 @@ static void dcomp_target_composite_tree(struct dcomp_target *target, BOOL from_t
              * after re-exposure must blit again even with unchanged leaves
              * (hub windows where every tab is a static WebView page). */
             target->last_blit_leaf_valid = FALSE;
+            target->on_screen = FALSE;
         }
 
         /* Hand the area back to the host exactly once per visible->hidden
@@ -7152,7 +7423,8 @@ static void dcomp_target_present_region(struct dcomp_target *target,
         BOOL present_dirty)
 {
     static unsigned int present_log;
-    BOOL over_ancestor;
+    BOOL over_ancestor, dc_saved = FALSE;
+    RECT clip_rc;
     HDC hdc;
 
     /* Copy surface bits → DIB.  Dirty rows only when present_dirty; the rest of
@@ -7202,12 +7474,14 @@ static void dcomp_target_present_region(struct dcomp_target *target,
 
     /* BitBlt only the present region to the target window (the rest already shows the
      * prior frame — WM_ERASEBKGND is suppressed). */
-    hdc = GetDC(target->hwnd);
+    hdc = dcomp_target_get_dc(target, &dc_saved);
     if (hdc)
     {
-        BitBlt(hdc, left, top, right - left, bottom - top,
-                target->comp_dc, left, top, SRCCOPY);
-        ReleaseDC(target->hwnd, hdc);
+        if (BitBlt(hdc, left, top, right - left, bottom - top,
+                target->comp_dc, left, top, SRCCOPY)
+                && GetClipBox(hdc, &clip_rc) > NULLREGION)
+            target->on_screen = TRUE;
+        dcomp_target_release_dc(target, hdc, dc_saved);
     }
     target->comp_needs_full_present = FALSE;
 
@@ -7426,6 +7700,11 @@ static LRESULT CALLBACK dcomp_target_wndproc(HWND hwnd, UINT msg, WPARAM wparam,
         }
         break;
 
+    case WM_WINE_DCOMP_COMMIT_COMPOSITE:
+        /* A Commit() from another thread handed its composite over (issue 248). */
+        dcomp_target_composite_tree(target, FALSE);
+        return 0;
+
     case WM_PAINT:
         /* Rootless tree (issue 88): repaint from the composed tree instead of
          * the original wndproc (which would show the empty/loader content).
@@ -7521,6 +7800,7 @@ static LRESULT CALLBACK dcomp_target_wndproc(HWND hwnd, UINT msg, WPARAM wparam,
                         && target->root_visual && target->root_visual->surface_content
                         && !target->root_visual->surface_content->has_pending)
                 {
+                    BOOL dc_saved = FALSE;
                     HDC hdc;
 
                     if (update.left < 0) update.left = 0;
@@ -7528,14 +7808,14 @@ static LRESULT CALLBACK dcomp_target_wndproc(HWND hwnd, UINT msg, WPARAM wparam,
                     if (update.right > (LONG)target->comp_width) update.right = target->comp_width;
                     if (update.bottom > (LONG)target->comp_height) update.bottom = target->comp_height;
                     if (update.right > update.left && update.bottom > update.top
-                            && (hdc = GetDC(hwnd)))
+                            && (hdc = dcomp_target_get_dc(target, &dc_saved)))
                     {
                         TRACE("Restoring %s of the composed frame on hwnd %p after WM_PAINT.\n",
                                 wine_dbgstr_rect(&update), hwnd);
                         BitBlt(hdc, update.left, update.top, update.right - update.left,
                                 update.bottom - update.top, target->comp_dc,
                                 update.left, update.top, SRCCOPY);
-                        ReleaseDC(hwnd, hdc);
+                        dcomp_target_release_dc(target, hdc, dc_saved);
                         /* ... and the targets on child windows over it (issue 335). */
                         dcomp_target_present_nested(target, update.left, update.top,
                                 update.right, update.bottom);
@@ -9127,18 +9407,4 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
         break;
     }
     return TRUE;
-}
-
-HRESULT WINAPI DCompositionBoostCompositorClock(BOOL enable)
-{
-    FIXME("%d: stub.\n", enable);
-    return S_OK;
-}
-
-HRESULT WINAPI CreatePresentationFactory(IUnknown *device, REFIID iid, void **factory)
-{
-    FIXME("%p, %s, %p: stub.\n", device, debugstr_guid(iid), factory);
-    if (!factory) return E_POINTER;
-    *factory = NULL;
-    return E_NOTIMPL;
 }

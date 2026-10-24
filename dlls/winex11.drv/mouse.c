@@ -1580,6 +1580,17 @@ void move_resize_window( HWND hwnd, int dir, POINT pos )
     if (!button--) return;
     send_message( hwnd, WM_ENTERSIZEMOVE, 0, 0 );
 
+    /* The window manager moves the window now and has the pointer grabbed, so our
+     * cursor position stays where the drag started.  Every step of the move makes
+     * the server queue a mouse move at that position (update_cursor_pos), and
+     * without a capture it reaches whatever window the moved window now has under
+     * it: a WebView2 title bar saw the pointer sweep across its buttons and lit them
+     * up one after the other (Power BI Desktop).  The move loop of win32u holds the
+     * capture on the moved window for the whole move, as Windows does; do the same.
+     * A plain capture: with GUI_INMOVESIZE the driver would grab the pointer, which
+     * belongs to the window manager until the button is released. */
+    NtUserSetCapture( hwnd );
+
     for (;;)
     {
         MSG msg;
@@ -1594,6 +1605,9 @@ void move_resize_window( HWND hwnd, int dir, POINT pos )
 
         while (NtUserPeekMessage( &msg, 0, 0, 0, PM_REMOVE ))
         {
+            /* The move loop consumes the mouse, as on Windows: the window does not
+             * see the captured moves nor the button release that ends the move. */
+            if (msg.message >= WM_MOUSEFIRST && msg.message <= WM_MOUSELAST) continue;
             if (!NtUserCallMsgFilter( &msg, MSGF_SIZE ))
             {
                 NtUserTranslateMessage( &msg, 0 );
@@ -1606,6 +1620,7 @@ void move_resize_window( HWND hwnd, int dir, POINT pos )
     }
 
     TRACE( "hwnd %p/%lx done\n", hwnd, win );
+    NtUserReleaseCapture();
     send_message( hwnd, WM_EXITSIZEMOVE, 0, 0 );
 }
 

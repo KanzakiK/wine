@@ -2842,7 +2842,9 @@ BOOL WINAPI NtUserUpdateLayeredWindow( HWND hwnd, HDC hdc_dst, const POINT *pts_
         swp_flags &= ~SWP_NOSIZE;
     }
 
-    TRACE( "window %p new_rects %s\n", hwnd, debugstr_window_rects( &new_rects ) );
+    TRACE( "window %p new_rects %s, dirty %s, pts_src %s, flags %#x, hdc_src %p\n", hwnd,
+           debugstr_window_rects( &new_rects ), wine_dbgstr_rect( dirty ),
+           pts_src ? wine_dbgstr_point( pts_src ) : "(null)", (int)flags, hdc_src );
 
     surface = get_window_surface( hwnd, swp_flags, TRUE, &new_rects, &surface_rect );
     apply_window_pos( hwnd, 0, swp_flags, surface, &new_rects, NULL );
@@ -5917,6 +5919,9 @@ static WND *create_window_handle( HWND parent, HWND owner, UNICODE_STRING *name,
         if (parent && parent != get_desktop_window()) dpi = get_win_monitor_dpi( parent, &raw_dpi );
         else dpi = monitor_dpi_from_rect( rect, get_thread_dpi(), &raw_dpi );
     }
+
+    /* while the process DPI awareness is unset, the window takes the awareness once it is set */
+    if (process_dpi_awareness_unset()) dpi_context |= NTUSER_DPI_CONTEXT_FLAG_PROCESS;
 
     SERVER_START_REQ( create_window )
     {

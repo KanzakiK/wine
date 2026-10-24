@@ -5,20 +5,16 @@ source archives, hosted dispatch and public runtime selection. Rootfs products
 only download the runtime on demand. They neither build nor dispatch Wine.
 
 Our implementation upstream is [giang17/wine](https://github.com/giang17/wine),
-branch `d2d1-dcomp-11.19`, integrated at
-`e5ba49a4892ba58246e226b473f07ad9610501bd` to retain the current Wine 11.19 base.
+branch `d2d1-dcomp-11.20`, integrated at
+`fcad3e89b99c5882a4a0b4e889124b5f4a1c6631` on the Wine 11.20 base.
 Merge that upstream into the ARLinux branch; do not replace individual DComp
 files from another revision or replay our old DComp readback/lifetime patch.
 Direct2D, DirectComposition and related fixes follow the upstream source tree.
-The DComp ownership fixes from upstream's stable `d2d1-dcomp-11.0` branch
-(`08ca407e3cf2c1f02db79f23b264478239ed8fc6` and
-`997b39d64104315d3a8abdaf6ffcb0f4ecae9182`) are backported as separate Git
-commits, preserving authorship and upstream provenance. They supersede our
-experimental PR #24 readback implementation: keep upstream's readback throttle,
-Map behavior and output-lock boundaries, without the process-wide readback
-try-lock or extra staging Flush. The Wine 11.19 integration base is unchanged;
-the current upstream rolling branch is `d2d1-dcomp-11.20`. This backport is not
-a claim that all surface-root paths or application compatibility are verified.
+The 11.20 merge supersedes the earlier DComp backports and experiments with
+the upstream implementation. Keep its window-tree, cross-thread composition,
+readback and DPI behavior rather than restoring private DComp workarounds.
+An upstream merge does not establish application compatibility; validate cold
+startup and interaction in a fresh device instance before promotion.
 Android/Bionic integration remains in this fork. The Wine Staging VKD3D update is
 committed directly under `libs/vkd3d`, not applied during source preparation.
 The resulting ARLinux commit identifies the complete compiled Wine sources.

@@ -12,14 +12,14 @@ and D2D1 for GPU-accelerated 2D rendering — APIs that were largely unimplement
 in Wine. With these patches, plugins using DComp + D2D1 now render correctly
 and run stable in production use.
 
-**Base**: Wine 11.19 devel (`wine-11.19` tag) — this branch.
+**Base**: Wine 11.20 devel (`wine-11.20` tag) — this branch.
 
 ## Branches
 
 | Branch | Description |
 |--------|-------------|
 | `d2d1-dcomp-11.0` | **Recommended for stable users.** Full stack on Wine 11.0 stable: D2D1 + DComp + DWrite + WineD3D performance + winex11. Actively maintained. |
-| `d2d1-dcomp-11.<N>` (newest devel) | **Recommended for devel / rolling-release users** (e.g. `wine-tkg-dev`). The same full stack as `d2d1-dcomp-11.0`, rebased onto the latest WineHQ devel tag and rolled forward roughly every 2 weeks (currently `d2d1-dcomp-11.16`). **Use the highest-numbered `d2d1-dcomp-11.*` branch**: it is always the current rolling base; lower-numbered ones are previous snapshots, superseded. Plugin-tested by the maintainer before each push. |
+| `d2d1-dcomp-11.<N>` (newest devel) | **Recommended for devel / rolling-release users** (e.g. `wine-tkg-dev`). The same full stack as `d2d1-dcomp-11.0`, rebased onto the latest WineHQ devel tag and rolled forward roughly every 2 weeks. **Use the highest-numbered `d2d1-dcomp-11.*` branch**: it is always the current rolling base; lower-numbered ones are previous snapshots, superseded. Plugin-tested by the maintainer before each push. |
 | `d2d1-v6` | **Deprecated** (last update 2026-02-14). The original upstream-targeted D2D1-only series; superseded by the D2D1 work in `d2d1-dcomp-11.0`. Kept for reference. |
 
 ## Full Stack (Branch: `d2d1-dcomp-11.0`)
@@ -37,10 +37,26 @@ This is the recommended branch. What it changes, by subsystem:
   collapsing into a plain arc, and `GetBounds()` bounds the same chain. Consecutive
   `DrawLine()` calls with a solid brush are batched into one upload and one draw per
   colour (Serum 2's 3D wavetable view draws 68 352 lines that way: 2D→3D toggle 1 060 ms
-  → about 80 ms). Bitmap brushes honour WRAP and MIRROR instead of degrading to CLAMP,
+  → about 80 ms). Consecutive solid-colour fills — `FillRectangle()`,
+  `FillRoundedRectangle()`, `FillEllipse()`, `FillGeometry()` — are batched the same way:
+  the antialiased fill meshes and the curve triangles of all of them go up in one vertex
+  buffer each and are drawn per colour run, instead of two uploads and two draws with a
+  full state setup per geometry, and `FillRoundedRectangle()` reuses one retained geometry
+  per device context (fill only, no outline tessellation) instead of building a factory
+  object per call. Cymatics Hotline draws its LCD dot matrix as 1 931 rounded rectangles
+  per frame: 13.9 → 25.1 fps on a 2-core laptop, `wined3d_cs` 57 % → 12 %, the main
+  thread at 65 % for nearly twice the frames, pixels identical except for 8-bit rounding
+  where fills of one colour overlap. Closing a path geometry tests the control triangles of
+  its Bézier pieces pairwise for overlap; pairs whose bounding boxes lie apart skip the test
+  (half of `Close()` for glyph outlines, where it never split anything), and the result of
+  `Close()` is kept by the figure data and copied back for an identical path
+  (`WINE_D2D_FILL_CACHE=0` disables it): JUCE 8 draws text as path outlines rebuilt every
+  frame — Hotline closes 27 glyph paths per frame, 37 distinct ones in all — so a frame's
+  `Close()` time goes from 8.4 ms to 0.2–0.4 ms and the main thread from 62 % to 46 %,
+  pixels identical. Bitmap brushes honour WRAP and MIRROR instead of degrading to CLAMP,
   so a tiled background is tiled rather than one tile with its edge texels stretched
   (SynthEdit panels). `SetTarget(NULL)` drops the render target bindings, so a swapchain
-  back buffer is not held across `ResizeBuffers()` The scratch vertex and index buffers are dynamic and written through a
+  back buffer is not held across `ResizeBuffers()`. The scratch vertex and index buffers are dynamic and written through a
   `WRITE_DISCARD` map instead of `UpdateSubresource()` — wined3d cannot rename a
   DEFAULT buffer from the client thread and drained the command stream once per
   primitive (1 090–1 940 synchronisations per 20 px resize step of the SynthEdit canvas,
@@ -52,7 +68,12 @@ This is the recommended branch. What it changes, by subsystem:
   the quad `Clear()` draws are created once per device instead of once per device context:
   JUCE 8 creates about 3 400 device contexts while the preset list of Minimal Audio Current
   is scrolled for 4.6 s, and the two buffers of each cost two drains of the command stream
-  (11 806 synchronisations in such a drag before, 4 399 now).
+  (11 806 synchronisations in such a drag before, 4 399 now). `FillOpacityMask()` is
+  implemented: the mask becomes the opacity brush of a rectangle fill, sampled from the
+  source rectangle with linear filtering and clamped half a texel inside it, so a mask
+  cut from an atlas does not bleed its neighbours — vatSys pre-renders every map label
+  and symbol into 4096×4096 atlases and composites them this way, and the radar map had no
+  text and no waypoint symbols at all while the method was a stub.
 - **D2D1 curve edges**: a filled curve is drawn as a polygon plus one triangle per curve
   piece, and the antialiasing ramp of that triangle reaches half a pixel to either side of
   the curve. Next to a short piece the triangle is thinner than that, so both halves of the
@@ -65,6 +86,20 @@ This is the recommended branch. What it changes, by subsystem:
   at the outer edge 0.061 before, 0.012 after, Windows 10 0.031; the d2d1 tests fail at
   the same places as before. Visible on the Steinberg logo of HALion 7's Writing Room Synths
   macro page
+- **D2D1 straight edges stored as curves**: SVG exports often store a straight edge as a
+  cubic Bézier with both control points on the chord. Filled, such a piece became a curve
+  triangle of next to no area, and the skirt that carries its antialiasing ramp past the curve
+  extrapolated the triangle's texture coordinates 0.75 px further: the ramp came out wide and
+  uneven, and the edge looked stepped. Where the control point lay exactly on the chord and
+  counted as inside the filled area, it was inserted into the outline, the triangulation made
+  a triangle of zero area there, and that side lost its antialiasing. A piece whose control
+  point lies within 1e-4 of the chord's length of the chord is filled along the chord now, and
+  one within 1/16 px of it on the render target is drawn as a straight boundary edge, the
+  threshold the stroke shader uses. RMS error against box-filter coverage: the Minimal Audio
+  logo in Current's update popup (24 cubics, 12 of them straight edges) 0.304 → 0.048,
+  Windows 10 0.046; a square of cubics with control points on its edges 0.251 and 0.100 →
+  0.017, Windows 0.034. Curve fills change by at most 4/255 on 5 pixels of 158 400, and the
+  d2d1 tests fail at the same places as before
 - **D2D1 stroked curves**: `DrawGeometry()` and `DrawEllipse()` draw a curve's stroke as a
   strip of triangles that ended exactly at the stroke edge, so the half of the antialiasing
   ramp outside the edge had no pixels to run on and a stroked circle lost 3 % of its area;
@@ -105,6 +140,14 @@ This is the recommended branch. What it changes, by subsystem:
   the round-joined stroke went from RMS 0.098 to 0.007 against the ideal coverage (Windows 10
   0.015), miter and bevel to 0.021 and 0.024 against Windows; 28 stroke figure checks in the
   d2d1 suite pass that did not before (56 → 28 failures). Dashes are still ignored
+- **D2D1 geometry realizations**: `DrawGeometryRealization()` drew only into a command list;
+  on a bitmap, DXGI surface or swap chain target it returned without drawing, so an application
+  that uses `CreateFilledGeometryRealization()` / `CreateStrokedGeometryRealization()` lost the
+  shape entirely. Upstream has the same stub. A realization keeps the geometry it was created
+  from, and it is now drawn like `FillGeometry()` / `DrawGeometry()` on every target, with its
+  stroke width and stroke style; the flattening tolerance given at creation is not applied.
+  `test_geometry_realization()` checks the pixels now (6 failures before, 0 after). No affected
+  application is known — JUCE 8.0.0 to 8.0.15 never call the API
 - **D2D1 layers on an opaque target**: a layer bitmap inherited the target's alpha mode,
   so on a render target created as `ALPHA_MODE_IGNORE` the layer's own coverage was thrown
   away and everything drawn inside it turned the background colour, usually black. All
@@ -124,6 +167,25 @@ This is the recommended branch. What it changes, by subsystem:
   draws the icons of its "Add Track" submenu into one WIC render target after another
   (38 for 19 icons); opening the submenu took 1.42 s, during which the menu ignored the
   mouse, and takes 0.22 s now
+- **D2D1 device context options**: `CreateDeviceContext()` printed a `FIXME` for
+  `D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS`, the option JUCE's
+  Direct2D backend passes for the device context it creates per paint. The option is a
+  hint, and this implementation does not spread rendering across threads, so there is
+  nothing for it to switch on: it is accepted silently now, and the `FIXME` is left for
+  bits the enumeration does not define. Cymatics Hotline with its editor open, 25 s with
+  `+fixme`: 661 of 815 log lines were that message, 0 of 154 now. Under `+d2d` the
+  contexts remain visible as one `Created device context` line per call (561 in 10 s)
+- **D2D1 multi-threaded factories**: a device context of a `D2D1_FACTORY_TYPE_MULTI_THREADED`
+  factory holds the factory lock for the whole of every call, as Windows serialises the
+  calls on the objects such a factory creates. The lock used to cover only the D3D11
+  submission; the constant buffer maps, the scratch buffers and the line and fill batches
+  ran unprotected, and two threads drawing onto one render target corrupted them. vatSys
+  draws the runways of its map with `Parallel.ForEach` onto one bitmap render target and
+  crashed in `ID3D11DeviceContext::Map()`, with DXVK and with wined3d. Eight threads
+  calling `DrawLine()`/`DrawGeometry()` on one bitmap render target crashed every run in
+  both architectures (wined3d assertion in 32-bit, heap corruption in 64-bit) and complete
+  8 of 8 runs now; vanilla Wine 11.0 crashed 3 of 3 32-bit runs. JUCE 8 creates its
+  factory multi-threaded as well. Single-threaded factories are unchanged
 - **DComp**: IDCompositionDesktopDevice implementation with a D2D1 bitmap rendering path,
   dirty-rect clipping and DIB+BitBlt presentation; IDCompositionDevice3/4/5, composition
   and dynamic textures, D3D11 BeginDraw and surface handle export; rootless visual trees
@@ -136,7 +198,41 @@ This is the recommended branch. What it changes, by subsystem:
   card after a tab switch); when a hosted target moves, the area it leaves is handed back to the host only after a
   round trip on our X connection, so the host's repaint cannot overtake the blit that is
   still on its way (a docked WebView2 pane dragged in FL Studio left 3 px strips of the
-  plugin image behind, 30-70 px on a fast drag)
+  plugin image behind, 30-70 px on a fast drag); the visual tree is serialized against the
+  composite walk: `SetContent()`, `AddVisual()`, `RemoveVisual()`, `RemoveAllVisuals()`, the
+  dynamic texture's `SetTexture()` and the last `Release()` of a visual take a tree lock under
+  which the walk snapshots the leaves with a reference each, and the readback runs outside
+  it — Chromium's compositor thread sets content and commits while the tree timer composites
+  the same target in the window's thread (measured with Ableton Live 12), so the texture a
+  leaf was being read from could be released under the walk, the access violation reported
+  for Power BI Desktop in giang17/wine pull request 24; `SetRoot()` holds a reference on the
+  root visual, which it never did (an application that releases its own reference after
+  `SetRoot()` left the target with a dangling pointer); a `Commit()` from another thread than
+  the window's no longer composites the tree in the caller but posts the composite to the
+  window's thread (`WM_WINE_DCOMP_COMMIT_COMPOSITE`), where the tree timer runs it as well —
+  measured with Ableton Live 12, Chromium's compositor thread entered the composite of a target
+  while the timer pass was still inside it, and both wrote the composition buffer and blitted it;
+  a target's delivery is clipped to what the targets of its process that lie above it in the
+  window tree have on the screen, the order the DWM composes them in — the GDI visible region
+  of the target's DC does not clip a `WS_EX_TRANSPARENT` sibling of an ancestor (for GDI
+  painting that sibling is painted afterwards and covers the lower window again), so the
+  covered targets kept delivering and the last one to deliver won. Power BI Desktop 2.158
+  keeps its five views in five WinForms hosts over each other, all visible and all
+  `WS_EX_TRANSPARENT`, each with a WebView2 inside: the main window showed the views in turns,
+  200–330 ms each, five brightness levels in an 8 s capture; now one, and the four covered
+  targets paint nothing. Nested targets are not ordered here, they are blended into one
+  frame as before; targets of other processes are not seen (`WINE_DCOMP_STACK_CLIP=0`
+  turns it off); a composite that finds a swapchain leaf with nothing published is held
+  back for up to 250 ms and the window keeps the frame it shows, as the DWM keeps the last
+  composed frame until the next `Commit()` — Chromium replaces its swapchain on every resize
+  step, and the old one takes the properties wined3d published on its window with it before
+  the new one has presented (5–81 ms per step, median 40), so the composite timer delivered
+  the tree without that leaf: the backdrop alone. Power BI Desktop 2.158 went black over the
+  whole window for one to four frames on resize steps and on every switch between maximized
+  and normal; in colour-marked captures 13 of 15 and 22 of 25 such events covered more than
+  half the window before, 0 of 12 and 0 of 25 after. The strip a growing window gains before
+  Chromium follows still shows the backdrop (`WINE_DCOMP_HOLD_ABSENT_LEAF=0` turns the hold
+  off)
 - **DComp on a layered top-level without attributes**: a rootless visual tree whose target
   is a top-level window with `WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP` and no layered
   attributes is presented with `UpdateLayeredWindow()`, composited over a transparent
@@ -171,7 +267,21 @@ This is the recommended branch. What it changes, by subsystem:
   The per-fontface glyph cache used to die with the fontface, and text layout creates one
   per run: 17 208 fontfaces and 111 598 re-rasterisations of 196 distinct glyphs during a
   25 s SynthEdit resize. The cache now outlives the fontface, keyed by font file and face
-  index
+  index.
+  For a family that is not installed, JUCE 8 asks GDI for its substitute
+  (`CreateFontFaceFromHdc()`) and maps that face back with `GetFontFromFontFace()`. DWrite
+  referenced the file by win32u's NT path (`\??\Z:\...`), while the system collection holds
+  the DOS path from the `Fonts` key, so the lookup always failed with `DWRITE_E_NOFONT` —
+  even for Wine's own Tahoma. Cymatics Hotline (JUCE 8.0.4, asks for Helvetica Neue, which it
+  does not embed) drew no button labels and retried about 19 times per second, each retry
+  walking the whole collection; with ~3750 host fonts in the prefix its editor froze and the
+  host stopped answering `Ctrl+Q`. The NT prefix is now stripped: Hotline asks twice, finds
+  GDI's choice (Arial) and shows its labels. A prefix whose fonts directory holds the same
+  file under two spellings (`arial.ttf` from the font setup next to an older `Arial.ttf`)
+  still failed: GDI had loaded one, the `Fonts` key names the other, and local file
+  references compare by write time and path. `GetFontFromFontFace()` now falls back to
+  matching local files by path alone, ignoring case and write time, as Windows treats the
+  two names as one file.
 - **ClearType-style subpixel text** (from Cade / @shibco, `shibco/ableton-linux`):
   a glyph run asking for `DWRITE_TEXTURE_CLEARTYPE_3x1` used to be rendered once in
   greyscale and copied into all three subpixels. DWrite now rasterises the outline scaled
@@ -244,7 +354,7 @@ This is the recommended branch. What it changes, by subsystem:
   `wined3d_cs_emit_present()` counts its waiters and a woken waiter passes the signal on:
   with one flag and one auto-reset event, the second of two threads presenting
   swapchains of the same device was never woken (two threads at 20000 presents each hung
-  in 3 of 3 runs, 10 of 10 complete now) A client thread that waits for the command stream in a finish or a
+  in 3 of 3 runs, 10 of 10 complete now). A client thread that waits for the command stream in a finish or a
   resource-idle wait releases the global wined3d mutex for the wait and takes it back
   afterwards, so threads of different devices no longer serialise on each other's CS
   thread — SynthEdit's WPF chrome (D3D9) and its GMPI canvas (D3D11) at every resize
@@ -262,6 +372,64 @@ This is the recommended branch. What it changes, by subsystem:
   device-local memory, which the CPU cannot map: the initial data of a
   `D3D11_USAGE_DEFAULT` buffer aborted the process on an assertion (SynthEdit 4 s after
   start, `VK_ERROR_MEMORY_MAP_FAILED`). Such uploads go through system memory, as upstream.
+- **Backports from Wine 11.20** (six upstream commits, cherry-picked with their origin):
+  the `cs_queue` fields are aligned to cache lines so the client and the CS thread no
+  longer share one, the queue pointers are published with `WriteRelease()` instead of a
+  full `InterlockedExchange()`, the GLSL program key compares the pixel shader ID first
+  and `parse_channel_desc()` no longer calls `strlen()` (wined3d); `media_source_start()`
+  no longer reads an uninitialised stream count (winegstreamer, Wine bug 60241); and a
+  `RtlWaitOnAddress()` entry is unlinked with release semantics and re-checked with acquire
+  semantics, so a waiter cannot see its address cleared before the unlink is visible
+  (ntdll, the queue the loader-lock wake above runs through)
+- **wintypes**: `RoResolveNamespace()` looks up the `.winmd` files in `system32\WinMetadata`
+  (backport of 5542cd8541f and 03d18c456aa from Wine 11.19, with their tests). The stub
+  returned `RO_E_METADATA_NAME_NOT_FOUND` for every namespace, and the .NET Framework resolves
+  a Windows Runtime type through this call: Power BI Desktop 2.158 stopped at start-up with
+  `Could not find Windows Runtime type 'Windows.Storage.StorageFile'` (WineHQ bug 57410, an
+  empty main window and a 2x2 "Something went wrong" dialog). `StorageFile` now resolves; the
+  start still fails on `Windows.Storage.Streams.IInputStreamReference`, which is in no `.winmd`
+  Wine installs (widl puts only the types of one IDL file into its `.winmd`, and
+  `windows.storage.streams.idl` gets none)
+- **msxml3**: the SAX writer (`MXXMLWriter`) accepts `putDocumentLocator()`, and with indentation
+  enabled it no longer writes a newline before the first element or indents the end tag of an
+  element with text, which changed the text content (backport of 7981b37f728 from Wine 11.4 and
+  of 138e23626e3 and 75b3d038b58 from Wine 11.11). The Analysis Services engine of Power BI
+  Desktop (`msmdsrv.exe` 17.0) rewrites its `msmdsrv.ini` through `SAXXMLReader` into an
+  indenting `MXXMLWriter`: the `E_NOTIMPL` from `putDocumentLocator()` aborted the parse and the
+  engine exited before it opened its port, and with the old indentation `<Port>0</Port>` came
+  back as `0` followed by a line break and a tab, so the next start rejected the file
+  (`msmdsrv_Failed_ini.bak`). The engine now starts and listens; the next stop was
+  `ImpersonateAnonymousToken()` (ntdll, below)
+- **ntdll**: `NtImpersonateAnonymousToken()` lets the thread impersonate a new token for the
+  anonymous logon SID (S-1-5-7) at `SecurityImpersonation` level, without privileges, as
+  measured on Windows 10 19045; the stub returned `STATUS_NOT_IMPLEMENTED`, also upstream as of
+  Wine 11.20. Windows lists only the untrusted mandatory label as group and uses logon session
+  `0x3e6`; here the anonymous logon SID is the only group, because the server takes the primary
+  group from the group list. The Analysis Services engine of Power BI Desktop calls
+  `ImpersonateAnonymousToken()` right after `listen()` and stopped with "Invalid function"; it
+  now keeps listening and writes its port file
+- **mshtml**: `IHTMLTextAreaElement::disabled` is implemented (backport of f4880b7ee65 from
+  Wine 11.12, with its test); the stub returned `E_NOTIMPL`. Power BI Desktop shows its error
+  dialog as an HTML page in the WinForms web browser control, which stays 2x2 pixels until the
+  page script reports its size; the jQuery UI focus search read `textarea.disabled`, the
+  exception aborted the script, and the invisible modal dialog locked the main window. The
+  dialog now opens at its size and can be closed
+- **mshtml**: a document in IE10 or IE11 mode gets an agent style sheet that sets
+  `min-width` and `min-height` to 0, the minimum size IE 10 and 11 give flex items. Gecko
+  implements the automatic minimum size of the flexbox spec, the item's content size, and a
+  page written for IE that sizes a flex item to its container and lets a child scroll had that
+  item run out of the container instead. Power BI Desktop's options dialog: the options pane
+  grew to 1052 px in a 668 px dialog body and ran over the footer, where the transparent box
+  took every click meant for OK and Cancel (a hit-test probe found the click on the pane's
+  `SECTION`, not on the button); now the pane scrolls and the buttons work. The sheet changes
+  nothing for other elements, whose automatic minimum is zero already, and any rule of the
+  page overrides it; the mshtml `style`, `dom` and `events` tests give the same results with
+  and without it
+- **winemenubuilder**: a shortcut without arguments no longer produces a desktop entry whose
+  `Exec` line ends in an empty `""` argument (backport of 1977760e374 from Wine 11.19). vatSys,
+  which registers the `vatsys://` URL protocol, exited silently during its .NET start-up when
+  launched with that argument from the desktop icon Wine had generated: no window, no crash,
+  nothing in its own error log
 - **ntdll**: MADV_FREE for MEM_RESET (improved page reclaim behaviour)
 - **ntdll**: the heap enabled the LFH frontend only for size classes up to 1K; blocks between
   1K and 16K stayed in the backend heap, whose free path writes the free-list links over the
@@ -296,6 +464,26 @@ This is the recommended branch. What it changes, by subsystem:
   thousands of live blocks before they are enabled. Dorico 6, ten mode switches: 399 → 9.9
   steps per call, 15.5 % → 0.3 % of the process samples in the walk, 9 % less CPU time,
   2 % more anonymous memory. `kernel32:heap` passes unchanged on both architectures
+- **ntdll**: `GetUserPreferredUILanguages()` and its process, thread and system variants
+  returned a one-entry dummy list with the current locale and printed a `FIXME` on every
+  call. JUCE 8.0.4 asks for the user's display language for every piece of text it shapes
+  (twice, for the size and the buffer): with the Cymatics Hotline editor open the message
+  came 552 times per second and made up 98 % of the log. Wine 11.17/11.18 implemented the
+  family (Alexandre Julliard, `c1197354dfc` to `1350cc58cdc`, cherry-picked with their
+  origin): the lists come from `HKCU\Control Panel\Desktop\PreferredUILanguages` and
+  `MuiCached\MachinePreferredUILanguages`, fall back to the user's and the system's UI
+  language, and resource lookup walks that list with en-US as the last resort. The message
+  is gone and the answer is the real list; notepad and winecfg titles under `de_DE` and
+  `en_US` unchanged, `kernel32:locale` passes
+- **ntdll (debugger attach, wow64)**: attaching winedbg to a 32-bit process — `attach`,
+  `bt all` — killed it with a page fault on execute access at an address like
+  `0xffbb11b0`. A 64-bit debugger creates its break-in thread at its own
+  `DbgUiRemoteBreakin`, and a thread of a wow64 process starts in 32-bit code, so it ran at
+  the low half of the 64-bit address (upstream as well; only the old wow64 had a
+  workaround). The target process now starts that thread at the `DbgUiRemoteBreakin` of its
+  32-bit ntdll. A 32-bit program in `Sleep()` and vatSys 1.4.20 (78 threads) survive
+  `bt all` and an attach/detach; 64-bit processes and the automatic crash handler, which
+  does not attach this way, are unchanged
 - **Per-pixel alpha for GPU-painted layered windows**: `DwmExtendFrameIntoClientArea`
   with `margins = -1` asks for full glass, which on Windows makes the client area
   per-pixel alpha capable. Wine stubbed it, so a plugin dragging a bitmap around — Serum
@@ -369,6 +557,18 @@ This is the recommended branch. What it changes, by subsystem:
   stale frame or undefined pixmap content, and SynthEdit 1.5's menus came up as a copy of
   the screen below them or black once the empty-region flush above was disabled. WineHQ
   bug 60173 reports the same for every WPF menu, tooltip and `AllowsTransparency` window.
+- **winex11**: the present blit that `x11drv_client_surface_reblit()` repeats on a
+  `VisibilityNotify` is dropped for a window's own swap chain once the window shows
+  `UpdateLayeredWindow()` content. WPF creates a Direct3D 9 swap chain for an
+  `AllowsTransparency` window, presents it once at start-up and from then on only hands
+  frames to `UpdateLayeredWindow()`; the pending blit was replayed on the `VisibilityNotify`
+  that follows a resize, over the window surface flushed a moment before, and only the parts
+  a later flush covered came back. NinjaTrader 8's welcome window grows from 378×550 to
+  902×502 for its trading-mode page and kept an L-shaped hole at its top-left corner (376×127
+  plus a 56 px column, 68 744 pixels with alpha 0 in the two measured starts, showing stripes
+  or a cyan tint from the undefined pixmap of the resized offscreen client window).
+  `scripts/repro-513-ulw-reblit.sh` shows 188 752 magenta pixels of a 902×502 window before
+  and 0 after. A child's swap chain inside such a window is still repeated.
 - **wineserver, winex11**: a child window of another process with
   `WS_EX_NOREDIRECTIONBITMAP` shows its DirectComposition content over a top-level painted
   through `UpdateLayeredWindow()`, as the DWM composes it on Windows. Such a top-level
@@ -433,6 +633,18 @@ This is the recommended branch. What it changes, by subsystem:
   falls on a different part of the window after each step of a window manager drag; in
   SynthEdit 1.5 the menu bar items lit up one after another while the window was dragged
   by its title bar.
+- **winex11**: while the window manager moves a window on `_NET_WM_MOVERESIZE` (a title bar
+  the application reports as `HTCAPTION`), the driver holds the capture on that window and
+  the loop waiting for the end of the move no longer passes it mouse messages — what the move
+  loop of win32u does, and Windows. The window manager has the pointer grabbed for the whole
+  drag, so the position the server holds stays where the drag started, and the
+  `WM_MOUSEMOVE` the server synthesizes after every step of the move went to whatever window
+  the moved window had under that point; the `LeaveNotify` report above never comes when the
+  drag starts inside our own window. Power BI Desktop 2.158 draws its title bar in WebView2:
+  its six title bar buttons lit up one after another while the window was dragged, the
+  frozen point wandering across 331–1493 px of the window's width in one capture; with the
+  capture on the moved window in 405 of 412 samples of a drag, none lit up. A plain capture:
+  with `GUI_INMOVESIZE` the driver would grab the pointer the window manager holds
 - **winex11**: the window manager is offered no close function (`MWM_FUNC_CLOSE`) while the
   window's `SC_CLOSE` is grayed, disabled or missing in its system menu or the class carries
   `CS_NOCLOSE`. That is the test `WM_DELETE_WINDOW` is already discarded under, and the
@@ -452,6 +664,16 @@ This is the recommended branch. What it changes, by subsystem:
   their own frame and are unchanged. Setting `DecorateToolWindows` to `N` under
   `HKCU\Software\Wine\X11 Driver`, or per application under
   `HKCU\Software\Wine\AppDefaults\<app.exe>\X11 Driver`, restores the previous behaviour.
+- **win32u**: a captioned window whose client area reaches into the caption or the borders
+  — an application that draws its own title bar from `WM_NCCALCSIZE` — is shown with its
+  full window rectangle and without a window manager frame (upstream `6cfa941df3f`,
+  Wine 11.20, cherry-picked with its origin; Wine bugs 59877 and 42877). Before, the frame
+  was derived from the standard caption and covered the top of the application's own title
+  bar: a test window that keeps its borders and drops only the caption got decorations
+  `0x7a` and an X window starting 23 px below its client origin; it now gets decorations
+  `0x0` and the whole window. The main windows of FL Studio 2026 (no
+  `WS_CAPTION`), Ableton Live 12 and Cubase 15 (client area inside the frame) keep their
+  frame and geometry unchanged.
 - **win32u / winex11**: a top-level window the window manager raised on its own (a click
   under X11) is brought to the top of the win32 Z-order as well, as Windows does on
   activation, and the win32 order that results is applied back to the X stacking. An
@@ -476,7 +698,7 @@ This is the recommended branch. What it changes, by subsystem:
   window DC draws over the attached client window, and the copy landed on top of a frame
   the application had already presented; Dorico 6's Qt toolbar popups (top levels drawn
   through a composition swapchain) came up black in one of four openings when the first
-  GL swap won that race. Upstream has the same copy;
+  GL swap won that race. Upstream (11.20) makes the same copy.
 - **win32u**: the menu bar of a captioned window is measured and drawn through the
   undocumented non-client theming messages, as on Windows: `WM_UAHMEASUREMENUITEM`
   (0x0094) per item with an item size of 0x16, `WM_UAHINITMENU` (0x0093) before measuring
@@ -541,7 +763,85 @@ This is the recommended branch. What it changes, by subsystem:
   `update_window_state` that window creation already uses) — FL Studio's Browser window,
   open at start with the Sounds tab, went black for ~0.5 s after every activation change
   until it was hidden and shown once, because Chromium's child grew into it after FL had
-  taken the region
+  taken the region. A foreign window below a `WS_EX_TRANSPARENT` window of the owner is
+  subtracted as well: the transparent window itself does not obscure anything for GDI, but
+  the region walk used to skip its whole subtree. WinForms gives a control with
+  `BackColor=Transparent` that style, and Power BI Desktop 2.158 hosts each of its WebView2
+  views in one; dragging its window by the title bar erases the whole form on every step
+  (`RedrawWindow(RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN)` plus `UpdateWindow()`), and
+  the flush put that `COLOR_BTNFACE` over the views — 32 grey frames in 195 drag steps of a
+  15 fps capture, now none
+- **wineserver**: a window that is given a parent of another thread through `SetParent()`
+  shares that thread's input only when it is a `WS_CHILD` window, as on Windows. A
+  `WS_POPUP` window reparented this way keeps its own thread input: its activation
+  deactivates the other thread's window through the foreground switch (a notify,
+  `WM_WINE_SETACTIVEWINDOW`) instead of making that window the "previous" of
+  `set_active_window()` and sending it `WM_NCACTIVATE`/`WM_ACTIVATE` synchronously. FL
+  Studio's bit bridge (`ilbridge.exe`, a 32-bit plug-in in the 64-bit host) reparents the
+  plug-in's popup window into FL's frame while FL's main thread waits for the bridge in a
+  plain `WaitForMultipleObjects()`; the synchronous send never returned and both processes
+  sat there (WineHQ bug 44827, the soft lock on showing the GUI of a bit-bridged plug-in;
+  the same hang on un-parenting the window again, with "External window" enabled).
+  Measured against Windows 10 with `projects/setparent-bridge-probe` (host blocking in
+  `WaitForSingleObject()`, client reparenting across processes): `SetParent()` returns in
+  50 ms there with the host's thread input left separate, and the host gets the same
+  four deactivation messages once its own thread pumps again; a `WS_CHILD` window created
+  under the foreign parent blocks and attaches on both. The editor at 0,0 that
+  giang17/wine issue 23 reports is the parent-relative origin of a window that was
+  un-parented again, the position Windows gives it too
+- **wineserver**: the list of the siblings from a given window (`NtUserBuildHwndList()`,
+  behind `EnumChildWindows()`) and `FindWindowEx()` from a given child stop at a window that
+  is not linked into its parent's z-order. Destroying a window from another thread first
+  unlinks it (`set_parent` with no parent); the walk from such a window to the end of the
+  children list never got there — it went round the parent's unlinked list, and the server
+  with it, at 100 % of a core with every client waiting. Closing Power BI Desktop 2.158 hung
+  this way in two of four tries: its WebView2 host thread unlinks a `Chrome_WidgetWin_0`
+  while the main thread enumerates that window's siblings
+- **wined3d**: a GDI present of a window below a top level of another process blits
+  through a fresh cache DC instead of the one held since the swap chain was created.
+  That DC keeps the device origin and visible region of the window's position at that
+  time: `invalidate_dce()` runs in the process that moves a window, so a move of the
+  foreign ancestor never marks it dirty in the presenting process. FL Studio's bit bridge
+  (`ilbridge.exe`) parents the plug-in's popup into FL's frame; after the frame was
+  dragged, every present of the plug-in's Direct2D swap chain (the GDI readback path, the
+  window has no X window of its own) still landed at the old position — the plug-in
+  image stayed there while the frame at the new position showed only the borders FL
+  copies along at each drag step (dense vertical lines with a mouse drag, the "stripes"
+  of issue 479). Measured on `:99` with a 400×150 px drag in 40 px steps: all presents
+  after the drag went through the held DC at the old origin; with the fresh DC the image
+  follows the frame and nothing is left behind. The held DC stays as it is, a GL context
+  that is not forced to GDI is bound to it
+- **wined3d (Vulkan renderer)**: the SPIR-V vertex and fragment pipes carry `state_nop`
+  entries for the 13 fixed-function render states that the stateblock turns into
+  replacement shaders (`LIGHTING`, `FOGENABLE`, `SPECULARENABLE`, `COLORKEYENABLE`,
+  `RANGEFOGENABLE`, `COLORVERTEX`, `LOCALVIEWER`, `NORMALIZENORMALS`, the four material
+  sources, `VERTEXBLEND`), as upstream `d231cb2832a` added them to the GLSL pipes. Without
+  them `validate_state_table()` printed 13 `err:d3d:validate_state_table … should have a
+  representative` lines at every device creation with `renderer=vulkan` (65 at SynthEdit's
+  start). Nothing changes in behaviour: the Vulkan context checks none of these states,
+  and `d3d9_test stateblock` gives the same results before and after, 64- and 32-bit.
+  Upstream 11.20 still prints the lines
+- **opengl32 (WoW64)**: the Vulkan mapping behind a persistently mappable GL buffer is kept
+  for the lifetime of the buffer instead of being created and destroyed around every
+  `glMapBufferRange()`/`glUnmapBuffer()` pair. 32-bit wined3d does not keep its buffer
+  objects mapped (`wined3d_map_persistent()` is false on 32-bit), so every upload maps and
+  unmaps the 64 MiB allocator chunk; on WoW64 each of these went through `vkMapMemory2KHR`
+  (placed) and `vkUnmapMemory2KHR`, which the NVIDIA driver implements as two 64 MiB `mmap()`
+  calls per cycle (`PROT_NONE` over the range to release it, `MAP_SHARED` on `/dev/nvidiactl` to
+  map it again) plus control ioctls. vatSys (PE32, SharpDX Direct2D) made
+  ~1000 such cycles per second, the `wined3d_cs` thread spent 85 % of its time in them, the
+  radar map only appeared after a window move and zooming, resizing and the whole UI lagged
+  by seconds (WineHQ bug 60354 reports the same for 32-bit games). With the mapping retained
+  the chunk is mapped once: `mmap` 5760 → 206 and `ioctl` 17 861 → 2440 in a 3 s sample of
+  the CS thread, and none of the remaining `mmap()` calls maps 64 MiB any more (the driver still
+  opens `/dev/nvidiactl` for about 40 small mappings per second). The 32-bit reservation of the address
+  range was already kept across unmaps, so this costs no additional address space; the
+  retained mappings show up in the process RSS (13 chunks, ~830 MiB for vatSys). The
+  `VkApplicationInfo` of the Vulkan instance that this path creates now carries the right
+  `sType` and `apiVersion = VK_API_VERSION_1_0`; the loader no longer prints
+  `VkInstanceCreateInfo::pApplicationInfo::apiVersion has value of 0` at every GL context
+  creation. Mesa drivers were never affected (upstream MR 11579 adds a driver-side mapping
+  extension for them); upstream 11.20 still re-creates the mapping on every cycle
 - **ole32**: RevokeDragDrop no longer touches drop targets owned by other processes
   (fixes a crash when closing plugin windows)
 - **crypt32**: verifying a signature hashes the signed attributes as they are stored in
@@ -563,6 +863,52 @@ This is the recommended branch. What it changes, by subsystem:
   structures, got `ERROR_BUFFER_OVERFLOW`, and crashed on Studio > ADR API network setup.
   The lease times in `IP_ADAPTER_INFO` stay 32-bit in 32-bit code, so the structure keeps
   Windows' 640 bytes there after `time_t` became 64-bit on i386 in Wine 11.19
+- **sapi**: the placeholder voice token `Wine Default Voice` carried no attributes, so a
+  .NET Framework application enumerating voices got an `InstalledVoice` with `Name == null`
+  and `Culture == null`, and every `SpeechSynthesizer.Speak()` failed in the voice matching
+  of System.Speech 4.8: `NullReferenceException` in `Helpers.CompareInvariantCulture()`
+  (from `InstalledVoice.FirstEnabled()`, when no default voice is resolvable, as with
+  Wine's sapi whose category reported no default) or `ArgumentNullException` from
+  `String.IndexOf(null)` in `VoiceSynthesis.MatchVoice()` (when one is). The token now
+  carries a name, `Language=409`, gender, age and vendor, but deliberately no CLSID: Wine's
+  engine is a stub, and a token pointing at it captured the output silently (0 bytes even
+  for an SSML prompt that names another voice), whereas without it System.Speech disables
+  the token on first use and a real voice wins, or reports "No voice installed on the
+  system" when there is none. `ISpObjectTokenCategory::GetDefaultTokenId()` reads
+  `DefaultTokenId` under HKCU and HKLM before `DefaultDefaultTokenId`, and
+  `ISpDataKey::EnumValues()` is implemented (upstream MR 9733). A native voice remains
+  necessary for audio, and the MS Speech SDK 5.1 voices did not speak with this alone:
+  their engine (`spttseng.dll`) takes its pronunciations from lexicon classes of
+  Microsoft's `sapi.dll` (`SpLexicon` with its user lexicon, `SpCompressedLexicon`) and a
+  `SpPhoneConverter`, none of which Wine's sapi has. Creating the engine failed, through
+  `ISpVoice` with `REGDB_E_CLASSNOTREG`, while System.Speech went on with the half
+  initialised engine and rendered every word as the same 0.52 s of samples. Those classes
+  read the SDK's undocumented `.lxa` files and stay native, registered to a renamed copy
+  of the SDK's `sapi.dll` (Wine substitutes its builtin for a file named `sapi.dll`); they
+  need three object token methods that were stubs or missing, now implemented after
+  Microsoft's 5.1 `sapi.dll` (69 probe results identical): `ISpObjectTokenInit::
+  InitFromDataKey()`, `ISpObjectToken::MatchesAttributes()` (attribute values compared
+  case-insensitively, in token enumeration too) and `GetStorageFileName()` (path kept
+  under `<token>\<caller CLSID>\Files`, a new file created empty and reported with
+  `S_FALSE`). `ISpVoice` output is then byte-identical to that of Microsoft's complete
+  5.1 `sapi.dll`, and vatSys 1.4.20's ATIS pattern (System.Speech into a 48 kHz stream)
+  speaks, as do `SelectVoice()` and `<phoneme>` prompts. System.Speech itself needs SAPI
+  5.3 interfaces and does not start with the 5.1 `sapi.dll` as a whole. Windows 10 ships no
+  default voice in the registry either, but its SAPI picks one when a category without
+  `DefaultTokenId` is enumerated or asked for its default (the first token whose `Language`
+  contains the user's UI language, else the first token) and stores it under HKCU;
+  System.Speech, which enumerates the voices when a `SpeechSynthesizer` is constructed, reads
+  only that value and otherwise compares the voices with the thread's UI culture by walking
+  `CultureInfo.Parent` up to a neutral culture, which never ends for the invariant culture.
+  vatSys sets the invariant UI culture, so saving an ATIS hung forever in
+  `SpeechSynthesizer.Speak()`. `GetDefaultTokenId()` and `EnumTokens()` now store the
+  default as Windows does, and `SetDefaultTokenId()` is implemented.
+  [scripts/speechsdk51-setup.sh](scripts/speechsdk51-setup.sh) prepares a 64-bit prefix
+  for the SDK voices: it installs the SDK from `SpeechSDK51.exe` in Windows 2000 mode (its
+  MSI installs the runtime only there), returns to the previous Windows version, and points
+  the four classes at the renamed copy of the SDK's `sapi.dll`; `--check` reports the state.
+  In a fresh prefix with .NET 4.8, the vatSys ATIS pattern then speaks without any further
+  registration step
 - **msvcp**: the stream classes' move constructors and move assignment were exported as
   stubs, so a C++ application calling one aborted with "Call to unimplemented function" —
   Ableton Live's indexer did, on startup in a fresh prefix, so Live restarted it in a loop
@@ -608,6 +954,17 @@ This is the recommended branch. What it changes, by subsystem:
   device) the same way, so a WASAPI client's mix is not handed to the hardware by a thread
   that ranks below the client's audio threads; Cubase 15 through its built-in ASIO driver had
   six `Audio Realtime` threads at SCHED_FIFO 4 and the pump at nice -19 before.
+- **winealsa (mmdevapi)**: `IAudioClient::Start()` on a render stream whose ALSA device ran
+  dry after `Stop()` recovers the device before writing to it. In that state
+  `snd_pcm_avail_update()` returns `-EPIPE`, and `alsa_start()` passed the value on as an
+  unsigned frame count; after alsa-lib's `snd_pcm_recover: underrun occurred` the retried write
+  read past the end of the stream buffer, and `mmdevapi` stopped at its assertion
+  (`unix call 6 returned status c0000005`). The window lies between the device running dry and
+  the next period of the stream's timer, which recovers it. Studio Pro 8 hit it when closing
+  its main window and when loading a project. A client that stops and restarts a 30 ms
+  shared-mode stream at random phases aborted within the first 100 of 1000 rounds in three of
+  three runs before, and ran all rounds after. Upstream has the same code (wine-11.20 and
+  master of 2026-10-19)
 - **Virtual-desktop compositor (winex11)**: windows inside a Wine virtual desktop get
   real per-pixel alpha, which the plain desktop drawable cannot provide. A small
   XDamage-driven compositor assembles frames off screen and composites them through an
@@ -635,6 +992,144 @@ This is the recommended branch. What it changes, by subsystem:
   process-global cache of the last X11 event, and posts a finished IME result string as
   WM_CHAR as well. Together these make typing work in embedded WebView2 fields, including
   AltGr characters such as `@`, `\` and `€` on non-US layouts
+- **Lock keys (winex11)**: when the CapsLock, NumLock or ScrollLock state of X differs from
+  Wine's, the driver sets the toggle bit directly instead of sending a lock key press and
+  release before the next key. Wine starts with every toggle off, so with NumLock on at
+  login (Plasma's default) every application saw a NumLock press nobody made, in its window
+  messages, low-level hooks and raw input; DirectInput 8 reads raw input, and vatSys's key
+  binding dialog captured NumLock instead of the key pressed. With any `WH_KEYBOARD_LL` hook
+  on the desktop the mismatch never settled (WineHQ bug 60059): the pair came before every
+  key press and release, and with CapsLock typed text changed case at random. Measured with
+  a 32-bit DirectInput 8 test, ten keys, NumLock on: before 1 fake `DIK_NUMLOCK` without a
+  hook and 20 with one, the toggle left off; now 0 and the toggle on, as on Windows 11. A
+  lock key changed while no Wine window had the focus is no longer replayed to hooks
+- **Application compatibility layers (win32u)**: an entry under
+  `Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers` (HKCU or HKLM) named
+  after the full path of the executable applies, as on Windows. Wine looked up only the
+  file name, which Windows 10 22H2 ignores (measured with a test program); the file name
+  and the default value stay as Wine extensions. The vatSys plugins OzStrips and Maestro
+  write `DPIUNAWARE` under the full path of `vatSys.exe`. Without it vatSys became system
+  aware later in its run, and from wine-11.16 on its strip bays stayed empty: their
+  panels, created under the WinForms parking window while the process was still unaware,
+  could not be moved into the system-aware bay forms, because `SetParent()` refuses
+  windows of different DPI awareness. With only the full-path entry, vatSys on 11.20 now
+  creates the four strip bay devices again (six `DXGID3D10CreateDevice` instead of two)
+  and leaves no panel in the parking window. Windows created before the process awareness
+  is set follow it once it is set since the next entry, so the reparenting succeeds
+  without a layer as well
+- **DPI awareness of windows created before the process sets it (win32u, server)**: a
+  window created while the process DPI awareness is still unset takes the awareness once
+  the process sets it, as on Windows. Measured on Windows 10 22H2
+  (`projects/dpi-process-503-probe`): every window of the process created before
+  `SetProcessDPIAware()` or `SetProcessDpiAwarenessContext()` reports the process
+  awareness afterwards, whatever thread context it was created under and on whichever
+  thread, children included; a window whose awareness is already higher keeps it (a
+  system-aware window stays system aware when the process declares itself unaware). Wine
+  fixed the awareness at creation. WinForms applications that load WPF late (vatSys)
+  create their first forms unaware, WPF then calls `SetProcessDPIAware()`, and from
+  wine-11.16 on `SetParent()` refuses to move the earlier, unaware panels into the later,
+  system-aware forms (`ERROR_INVALID_STATE`), which left the vatSys strip bays empty
+  without a `DPIUNAWARE` layer. Now the `create_window` request carries
+  `NTUSER_DPI_CONTEXT_FLAG_PROCESS` while the process awareness is unset, the server
+  marks the window (children and reparented windows take the mark of their parent), and
+  the new request `set_process_dpi_awareness` raises the marked windows of the process
+  when it sets its awareness. Window rectangles are not rescaled (not measured on
+  Windows; at 96 dpi there is nothing to rescale). Covered by `user32/tests/sysparams.c`
+  (`test_dpi_context`, `test_SetProcessDpiAwarenessContext`); the test program's
+  results for Windows 10, Wine before and after lie next to it in the project
+- **Direct2D window targets with DXVK (winex11)**: the window of an `ID2D1HwndRenderTarget`
+  renders offscreen when its swap chain is a Vulkan one. d2d1 marks such a window so that a
+  child is attached to its top-level instead, because wined3d presents it through GDI and
+  the blit of an offscreen window never comes. DXVK presents through the Vulkan swap chain,
+  and attached, the window stayed black: vatSys's strip bays and its VSCS panel on X11 (and
+  under Xwayland, as reported), while its map, a Vulkan child without the mark, rendered.
+  Now they render offscreen like the map. OpenGL surfaces, wined3d's default renderer,
+  keep the attached path
+- **GDI present for a Direct2D window target with child windows (d2d1)**: an
+  `ID2D1HwndRenderTarget` whose window has child windows when it is created gets no DXGI
+  swap chain on a device that is not wined3d. It renders into a GDI-compatible texture, and
+  `EndDraw()` blits the texture's DC to a window DC taken with `DCX_USESTYLE`, which clips
+  the children of a `WS_CLIPCHILDREN` window — the way the DC render target presents.
+  vatSys's VSCS window is such a child, with WinForms children (the Add Freq panel, the
+  Text page) on top of it. wined3d presents a child window's swap chain through GDI and
+  winex11 blits an offscreen Vulkan surface, so the children stay visible there; winewayland
+  attaches DXVK's Vulkan client surface as a `wl_subsurface` above the top-level surface
+  that holds the GDI children, and they were covered (reported with 11.20 + DXVK +
+  winewayland; measured in a Plasma Wayland login and reproduced with a test program in a
+  nested weston: 0 of the 12 800 pixels of a red GDI grandchild visible, all of them with
+  this change, the wined3d and winex11 runs unchanged). The path costs one GPU-to-CPU copy
+  per present (VSCS repaints every 500 ms); only windows with children at creation time and
+  only `B8G8R8A8` targets take it. `WINE_D2D1_HWND_GDI_PRESENT=0` disables it, `=1` takes it
+  on wined3d too, `=2` for every window target
+- **Minimised windows under the Wayland driver (winewayland)**: backport of 7310a48e3d1,
+  3972b7b5337 and 8d64701d80b from Wine 11.8 (WineHQ bug 59577). Minimising sets
+  `WS_MINIMIZE` and moves the window to (-32000,-32000); the driver did not tell the
+  compositor and kept a 160x24 surface that stayed so on every configure, so a window
+  minimised from its title bar remained a bar that could be neither clicked nor restored
+  (Notepad on KWin 5.27, Plasma Wayland). Now the driver minimises through
+  `xdg_toplevel_set_minimized`, sends no `unset_maximized`/`unset_fullscreen` for a minimised
+  window, and restores it with `SC_RESTORE` when the compositor sends a configure;
+  3972b7b5337 fixes a use-after-release of the window rects in the configure handler. On
+  KWin 5.27 the window comes back through Alt+Tab, a click on its task bar entry does not
+  restore it (the same with Wine 11.20, which has the three commits). Only the Wayland driver
+  is affected; the fork default is winex11 through Xwayland
+- **Scroll bar size (win32u)**: the default `ScrollHeight` and `ScrollWidth` are 17 px
+  (-255 twips) as on Windows — measured on Windows 10 22H2, where
+  `HKCU\Control Panel\Desktop\WindowMetrics` carries -255 and
+  `GetSystemMetrics(SM_CYHSCROLL)` returns 17 — instead of 16 px (-240), unchanged since the
+  metrics became scalable (a657e5f6efa, 2013). WinForms sizes an auto-sized horizontal
+  `TrackBar` to `SM_CYHSCROLL * 8 / 3`: 42 px instead of 45, and the sliders of vatSys's
+  Display Settings, which paint their value from row `Height / 2 + 10`, cut the digits. The
+  default goes into a new prefix; an existing prefix keeps the value in its registry
+  (`reg add "HKCU\Control Panel\Desktop\WindowMetrics" /v ScrollHeight /d -255 /f`, the
+  same for `ScrollWidth`, brings it in line)
+- **GDI+ font metrics and text baseline (gdiplus)**: three things, measured against Windows
+  10 with Terminus (TTF) Bold 4.39, the font vatSys ships. `GdipCreateFontFamilyFromName()`
+  finds a family whose only face is bold (backport of e6e9d7627c0 from Wine 11.17): the
+  lookup compared the face's full name "Terminus (TTF) Bold" with the family name and
+  failed, and .NET fell back to GenericSansSerif, Tahoma here. A font that sets
+  `USE_TYPO_METRICS` (OS/2 `fsSelection` bit 7) reports its typographic metrics as cell
+  ascent, descent and line spacing — 833/167/1090 for Terminus, as Windows reports them,
+  where hhea says 849/183/1122. `GdipDrawString()` places the baseline where Windows GDI+
+  does: at the cell ascent scaled to the em size and rounded, or at GDI's hinted ascent
+  (`tmAscent`) when the font has a VDMX table and that is larger — not at `tmAscent`
+  unconditionally (94 of 94 family and size pairs on Windows 10, 69 of 70 under Wine
+  afterwards; before, the digits of 16 px Terminus sat one row lower than on Windows). With
+  the three and the 45 px slider, the digits under vatSys's brightness sliders are complete,
+  as on Windows
+- **Glyphs FreeType refuses (win32u)**: a glyph `FT_Load_Glyph()` rejects is drawn empty
+  with the advance from `hmtx` instead of failing, and the ABC widths of a glyph that still
+  fails are zero: `GetTextExtentPoint32()`, `GetCharABCWidths()` and the `DrawText()`
+  measurement left them uninitialised, and whatever the stack held became the width.
+  TerminusTTF-Bold 4.39 has a `.notdef` whose instruction count exceeds
+  `maxp.maxSizeOfInstructions` (`FT_Err_Too_Many_Hints`), every control character maps to
+  it, and WinForms measures a tab for the shortcut column of every drop-down menu: vatSys's
+  menus opened across the screen, 30 849 px wide with Wine 11.20 and 32 475 217 px wide and
+  blank with 11.0 (WineHQ bug 60548 reports the same menus with the same font). Windows
+  draws nothing for the glyph and advances 8 px at 16 px (measured on Windows 10); so does
+  Wine now
+- **Embedded bitmap strikes in GDI metrics (win32u)**: `GetGlyphOutline(GGO_METRICS)`,
+  `GetCharWidth32()`, `GetCharABCWidths()`, `GetTextExtentPoint32()` and the `DrawText()`
+  measurement take the advance of a font's embedded bitmap strike when the face has one at
+  the current ppem, and the ClearType rasterisation draws the strike's pixels as the mono
+  one already did; the grey formats keep the outline. Before, every glyph was loaded with
+  `FT_LOAD_NO_BITMAP` for everything but `GGO_BITMAP`, so a face whose strike is wider than
+  its hinted outline was measured narrower than it was drawn. Windows 10 reports the
+  strike's advance for `GGO_METRICS`, the ABC widths and `DrawText(DT_CALCRECT)` under every
+  quality and font smoothing setting and draws the strike for NONANTIALIASED, DEFAULT and
+  CLEARTYPE quality (reference VM; `GetCharWidth32()` and `GetTextExtentPoint32()` on that
+  build still report the outline, on the reporter's Windows the strike — Wine now gives the
+  strike throughout). TerminusTTF-Bold 4.39, shipped with vatSys, has strikes at 12 to
+  28 ppem, and those at 14 and 18 ppem are one pixel wider than the hinted outline: vatSys
+  sizes its strip fields from `TextRenderer.MeasureText("_")` on the 18 px font (reporter's
+  reading of the IL) and draws them with DirectWrite, whose GDI-compatible layout already
+  took the strike (10 px per glyph), so every field was one pixel per character too narrow
+  and the callsign ran past its box. Wine's own Tahoma and Tahoma Bold carry strikes at 8 to
+  16 ppem that Microsoft's Tahoma does not have, with advances that differ from Windows
+  (11 ppem: `i` 2 px against 3, `g` 6 against 7); faces from the Wine data directory keep
+  their strike for the mono rasterisation only, as before. Remaining difference: Windows
+  trims the strike to its ink for the ABC split and the black box (`_` at 18 px: 1/8/1 and
+  8x1 against 0/10/0 and 10x18 here)
 - **Media Foundation video playback (mf, evr, winegstreamer)**: playing and scrubbing
   video on a DAW timeline exercises paths a straight play-to-the-end never reaches. The
   session asked for a new sample on *every* call of its delivery routine instead of one at
@@ -650,6 +1145,20 @@ This is the recommended branch. What it changes, by subsystem:
   the new source at its current time, as Windows does (measured on Windows 10): Studio
   Pro installs its own time source right after each session start, and the video stayed
   black from the clip start on and after a loop wrap because that source was never started
+- **Source reader row order (mfreadwrite)**: with advanced video processing enabled, the
+  source reader converts through the video processor MFT, which emits bottom-up RGB
+  whenever its output type leaves `MF_MT_DEFAULT_STRIDE` open — correct for the standalone
+  MFT, measured on Windows — while the reader's caller gets top-down samples from native
+  and a media type without the stride, so it cannot learn otherwise. Fender Studio Pro 8's
+  timeline thumbnails came out upside down. The reader now hands the processor a copy of
+  the output type with the stride pinned, which the processor keeps for every later
+  re-creation of its conversion pipeline (a stream change upstream, a new input type set
+  through the exposed transform), and strips the stride again from the type it reports.
+  The earlier form of this fix pinned the stride only for the duration of the
+  `SetOutputType()` call, so the first re-negotiation fell back to bottom-up; a test now
+  drives both re-negotiations through a decoder-plus-processor chain and checks the row
+  order of the delivered samples (4 failures before, 0 after; the suite is otherwise
+  unchanged at 3062 tests, 219 todo)
 - **Video players that drive the H.264 decoder themselves (wined3d, d3d11, d2d1,
   winegstreamer)**: Cubase 15 does not render video through the EVR. It drives the H.264
   decoder MFT directly: it enumerates it, hands it a DXGI device manager, receives NV12
@@ -847,7 +1356,13 @@ prefix DXVK replaces `dxgi.dll` and `d3d11.dll`, while this branch's composition
 and DComp popup handling live in `dxgi` (the GL present in `wined3d`). The simplest setup
 is to leave DXVK out of the prefix; the package alone changes nothing, it takes effect
 once `setup_dxvk.sh` has run there. If it is needed for something else on the same
-machine, select per application rather than per prefix. The switch is
+machine, select per application rather than per prefix — and for a 32-bit D3D11
+application that per-application route can be the cheaper one by a wide margin: vatSys
+(PE32, SharpDX Direct2D on D3D11) took 24 % of a core with DXVK 3.1.1 against 113 % with
+wined3d on an RTX 2000 Ada, where wined3d's command stream thread stays near one core even
+after the wow64 mapping fix above (`opengl32 (WoW64)`), while the map rendered identically
+and nothing in that application needs this branch's `dxgi` or `wined3d` presentation
+path. The switch is
 `WINEDLLOVERRIDES="d3d11,dxgi,d3d10core=n"` (the prefix copies, DXVK) against `=b` (the
 builtins of this branch); a setup that survives desktop-icon launches and keeps `system32`
 untouched puts DXVK's three DLLs next to the host's executable (Wine looks there first

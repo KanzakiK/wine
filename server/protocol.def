@@ -2748,7 +2748,7 @@ enum message_type
     atom_t         atom;        /* class atom */
     mod_handle_t   class_instance; /* class module instance */
     mod_handle_t   instance;    /* module instance */
-    unsigned int   dpi_context; /* thread DPI context */
+    unsigned int   dpi_context; /* thread DPI context, NTUSER_DPI_CONTEXT_FLAG_PROCESS: process awareness still unset */
     unsigned int   style;       /* window style */
     unsigned int   ex_style;    /* window extended style */
     unsigned int   ansi;        /* window created as ansi */
@@ -4478,4 +4478,10 @@ enum inproc_sync_type
     user_handle_t  hwnd;                /* child HWND being produced for */
 @REPLY
     unsigned int   status;              /* enum hwnd_dmabuf_status */
+@END
+
+
+/* Set the process DPI awareness context: windows created while it was unset take it */
+@REQ(set_process_dpi_awareness)
+    unsigned int   dpi_context; /* process DPI awareness context */
 @END

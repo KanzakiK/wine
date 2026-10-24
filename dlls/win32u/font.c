@@ -2506,6 +2506,7 @@ static struct gdi_font *create_gdi_font( const struct gdi_font_face *face, const
     font->face_index = face->face_index;
     font->ntmFlags = face->ntmFlags;
     font->aa_flags = HIWORD( face->flags );
+    font->wine_font = !!(face->flags & ADDFONT_WINE_FONT);
     if (!family_name) family_name = face->family->family_name;
     font->otm.otmpFamilyName = (char *)wcsdup( family_name );
     font->otm.otmpStyleName = (char *)wcsdup( face->style_name );
@@ -3877,7 +3878,8 @@ static BOOL font_GetCharABCWidths( PHYSDEV dev, UINT first, UINT count, WCHAR *c
     for (i = 0; i < count; i++)
     {
         c = chars ? chars[i] : first + i;
-        get_glyph_outline( physdev->font, c, GGO_METRICS, NULL, &buffer[i], 0, NULL, NULL );
+        if (get_glyph_outline( physdev->font, c, GGO_METRICS, NULL, &buffer[i], 0, NULL, NULL ) == GDI_ERROR)
+            memset( &buffer[i], 0, sizeof(*buffer) );
     }
     pthread_mutex_unlock( &font_lock );
     return TRUE;
@@ -3902,8 +3904,9 @@ static BOOL font_GetCharABCWidthsI( PHYSDEV dev, UINT first, UINT count, WORD *g
 
     pthread_mutex_lock( &font_lock );
     for (c = 0; c < count; c++, buffer++)
-        get_glyph_outline( physdev->font, gi ? gi[c] : first + c, GGO_METRICS | GGO_GLYPH_INDEX,
-                           NULL, buffer, 0, NULL, NULL );
+        if (get_glyph_outline( physdev->font, gi ? gi[c] : first + c, GGO_METRICS | GGO_GLYPH_INDEX,
+                               NULL, buffer, 0, NULL, NULL ) == GDI_ERROR)
+            memset( buffer, 0, sizeof(*buffer) );
     pthread_mutex_unlock( &font_lock );
     return TRUE;
 }
@@ -4289,8 +4292,8 @@ static BOOL font_GetTextExtentExPoint( PHYSDEV dev, const WCHAR *str, INT count,
     pthread_mutex_lock( &font_lock );
     for (i = pos = 0; i < count; i++)
     {
-        get_glyph_outline( physdev->font, str[i], GGO_METRICS, NULL, &abc, 0, NULL, NULL );
-        pos += abc.abcA + abc.abcB + abc.abcC;
+        if (get_glyph_outline( physdev->font, str[i], GGO_METRICS, NULL, &abc, 0, NULL, NULL ) != GDI_ERROR)
+            pos += abc.abcA + abc.abcB + abc.abcC;
         dxs[i] = pos;
     }
     pthread_mutex_unlock( &font_lock );
@@ -4318,9 +4321,9 @@ static BOOL font_GetTextExtentExPointI( PHYSDEV dev, const WORD *indices, INT co
     pthread_mutex_lock( &font_lock );
     for (i = pos = 0; i < count; i++)
     {
-        get_glyph_outline( physdev->font, indices[i], GGO_METRICS | GGO_GLYPH_INDEX,
-                           NULL, &abc, 0, NULL, NULL );
-        pos += abc.abcA + abc.abcB + abc.abcC;
+        if (get_glyph_outline( physdev->font, indices[i], GGO_METRICS | GGO_GLYPH_INDEX,
+                               NULL, &abc, 0, NULL, NULL ) != GDI_ERROR)
+            pos += abc.abcA + abc.abcB + abc.abcC;
         dxs[i] = pos;
     }
     pthread_mutex_unlock( &font_lock );
@@ -6638,7 +6641,7 @@ static void load_file_system_fonts(void)
 
     /* Wine data directory */
     get_fonts_data_dir_path( NULL, path );
-    load_directory_fonts( path, ADDFONT_EXTERNAL_FONT );
+    load_directory_fonts( path, ADDFONT_EXTERNAL_FONT | ADDFONT_WINE_FONT );
 
     /* custom paths */
     /* @@ Wine registry key: HKCU\Software\Wine\Fonts */

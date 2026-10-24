@@ -2371,7 +2371,7 @@ RETURN_CODE WCMD_run_builtin_command(int cmd_index, WCHAR *cmd)
         return_code = WCMD_setshow_default(parms_start);
         break;
     case WCMD_CLS:
-        return_code = WCMD_clear_screen();
+        return_code = WCMD_clear_screen(&iterator);
         break;
     case WCMD_COPY:
         return_code = WCMD_copy(parms_start);
@@ -2426,7 +2426,7 @@ RETURN_CODE WCMD_run_builtin_command(int cmd_index, WCHAR *cmd)
         return_code = WCMD_remove_dir(&iterator);
         break;
     case WCMD_SETLOCAL:
-        return_code = WCMD_setlocal(parms_start);
+        return_code = WCMD_setlocal(&iterator);
         break;
     case WCMD_ENDLOCAL:
         return_code = WCMD_endlocal();
@@ -2447,7 +2447,7 @@ RETURN_CODE WCMD_run_builtin_command(int cmd_index, WCHAR *cmd)
         return_code = WCMD_title(parms_start);
         break;
     case WCMD_TYPE:
-        return_code = WCMD_type(parms_start);
+        return_code = WCMD_type(&iterator);
         break;
     case WCMD_VER:
         return_code = WCMD_version();
@@ -2474,13 +2474,13 @@ RETURN_CODE WCMD_run_builtin_command(int cmd_index, WCHAR *cmd)
         return_code = WCMD_assoc(parms_start, FALSE);
         break;
     case WCMD_MORE:
-        return_code = WCMD_more(parms_start);
+        return_code = WCMD_more(&iterator);
         break;
     case WCMD_CHOICE:
         return_code = WCMD_choice(&iterator);
         break;
     case WCMD_MKLINK:
-        return_code = WCMD_mklink(parms_start);
+        return_code = WCMD_mklink(&iterator);
         break;
     case WCMD_CHGDRIVE:
         return_code = WCMD_change_drive(cmd[0]);

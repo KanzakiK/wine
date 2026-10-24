@@ -6196,6 +6196,92 @@ static void test_bitmap_copy_from_render_target(BOOL d3d11)
     release_test_context(&ctx);
 }
 
+static void test_fill_opacity_mask(BOOL d3d11)
+{
+    D2D1_BITMAP_PROPERTIES bitmap_desc;
+    ID2D1SolidColorBrush *colour_brush;
+    struct d2d1_test_context ctx;
+    struct resource_readback rb;
+    D2D1_RECT_F dst_rect, src_rect;
+    ID2D1RenderTarget *rt;
+    ID2D1Bitmap *bitmap;
+    D2D1_COLOR_F colour;
+    D2D1_SIZE_U size;
+    DWORD c;
+    HRESULT hr;
+
+    /* Premultiplied; only the alpha channel is a mask. */
+    static const DWORD mask_data[] =
+    {
+        0xffffffff, 0x80808080,
+        0x00000000, 0x40404040,
+    };
+
+    if (!init_test_context(&ctx, d3d11))
+        return;
+
+    rt = ctx.rt;
+
+    set_size_u(&size, 2, 2);
+    bitmap_desc.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    bitmap_desc.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+    bitmap_desc.dpiX = 96.0f;
+    bitmap_desc.dpiY = 96.0f;
+    hr = ID2D1RenderTarget_CreateBitmap(rt, size, mask_data, 2 * sizeof(*mask_data), &bitmap_desc, &bitmap);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    set_color(&colour, 1.0f, 0.0f, 0.0f, 1.0f);
+    hr = ID2D1RenderTarget_CreateSolidColorBrush(rt, &colour, NULL, &colour_brush);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID2D1RenderTarget_SetAntialiasMode(rt, D2D1_ANTIALIAS_MODE_ALIASED);
+
+    ID2D1RenderTarget_BeginDraw(rt);
+    set_color(&colour, 0.0f, 0.0f, 0.0f, 1.0f);
+    ID2D1RenderTarget_Clear(rt, &colour);
+
+    /* The whole mask, scaled up by 40. */
+    set_rect(&dst_rect, 0.0f, 0.0f, 80.0f, 80.0f);
+    ID2D1RenderTarget_FillOpacityMask(rt, bitmap, (ID2D1Brush *)colour_brush,
+            D2D1_OPACITY_MASK_CONTENT_GRAPHICS, &dst_rect, NULL);
+
+    /* One texel of the mask, through the device context method. */
+    set_rect(&dst_rect, 100.0f, 0.0f, 140.0f, 40.0f);
+    set_rect(&src_rect, 1.0f, 0.0f, 2.0f, 1.0f);
+    ID2D1DeviceContext_FillOpacityMask(ctx.context, bitmap, (ID2D1Brush *)colour_brush, &dst_rect, &src_rect);
+
+    hr = ID2D1RenderTarget_EndDraw(rt, NULL, NULL);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    get_surface_readback(&ctx, &rb);
+    c = get_readback_colour(&rb, 20, 20);
+    ok(compare_colour(c, 0xffff0000, 4), "Got unexpected colour 0x%08lx.\n", c);
+    c = get_readback_colour(&rb, 60, 20);
+    ok(compare_colour(c, 0xff800000, 2), "Got unexpected colour 0x%08lx.\n", c);
+    c = get_readback_colour(&rb, 20, 60);
+    ok(compare_colour(c, 0xff000000, 1), "Got unexpected colour 0x%08lx.\n", c);
+    c = get_readback_colour(&rb, 60, 60);
+    ok(compare_colour(c, 0xff400000, 2), "Got unexpected colour 0x%08lx.\n", c);
+    c = get_readback_colour(&rb, 120, 20);
+    ok(compare_colour(c, 0xff800000, 2), "Got unexpected colour 0x%08lx.\n", c);
+    c = get_readback_colour(&rb, 160, 20);
+    ok(compare_colour(c, 0xff000000, 1), "Got unexpected colour 0x%08lx.\n", c);
+    release_resource_readback(&rb);
+
+    /* Any other antialias mode is an error, reported by EndDraw(). */
+    ID2D1RenderTarget_SetAntialiasMode(rt, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    ID2D1RenderTarget_BeginDraw(rt);
+    set_rect(&dst_rect, 0.0f, 0.0f, 80.0f, 80.0f);
+    ID2D1RenderTarget_FillOpacityMask(rt, bitmap, (ID2D1Brush *)colour_brush,
+            D2D1_OPACITY_MASK_CONTENT_GRAPHICS, &dst_rect, NULL);
+    hr = ID2D1RenderTarget_EndDraw(rt, NULL, NULL);
+    ok(hr == D2DERR_WRONG_STATE, "Got unexpected hr %#lx.\n", hr);
+
+    ID2D1SolidColorBrush_Release(colour_brush);
+    ID2D1Bitmap_Release(bitmap);
+    release_test_context(&ctx);
+}
+
 static void test_opacity_brush(BOOL d3d11)
 {
     ID2D1BitmapBrush *bitmap_brush, *opacity_brush;
@@ -19035,10 +19121,12 @@ static void test_geometry_realization(BOOL d3d11)
     ID2D1GeometryRealization *realization, *realization2;
     ID2D1RectangleGeometry *rectangle_geometry;
     ID2D1DeviceContext1 *device_context;
+    ID2D1SolidColorBrush *brush, *brush2;
     struct d2d1_test_context ctx;
-    ID2D1SolidColorBrush *brush;
+    struct resource_readback rb;
     D2D1_COLOR_F color;
     D2D1_RECT_F rect;
+    DWORD colour;
     HRESULT hr;
 
     if (!init_test_context(&ctx, d3d11))
@@ -19078,7 +19166,50 @@ static void test_geometry_realization(BOOL d3d11)
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ID2D1SolidColorBrush_Release(brush);
+    ID2D1GeometryRealization_Release(realization);
+    ID2D1GeometryRealization_Release(realization2);
 
+    /* A realization is drawn on a bitmap target, filled and stroked. */
+    set_rect(&rect, 100.0f, 100.0f, 200.0f, 200.0f);
+    hr = ID2D1Factory_CreateRectangleGeometry(ctx.factory, &rect, &rectangle_geometry);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    hr = ID2D1DeviceContext1_CreateFilledGeometryRealization(device_context,
+            (ID2D1Geometry *)rectangle_geometry, 0.25f, &realization);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    hr = ID2D1DeviceContext1_CreateStrokedGeometryRealization(device_context,
+            (ID2D1Geometry *)rectangle_geometry, 0.25f, 4.0f, NULL, &realization2);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    ID2D1RectangleGeometry_Release(rectangle_geometry);
+
+    set_color(&color, 1.0f, 0.0f, 0.0f, 1.0f);
+    hr = ID2D1DeviceContext1_CreateSolidColorBrush(device_context, &color, NULL, &brush);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    set_color(&color, 0.0f, 0.0f, 1.0f, 1.0f);
+    hr = ID2D1DeviceContext1_CreateSolidColorBrush(device_context, &color, NULL, &brush2);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID2D1DeviceContext1_BeginDraw(device_context);
+    set_color(&color, 0.0f, 0.0f, 0.0f, 1.0f);
+    ID2D1DeviceContext1_Clear(device_context, &color);
+    ID2D1DeviceContext1_DrawGeometryRealization(device_context, realization, (ID2D1Brush *)brush);
+    ID2D1DeviceContext1_DrawGeometryRealization(device_context, realization2, (ID2D1Brush *)brush2);
+    hr = ID2D1DeviceContext1_EndDraw(device_context, NULL, NULL);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    get_surface_readback(&ctx, &rb);
+    colour = get_readback_colour(&rb, 150, 150);
+    ok(compare_colour(colour, 0xffff0000, 1), "Got unexpected colour 0x%08lx.\n", colour);
+    colour = get_readback_colour(&rb, 100, 150);
+    ok(compare_colour(colour, 0xff0000ff, 1), "Got unexpected colour 0x%08lx.\n", colour);
+    colour = get_readback_colour(&rb, 150, 199);
+    ok(compare_colour(colour, 0xff0000ff, 1), "Got unexpected colour 0x%08lx.\n", colour);
+    colour = get_readback_colour(&rb, 50, 150);
+    ok(compare_colour(colour, 0xff000000, 1), "Got unexpected colour 0x%08lx.\n", colour);
+    release_resource_readback(&rb);
+
+    ID2D1SolidColorBrush_Release(brush2);
+    ID2D1SolidColorBrush_Release(brush);
     ID2D1GeometryRealization_Release(realization);
     ID2D1GeometryRealization_Release(realization2);
     ID2D1DeviceContext1_Release(device_context);
@@ -19564,6 +19695,7 @@ START_TEST(d2d1)
     queue_test(test_bitmap_updates);
     queue_test(test_bitmap_copy_from_render_target);
     queue_test(test_opacity_brush);
+    queue_test(test_fill_opacity_mask);
     queue_test(test_create_target);
     queue_test(test_dxgi_surface_target_gdi_interop);
     queue_test(test_draw_text_layout);

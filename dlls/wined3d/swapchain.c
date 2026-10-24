@@ -377,8 +377,23 @@ void CDECL wined3d_swapchain_set_premultiplied_alpha(struct wined3d_swapchain *s
 void CDECL wined3d_swapchain_set_dirty_rects(struct wined3d_swapchain *swapchain,
         const RECT *rects, unsigned int count)
 {
-    if (count > ARRAY_SIZE(swapchain->present_dirty_rects))
-        count = ARRAY_SIZE(swapchain->present_dirty_rects);
+    unsigned int max = ARRAY_SIZE(swapchain->present_dirty_rects), i;
+
+    /* More rects than slots: fold the excess into the last slot instead of
+     * dropping it.  JUCE 8 reports 18 per frame for an animated UI, and a
+     * dropped rect reached the composition buffer only when a later present
+     * happened to list it among the first 16 (issue 465).  A superset is
+     * never wrong: the Windows compositor shows the whole back buffer, the
+     * dirty rects are only a hint. */
+    if (rects && count > max)
+    {
+        memcpy(swapchain->present_dirty_rects, rects, max * sizeof(*rects));
+        for (i = max; i < count; ++i)
+            UnionRect(&swapchain->present_dirty_rects[max - 1],
+                    &swapchain->present_dirty_rects[max - 1], &rects[i]);
+        swapchain->present_dirty_rect_count = max;
+        return;
+    }
 
     if (rects && count)
         memcpy(swapchain->present_dirty_rects, rects, count * sizeof(*rects));
@@ -1097,6 +1112,41 @@ static void comp_buffer_scroll(DWORD *bits, unsigned int stride, int buf_w, int 
     }
 }
 
+/* A window below a top level of another process: FL Studio's bit bridge parents the
+ * plug-in's popup into FL's frame, a WebView2 child sits under the browser process's
+ * top level.  swapchain->dc, held since the swapchain was created, keeps the device
+ * origin and visible region of the window's position at that time: invalidate_dce()
+ * runs in the process that moves a window, so a move of the foreign ancestor never
+ * marks the held DC dirty in this process, and every present after the move lands
+ * where the window was (issue 479: the plug-in image stays at the old position and
+ * the frame at the new one gets nothing).  Blit through a fresh cache DC in that
+ * case; NtUserGetDCEx() fetches the visible region from the server on every call.
+ * The held DC stays as it is: a GL context that is not forced to GDI is bound to it. */
+static HDC swapchain_get_blit_dc(struct wined3d_swapchain *swapchain, BOOL *fresh)
+{
+    HWND root = GetAncestor(swapchain->win_handle, GA_ROOT);
+    DWORD pid = 0;
+    HDC dc;
+
+    *fresh = FALSE;
+    if (root && root != swapchain->win_handle)
+    {
+        GetWindowThreadProcessId(root, &pid);
+        if (pid != GetCurrentProcessId()
+                && (dc = GetDCEx(swapchain->win_handle, 0, DCX_USESTYLE | DCX_CACHE)))
+        {
+            *fresh = TRUE;
+            return dc;
+        }
+    }
+    return swapchain->dc;
+}
+
+static void swapchain_release_blit_dc(struct wined3d_swapchain *swapchain, HDC dc, BOOL fresh)
+{
+    if (fresh) ReleaseDC(swapchain->win_handle, dc);
+}
+
 static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
         struct wined3d_context *context, const RECT *src_rect, const RECT *dst_rect)
 {
@@ -1475,9 +1525,15 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
              * it cannot be the window rect; it has to be the geometry the
              * target is actually composed at, which nothing publishes today. */
             /* Always BitBlt full comp buffer to window — survives any surface reset. */
-            if (!BitBlt(swapchain->dc, dst_rect->left, dst_rect->top, dst_w, dst_h,
-                    swapchain->comp_dc, 0, 0, SRCCOPY))
-                WARN("Failed to blit composition buffer to window.\n");
+            {
+                BOOL fresh;
+                HDC blit_dc = swapchain_get_blit_dc(swapchain, &fresh);
+
+                if (!BitBlt(blit_dc, dst_rect->left, dst_rect->top, dst_w, dst_h,
+                        swapchain->comp_dc, 0, 0, SRCCOPY))
+                    WARN("Failed to blit composition buffer to window.\n");
+                swapchain_release_blit_dc(swapchain, blit_dc, fresh);
+            }
         }
 
         /* Store comp_dc as window property so WM_PAINT can re-blit. Don't
@@ -1509,11 +1565,17 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
         if (composited_layer)
             GdiFlush();
 
-        if (!StretchBlt(swapchain->dc, dst_rect->left, dst_rect->top,
-                dst_rect->right - dst_rect->left, dst_rect->bottom - dst_rect->top,
-                src_dc, src_rect->left, src_rect->top,
-                src_rect->right - src_rect->left, src_rect->bottom - src_rect->top, SRCCOPY))
-            ERR("Failed to blit.\n");
+        {
+            BOOL fresh;
+            HDC blit_dc = swapchain_get_blit_dc(swapchain, &fresh);
+
+            if (!StretchBlt(blit_dc, dst_rect->left, dst_rect->top,
+                    dst_rect->right - dst_rect->left, dst_rect->bottom - dst_rect->top,
+                    src_dc, src_rect->left, src_rect->top,
+                    src_rect->right - src_rect->left, src_rect->bottom - src_rect->top, SRCCOPY))
+                ERR("Failed to blit.\n");
+            swapchain_release_blit_dc(swapchain, blit_dc, fresh);
+        }
 
         /* Do not leave the leaves in that copy: a later present skipping the
          * download would blit them a second time and the leaf would trail. */
@@ -1521,8 +1583,14 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
             wined3d_texture_invalidate_location(back_buffer, 0, WINED3D_LOCATION_SYSMEM);
     }
 
-    /* Suppress spurious WM_PAINT after writing to the window surface. */
-    ValidateRect(swapchain->win_handle, NULL);
+    /* No ValidateRect() on the window here.  A present never validates the
+     * window's update region on Windows, and this one runs on the CS thread,
+     * after the application has moved on: an InvalidateRect() issued between
+     * the application's Present() and the execution of that present lost its
+     * WM_PAINT.  JUCE 8 repaints only from that WM_PAINT, so a closed overlay
+     * stayed on screen and an opened one appeared in part (issue 465).  The
+     * dxgi subclass validates after forwarding WM_PAINT to the application,
+     * which is the repaint-cycle protection this call was added for. */
 
 done:
     destroy_desc.hDc = src_dc;

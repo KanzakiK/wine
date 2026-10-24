@@ -84,6 +84,7 @@ struct window
     unsigned int     is_layered : 1;  /* has layered info been set? */
     unsigned int     is_orphan : 1;   /* is window orphaned */
     unsigned int     set_foreground : 1;/* has window been foreground once */
+    unsigned int     dpi_unset : 1;   /* created before the process DPI awareness was set */
     unsigned int     color_key;       /* color key for a layered window */
     unsigned int     alpha;           /* alpha value for a layered window */
     unsigned int     layered_flags;   /* flags for a layered window */
@@ -435,19 +436,35 @@ static int set_parent_window( struct window *win, struct window *parent )
 
     if (parent)
     {
-        attach_parent_thread( win, false );
+        /* Windows attaches the thread input of a cross-thread parent for WS_CHILD
+         * windows only: a WS_POPUP window given a parent through SetParent() keeps
+         * its own input, and its activation deactivates the other thread's window
+         * through the foreground switch without waiting for that thread.  Attached,
+         * that window became the "previous" of set_active_window() and the
+         * deactivation a synchronous send -- FL Studio's ilbridge.exe reparents its
+         * plug-in window into FL's frame while FL's main thread waits for the
+         * bridge, and both sat there forever (WineHQ 44827).  Attach and detach are
+         * gated alike, so a popup that was never attached is not detached either
+         * (detach_thread_input would set an error on the request). */
+        bool child = (win->style & (WS_CHILD | WS_POPUP)) == WS_CHILD;
+
+        if (child) attach_parent_thread( win, false );
         if (win->parent) release_object( win->parent );
         win->parent = (struct window *)grab_object( parent );
-        attach_parent_thread( win, true );
+        if (child) attach_parent_thread( win, true );
         link_window( win, WINPTR_TOP );
 
         if (is_desktop_window( parent )) set_window_monitor_dpi( win );
-        else SHARED_WRITE_BEGIN( win->shared, window_shm_t )
+        else
         {
-            shared->dpi         = parent->shared->dpi;
-            shared->raw_dpi     = parent->shared->raw_dpi;
+            SHARED_WRITE_BEGIN( win->shared, window_shm_t )
+            {
+                shared->dpi         = parent->shared->dpi;
+                shared->raw_dpi     = parent->shared->raw_dpi;
+            }
+            SHARED_WRITE_END;
+            win->dpi_unset = parent->dpi_unset;
         }
-        SHARED_WRITE_END;
 
         if (win->paint_flags & (PAINT_HAS_PIXEL_FORMAT | PAINT_PIXEL_FORMAT_CHILD))
             update_pixel_format_flags( win );
@@ -683,6 +700,7 @@ static struct window *create_window( struct window *parent, struct window *owner
     win->is_layered     = 0;
     win->is_orphan      = 0;
     win->set_foreground = 0;
+    win->dpi_unset      = 0;
     win->text           = NULL;
     win->text_len       = 0;
     win->paint_flags    = 0;
@@ -989,10 +1007,14 @@ static void get_window_list( struct desktop *desktop, struct window *win, struct
     }
     else if (!is_desktop_window( win ))  /* siblings starting from specified window */
     {
-        /* A window being destroyed can still have a handle after it has moved
-         * to parent->unlinked. That list has a different sentinel from the
-         * Z-order list used by get_next_window(). */
-        for (child = win; child; child = child->is_linked ? get_next_window( child ) : NULL)
+        /* A window that is not linked into its parent's z-order sits in the
+         * parent's unlinked list (set_parent_window() with a NULL parent, the
+         * first step of destroying it from another thread).  Walking from there
+         * towards the end of the children list never gets there: it loops
+         * through the unlinked list, and the server with it. */
+        append_window_to_list( win, thread, 0, handles, count, max_count );
+        if (!win->is_linked) return;
+        for (child = get_next_window( win ); child; child = get_next_window( child ))
             append_window_to_list( child, thread, 0, handles, count, max_count );
     }
     else  /* desktop window siblings */
@@ -1532,11 +1554,30 @@ static struct region *clip_pixel_format_children( struct window *parent, struct 
          * so an embedded JUCE editor flickered with the host's background whenever
          * the host repainted its whole window.  The same holds for a child that
          * composes over a layered top-level from another process: Chromium's
-         * "Intermediate D3D Window" carries WS_EX_TRANSPARENT. */
+         * "Intermediate D3D Window" carries WS_EX_TRANSPARENT.
+         *
+         * A transparent child still has to be descended into, though: a foreign
+         * window below it draws into our drawable just the same.  WinForms gives a
+         * control with BackColor=Transparent WS_EX_TRANSPARENT, and Power BI Desktop
+         * hosts each of its WebView2 views in such a control; skipping the whole
+         * subtree left the browser windows in the surface region, so the full-window
+         * erase of the form's Refresh() on every step of its own title-bar drag was
+         * flushed over what the GPU process had drawn there.  The transparent child
+         * itself is neither added nor subtracted, only its subtree is walked. */
         if ((ptr->ex_style & WS_EX_TRANSPARENT) &&
             !(ptr->paint_flags & (PAINT_HAS_PIXEL_FORMAT | PAINT_PIXEL_FORMAT_CHILD)) &&
             !composes_over_layered_ancestor( ptr, top ))
+        {
+            if (foreign_child_clip_disabled()) continue;
+            set_region_rect( clip, &ptr->client_rect );
+            if (ptr->win_region && !intersect_window_region( clip, ptr )) break;
+            offset_region( clip, offset_x, offset_y );
+            if (!intersect_region( clip, clip, parent_clip )) break;
+            if (!clip_pixel_format_children( ptr, clip, region, offset_x + ptr->client_rect.left,
+                                             offset_y + ptr->client_rect.top, owner, top ))
+                break;
             continue;
+        }
 
         /* add the visible rect */
         set_region_rect( clip, &ptr->visible_rect );
@@ -2479,7 +2520,7 @@ DECL_HANDLER(create_window)
     if (!atom) atom = find_atom( table, cls_name );
 
     if (!(win = create_window( parent, owner, atom, req->class_instance, !!req->ansi,
-                               req->dpi_context, req->dpi, req->raw_dpi )))
+                               req->dpi_context & ~NTUSER_DPI_CONTEXT_FLAG_PROCESS, req->dpi, req->raw_dpi )))
         return;
 
     SHARED_WRITE_BEGIN( win->shared, window_shm_t )
@@ -2492,6 +2533,10 @@ DECL_HANDLER(create_window)
         }
     }
     SHARED_WRITE_END;
+
+    /* a window created while the process DPI awareness is unset takes the awareness once it is set
+     * (set_process_dpi_awareness); a child follows its parent */
+    win->dpi_unset = is_toplevel( win ) ? !!(req->dpi_context & NTUSER_DPI_CONTEXT_FLAG_PROCESS) : win->parent->dpi_unset;
 
     win->style = req->style;
     win->ex_style = req->ex_style;
@@ -2549,6 +2594,37 @@ DECL_HANDLER(set_parent)
     reply->old_parent  = win->parent->handle;
     reply->full_parent = parent ? parent->handle : 0;
     set_parent_window( win, parent );
+}
+
+
+/* set the process DPI awareness context: windows created while it was unset take it now, as on Windows
+ * (Windows 10 22H2, measured: every window of the process created before the call, whatever the thread
+ * context it was created under, reports the process awareness afterwards; a window that already had a
+ * higher awareness keeps it) */
+DECL_HANDLER(set_process_dpi_awareness)
+{
+    unsigned int context = req->dpi_context, awareness = NTUSER_DPI_CONTEXT_GET_AWARENESS( context );
+    struct process *process = current->process;
+    user_handle_t handle = 0;
+    struct window *win, *top;
+
+    /* a per-monitor context is stored as version 1, as for a new window */
+    if (NTUSER_DPI_CONTEXT_IS_MONITOR_AWARE( context )) context = NTUSER_DPI_PER_MONITOR_AWARE;
+
+    while ((win = next_user_handle( &handle, NTUSER_OBJ_WINDOW )))
+    {
+        if (!win->dpi_unset) continue;
+        /* the awareness of a child is that of its top-level window, including one of another process */
+        for (top = win; !is_toplevel( top ); top = top->parent) ;
+        if (!top->thread || top->thread->process != process) continue;
+        win->dpi_unset = 0;
+        if (NTUSER_DPI_CONTEXT_GET_AWARENESS( win->shared->dpi_context ) >= awareness) continue;
+        SHARED_WRITE_BEGIN( win->shared, window_shm_t )
+        {
+            shared->dpi_context = context;
+        }
+        SHARED_WRITE_END;
+    }
 }
 
 
@@ -2823,8 +2899,8 @@ DECL_HANDLER(get_class_windows)
         if (!parent) parent = get_desktop_window( current );
         if (!(win = get_window( req->child ))) return;
         if (win->parent != parent) return;
-        if (!win->is_linked) return;
-        if (!(win = get_next_window( win ))) return;
+        /* an unlinked window has no successor in the z-order, see get_window_list() */
+        if (!win->is_linked || !(win = get_next_window( win ))) return;
     }
     else if (parent && !(win = get_first_child( parent ))) return;
 

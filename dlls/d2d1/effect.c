@@ -3794,7 +3794,6 @@ HRESULT d2d_effect_create(struct d2d_device_context *context, const CLSID *effec
     struct d2d_effect_context *effect_context;
     const struct d2d_effect_registration *reg;
     struct d2d_effect *object;
-    IUnknown *implementation;
     UINT32 input_count;
     WCHAR clsidW[39];
     HRESULT hr;
@@ -3838,18 +3837,9 @@ HRESULT d2d_effect_create(struct d2d_device_context *context, const CLSID *effec
         return hr;
     }
 
-    if (FAILED(hr = reg->factory(&implementation)))
+    if (FAILED(hr = reg->factory((IUnknown **)&object->impl)))
     {
         WARN("Failed to create implementation object, hr %#lx.\n", hr);
-        ID2D1Effect_Release(&object->ID2D1Effect_iface);
-        return hr;
-    }
-
-    hr = IUnknown_QueryInterface(implementation, &IID_ID2D1EffectImpl, (void **)&object->impl);
-    IUnknown_Release(implementation);
-    if (FAILED(hr))
-    {
-        WARN("Failed to query effect implementation, hr %#lx.\n", hr);
         ID2D1Effect_Release(&object->ID2D1Effect_iface);
         return hr;
     }

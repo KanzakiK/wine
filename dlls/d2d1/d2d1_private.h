@@ -325,6 +325,45 @@ struct d2d_line_batch
     BOOL flushing;
 };
 
+/* Consecutive solid-colour fills with the same transform are drawn as one
+ * batch: the antialiased fill meshes and the curve triangles of all of them go
+ * up in one vertex buffer each, and a run is a colour, with the index range of
+ * its fill, Bézier and arc vertices. The runs are drawn in order, each one its
+ * fill and then its curves, so that fills of different colours still land on
+ * top of each other the way they were issued. Anything else that draws or
+ * changes the state the fill shaders read has to flush the batch first, see
+ * d2d_device_context_flush_fills(). */
+struct d2d_fill_aa_vertex;
+struct d2d_curve_vertex;
+
+struct d2d_fill_run
+{
+    D2D1_COLOR_F colour;
+    float opacity;
+    unsigned int fill_start;
+    unsigned int fill_count;
+    unsigned int bezier_start;
+    unsigned int bezier_count;
+    unsigned int arc_start;
+    unsigned int arc_count;
+};
+
+struct d2d_fill_batch
+{
+    struct d2d_fill_aa_vertex *fill_vertices;
+    size_t fill_vertices_size;
+    size_t fill_vertex_count;
+    struct d2d_curve_vertex *curve_vertices;
+    size_t curve_vertices_size;
+    size_t curve_vertex_count;
+    struct d2d_fill_run *runs;
+    size_t runs_size;
+    size_t run_count;
+    D2D1_MATRIX_3X2_F transform;
+    D2D_MATRIX_3X2_F geometry_transform;
+    BOOL flushing;
+};
+
 /* One coverage mask for all the glyph runs a device context draws, see
  * d2d_device_context_draw_glyph_run_bitmap(). */
 struct d2d_glyph_mask
@@ -415,11 +454,15 @@ struct d2d_device_context
     struct d2d_scratch_buffer scratch_vb[D2D_SHAPE_TYPE_COUNT];
     struct d2d_scratch_buffer scratch_ib[D2D_SHAPE_TYPE_COUNT];
     struct d2d_line_batch line_batch;
+    struct d2d_fill_batch fill_batch;
     /* Session 6 (C1): persistent scratch rectangle geometry for FillRectangle.
      * Eliminates per-call calloc(struct d2d_geometry) + Release churn (~1.5M
      * allocs/min in Serum2 GUI workload). Reused across FillRectangle calls;
      * freed only in device_context destructor. */
     struct d2d_geometry *rect_geometry_cache;
+    /* The same for FillRoundedRectangle(): a rounded rectangle geometry
+     * re-initialised in place, fill only. */
+    struct d2d_geometry *rounded_rect_geometry_cache;
     /* Shared glyph coverage mask, claimed and returned around one glyph run
      * the way the rectangle geometry is. */
     struct d2d_glyph_mask *glyph_mask_cache;
@@ -508,6 +551,7 @@ struct d2d_hwnd_render_target
     ID2D1RenderTarget *dxgi_target;
     IUnknown *dxgi_inner;
     IDXGISwapChain *swapchain;
+    IDXGISurface1 *gdi_surface;    /* GDI present path (no swapchain): the target bitmap's surface */
     UINT sync_interval;
     HWND hwnd;
 
@@ -924,6 +968,8 @@ void d2d_rectangle_geometry_reinit(struct d2d_geometry *geometry, const D2D1_REC
 void d2d_geometry_cleanup(struct d2d_geometry *geometry);
 HRESULT d2d_rounded_rectangle_geometry_init(struct d2d_geometry *geometry,
         ID2D1Factory *factory, const D2D1_ROUNDED_RECT *rounded_rect);
+void d2d_rounded_rectangle_geometry_reinit_fill(struct d2d_geometry *geometry,
+        const D2D1_ROUNDED_RECT *rounded_rect);
 void d2d_transformed_geometry_init(struct d2d_geometry *geometry, ID2D1Factory *factory,
         ID2D1Geometry *src_geometry, const D2D_MATRIX_3X2_F *transform);
 HRESULT d2d_geometry_group_init(struct d2d_geometry *geometry, ID2D1Factory *factory,

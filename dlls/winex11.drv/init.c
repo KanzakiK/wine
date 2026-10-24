@@ -232,7 +232,7 @@ static BOOL has_ulw_surface( HWND hwnd )
     return ret;
 }
 
-static BOOL needs_offscreen_rendering( HWND hwnd, BOOL raw )
+static BOOL needs_offscreen_rendering( HWND hwnd, BOOL raw, BOOL vulkan )
 {
     static const WCHAR dcomp_target_propW[] =
         {'_','_','w','i','n','e','_','d','c','o','m','p','_','t','a','r','g','e','t',0};
@@ -276,8 +276,14 @@ static BOOL needs_offscreen_rendering( HWND hwnd, BOOL raw )
          * window until external events (window move, mouse hover) kick a
          * repaint.  Skip offscreen for these windows so the plugin's X11 child
          * is attached directly to the parent and visible without a composite
-         * trigger. */
-        if (NtUserGetProp( hwnd, d3d_hwnd_target_propW )) return FALSE;
+         * trigger.
+         *
+         * Not for a Vulkan surface: a Vulkan swap chain (DXVK, wined3d's Vulkan
+         * renderer) presents through client_surface_present(), which blits an
+         * offscreen window to the top-level.  Attached, the window stayed
+         * black - vatSys's strip bays with DXVK, while its map, a child without
+         * the property, rendered. */
+        if (!vulkan && NtUserGetProp( hwnd, d3d_hwnd_target_propW )) return FALSE;
         return TRUE; /* child window, needs compositing */
     }
     if (NtUserGetWindowRelative( hwnd, GW_CHILD )) return needs_client_window_clipping( hwnd ); /* window has children, needs compositing */
@@ -556,7 +562,7 @@ static Pixmap client_surface_save_content( struct x11drv_client_surface *surface
 
 static void client_surface_update_offscreen( HWND hwnd, struct x11drv_client_surface *surface )
 {
-    BOOL offscreen = needs_offscreen_rendering( hwnd, surface->client.raw ), was_hidden;
+    BOOL offscreen = needs_offscreen_rendering( hwnd, surface->client.raw, !surface->client.format ), was_hidden;
     struct x11drv_win_data *data;
     Pixmap saved = 0;
     GC saved_gc = NULL;
@@ -807,7 +813,7 @@ struct client_surface *X11DRV_CreateClientSurface( HWND hwnd, int format, BOOL r
     /* Decide up front whether the window is going to render offscreen, so that
      * it is never attached to the top-level only to be taken away again at the
      * next update, see create_client_window(). */
-    offscreen = needs_offscreen_rendering( hwnd, raw );
+    offscreen = needs_offscreen_rendering( hwnd, raw, !format ); /* Vulkan surfaces have no pixel format */
     /* Mark the surface offscreen before the window exists: a concurrent
      * client_surface_update_offscreen() then takes its "unchanged" path instead
      * of setting the window up for offscreen rendering itself, alongside the
@@ -862,12 +868,34 @@ void x11drv_client_surface_reblit( HWND toplevel )
         surface = pending[i];
         if (surface->client.hwnd && NtUserGetAncestor( surface->client.hwnd, GA_ROOT ) == toplevel)
         {
-            TRACE( "repeating the present blit of %s for top-level %p\n",
-                   debugstr_client_surface( &surface->client ), toplevel );
-            InterlockedExchange( &surface->reblitting, TRUE );
-            InterlockedExchange( &surface->blit_pending, FALSE );
-            client_surface_present( &surface->client );
-            InterlockedExchange( &surface->reblitting, FALSE );
+            /* A window painted through UpdateLayeredWindow() shows its window
+             * surface, and its own swap chain's client window holds the frame
+             * from before the switch - or, once the window has been resized,
+             * the undefined content of a reallocated redirected pixmap.  WPF
+             * presents that swap chain once at start-up and then only hands
+             * frames to UpdateLayeredWindow(); the blit it left pending was
+             * repeated on the VisibilityNotify that follows a resize, over the
+             * surface flushed a moment before, and the parts no later flush
+             * covered stayed that way (NinjaTrader's welcome window with its
+             * top-left corner cut away, issue 513).  Drop the pending blit:
+             * the surface flush, not a replay of that frame, is what repaints
+             * the window.  A child's swap chain inside such a window is real
+             * content and is repeated as before. */
+            if (surface->client.hwnd == toplevel && has_ulw_surface( toplevel ))
+            {
+                TRACE( "not repeating the present blit of %s: top-level %p shows UpdateLayeredWindow() content\n",
+                       debugstr_client_surface( &surface->client ), toplevel );
+                InterlockedExchange( &surface->blit_pending, FALSE );
+            }
+            else
+            {
+                TRACE( "repeating the present blit of %s for top-level %p\n",
+                       debugstr_client_surface( &surface->client ), toplevel );
+                InterlockedExchange( &surface->reblitting, TRUE );
+                InterlockedExchange( &surface->blit_pending, FALSE );
+                client_surface_present( &surface->client );
+                InterlockedExchange( &surface->reblitting, FALSE );
+            }
         }
         client_surface_release( &surface->client );
     }
