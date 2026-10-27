@@ -159,15 +159,8 @@ def main():
     # Ship the LGPL-derived backend and its source preparation alongside Wine.
     gamepad_sources = Path(__file__).resolve().parents[1]
     if compat_layer:
-        hybris = gamepad_sources / 'arlinux/components/libhybris'
-        notices = destination / 'share/licenses/libhybris-vulkan'
-        notices.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(hybris / 'LICENSE.GPL3', notices / 'LICENSE.GPL3')
-        for name in ('MALIBRIDGE.md', 'NOTICE.MaliBridge', 'LICENSE.bcdec'):
-            shutil.copyfile(hybris / 'hybris/vulkan/compat/shaders' / name, notices / name)
-        commit = subprocess.check_output(['git', '-C', str(gamepad_sources),
-            'rev-parse', 'HEAD:arlinux/components/libhybris'], text=True).strip()
-        (notices / 'SOURCE').write_text('https://github.com/taowen/libhybris/tree/' + commit + '\n')
+        shutil.copytree(compat_layer.parent / 'licenses/libhybris-vulkan',
+                        destination / 'share/licenses/libhybris-vulkan')
     gamepad_destination = destination / 'share/arlinux/winebus'
     gamepad_destination.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(gamepad_sources / 'dlls/winebus.sys/bus_arlinux.h', gamepad_destination / 'bus_arlinux.h')
