@@ -4,6 +4,12 @@ This Wine fork owns Bionic Wine integration, the component dependency graph,
 source archives, hosted dispatch and public runtime selection. Rootfs products
 only download the runtime on demand. They neither build nor dispatch Wine.
 
+The `arlinux/components/libhybris` submodule follows libhybris's single `arlinux`
+integration branch, shared with the rootfs consumer. Keep both consumers pinned
+to the same commit. Linux glibc and Android Bionic are two build modes of those
+sources, with independent runners and artifacts; see the
+[component ownership guide](components/libhybris/arlinux/BUILD.md).
+
 Our implementation upstream is [giang17/wine](https://github.com/giang17/wine),
 branch `d2d1-dcomp-11.20`, integrated at
 `fcad3e89b99c5882a4a0b4e889124b5f4a1c6631` on the Wine 11.20 base.
