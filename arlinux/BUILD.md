@@ -8,7 +8,7 @@ The `arlinux/components/libhybris` submodule follows libhybris's single `arlinux
 integration branch, shared with the rootfs consumer. Keep both consumers pinned
 to the same commit. Linux glibc and Android Bionic are two build modes of those
 sources, with independent runners and artifacts; see the
-[component ownership guide](components/libhybris/arlinux/BUILD.md).
+[component ownership guide](https://github.com/taowen/libhybris/blob/arlinux/arlinux/BUILD.md).
 
 Our implementation upstream is [giang17/wine](https://github.com/giang17/wine),
 branch `d2d1-dcomp-11.20`, integrated at
